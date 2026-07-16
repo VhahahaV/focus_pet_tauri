@@ -1,0 +1,72 @@
+/* charts.css — normalized design-system module. */
+.fp-filled-pie{width:100%;min-height:210px;display:grid;place-items:center;margin:0}
+
+.fp-filled-pie svg{width:min(100%,300px);overflow:visible}
+
+.fp-pie-depth{opacity:0.76;filter:brightness(0.78) saturate(0.9);transform-origin:var(--pie-origin-x) var(--pie-origin-y)}
+
+.fp-pie-primary text{fill:var(--card);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;font-size:10px;font-weight:720;paint-order:stroke;stroke:color-mix(in srgb,var(--text-primary) 30%,transparent);stroke-width:2px;stroke-linejoin:round}
+
+.fp-pie-primary .value{font-family:ui-rounded,"SF Pro Rounded",-apple-system,sans-serif;font-size:23px;font-weight:760}
+
+.fp-pie-empty{fill:var(--text-tertiary);font-size:12px;font-weight:650}
+
+.fp-pie-callout-svg polyline{stroke-width:1.25;opacity:0.72}
+
+.fp-pie-callout-svg text{fill:var(--text-secondary);font-size:9px;font-weight:700}
+
+.fp-pie-callout-svg .detail{fill:var(--text-tertiary);font-size:8px;font-weight:600}
+
+.fp-progress-ring{width:48px;height:48px;overflow:visible}
+
+.fp-progress-ring circle{fill:none;stroke-width:5;transform:rotate(-90deg);transform-origin:50% 50%}
+
+.fp-progress-ring .track{stroke:var(--chart-neutral-track)}
+
+.fp-progress-ring .value{stroke:var(--status-primary,var(--rest-500));stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:var(--ring-offset,0);transition:stroke-dashoffset var(--duration-module) var(--ease-out)}
+
+.fp-status-timeline{width:100%;display:block}
+
+.fp-input-columns{width:100%;display:block}
+
+.fp-status-timeline .track{fill:var(--chart-neutral-track)}
+
+.fp-status-timeline .is-focus{fill:var(--focus-500)}
+
+.fp-status-timeline .is-distracted{fill:var(--distracted-500)}
+
+.fp-status-timeline .is-rest{fill:var(--rest-500)}
+
+.fp-status-timeline .is-away{fill:var(--away-500)}
+
+.fp-input-columns .keyboard{fill:var(--chart-kbd)}
+
+.fp-input-columns .pointer{fill:var(--chart-pointer)}
+
+@media (prefers-reduced-motion:reduce){.fp-progress-ring .value{transition:none}}
+
+.fp-chart-frame{display:block;width:100%;overflow:visible}
+
+.fp-hourly-bars .grid-line{stroke:var(--chart-grid);stroke-width:1;vector-effect:non-scaling-stroke}
+
+.fp-hourly-bars .activity-hour-slot .track{fill:color-mix(in srgb,var(--chart-neutral-track) 72%,transparent)}
+
+.fp-hourly-bars .activity-hour-slot .state-focus{fill:var(--focus-500)}
+
+.fp-hourly-bars .activity-hour-slot .state-distracted{fill:var(--distracted-500)}
+
+.fp-hourly-bars .activity-hour-slot text{fill:var(--text-tertiary);font-size:7px;font-weight:760}
+
+.fp-hourly-bars .activity-hour-slot:focus-visible{outline:none}
+
+.fp-hourly-bars .activity-hour-slot:focus-visible .track{stroke:var(--focus-500);stroke-width:2}
+
+.fp-heatmap .heatmap-cell{fill:var(--chart-empty);stroke:color-mix(in srgb,var(--border-default) 72%,transparent);stroke-width:1;vector-effect:non-scaling-stroke}
+
+.fp-heatmap .heatmap-cell.has-activity{fill:color-mix(in srgb,var(--focus-500) calc(var(--ratio)*100%),var(--distracted-500));opacity:calc(0.2 + var(--intensity)*0.8)}
+
+.fp-heatmap .heatmap-cell.is-empty{opacity:0.24}
+
+.fp-heatmap .heatmap-cell:focus-visible{outline:none;stroke:var(--focus-600);stroke-width:2}
+
+.fp-heatmap .heatmap-column-label{fill:var(--text-tertiary);font-size:7px;font-weight:720;font-variant-numeric:tabular-nums}

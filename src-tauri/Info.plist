@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
+  <key>LSRequiresCarbon</key>
+  <false/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Focus Pet 仅在用户打开相关功能时访问系统应用信息，用于识别当前活跃应用。</string>
+  <key>NSInputMonitoringUsageDescription</key>
+  <string>Focus Pet 需要输入监控权限来统计键盘与鼠标操作次数，用于专注状态分析；不会记录按键内容。</string>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+</dict>
+</plist>

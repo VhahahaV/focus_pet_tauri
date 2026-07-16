@@ -1,0 +1,103 @@
+name: Verify Platforms
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+          - name: Linux
+            os: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils \
+            dpkg-dev \
+            fakeroot \
+            rpm \
+            xdotool \
+            xprintidle \
+            zenity \
+            xvfb
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Preflight native helpers
+        if: runner.os != 'Linux'
+        run: npm run verify:preflight
+
+      - name: Smoke native adapters
+        if: runner.os != 'Linux'
+        run: npm run verify:native
+
+      - name: Preflight native helpers on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run verify:preflight
+
+      - name: Smoke native adapters on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run verify:native
+
+      - name: Verify platform
+        if: runner.os != 'Linux'
+        run: npm run verify:platform
+
+      - name: Verify platform on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run verify:platform
+
+      - name: Upload desktop bundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focus-pet-${{ runner.os }}-bundle
+          path: |
+            src-tauri/target/release/bundle/**
+          if-no-files-found: ignore

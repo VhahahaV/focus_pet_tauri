@@ -1,0 +1,38 @@
+[package]
+name = "focus-pet"
+version = "0.1.0"
+description = "Local-first desktop focus pet rebuilt with Tauri and React"
+authors = ["Focus Pet"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "focus_pet_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = ["protocol-asset", "tray-icon", "image-png", "image-ico", "macos-private-api"] }
+tauri-plugin-log = "2"
+chrono = { version = "0.4", features = ["serde"] }
+open = "5"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.24"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+freedesktop-desktop-entry = "0.7"
