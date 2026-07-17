@@ -30,7 +30,6 @@ export interface SnapshotContext {
   activeCategoryDuration: number;
   activeAppDuration: number;
   isFocusSessionActive: boolean;
-  isBreakActive: boolean;
   privacy: AppSettings["privacy"];
   switchCountLast5Min: number;
   switchCountLast15Min: number;
@@ -40,7 +39,6 @@ export const makeActivitySnapshot = (sample: NativeActivitySample, context: Snap
   const sanitized = sanitizeWindowTitle(sample.windowTitle, context.privacy);
   const source: ActivitySignalSource[] = ["frontmostApplication", "windowTitle", "idleTime", "appSwitching"];
   if (context.isFocusSessionActive) source.push("focusSession");
-  if (context.isBreakActive) source.push("breakSession");
   if (sample.isSystemSleeping) source.push("systemSleep");
   if (sample.isScreenLocked) source.push("screenLock");
   return {
@@ -58,7 +56,6 @@ export const makeActivitySnapshot = (sample: NativeActivitySample, context: Snap
     activeCategoryDuration: Math.max(0, context.activeCategoryDuration),
     activeAppDuration: Math.max(0, context.activeAppDuration),
     isFocusSessionActive: context.isFocusSessionActive,
-    isBreakActive: context.isBreakActive,
     isSystemSleeping: sample.isSystemSleeping,
     isScreenLocked: sample.isScreenLocked,
     source,

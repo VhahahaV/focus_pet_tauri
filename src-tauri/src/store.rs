@@ -64,7 +64,6 @@ impl FocusPetStore {
             "appUsage": self.read_json("app-usage.json", json!([]))?,
             "inputActivity": self.read_json("input-activity.json", json!([]))?,
             "focusSessions": self.read_json("focus-sessions.json", json!([]))?,
-            "breakSessions": self.read_json("break-sessions.json", json!([]))?,
             "nudges": self.read_json("nudges.json", json!([]))?
         }))
     }
@@ -95,10 +94,6 @@ impl FocusPetStore {
         self.write_json(
             "focus-sessions.json",
             snapshot.get("focusSessions").unwrap_or(&json!([])),
-        )?;
-        self.write_json(
-            "break-sessions.json",
-            snapshot.get("breakSessions").unwrap_or(&json!([])),
         )?;
         self.write_json("nudges.json", snapshot.get("nudges").unwrap_or(&json!([])))?;
         Ok(())
@@ -145,6 +140,7 @@ impl FocusPetStore {
         self.ensure_root()?;
         match self.metadata_state()? {
             MetadataState::Current => {
+                self.purge_legacy_recovery_data()?;
                 self.remove_legacy_roots();
                 Ok(true)
             }
@@ -153,6 +149,7 @@ impl FocusPetStore {
                     self.backup_root_if_needed("missing-schema")?;
                 }
                 self.write_metadata()?;
+                self.purge_legacy_recovery_data()?;
                 self.remove_legacy_roots();
                 Ok(true)
             }
@@ -292,6 +289,87 @@ impl FocusPetStore {
         }
     }
 
+    fn purge_legacy_recovery_data(&self) -> io::Result<()> {
+        let obsolete_sessions = self.root.join("break-sessions.json");
+        if obsolete_sessions.exists() {
+            fs::remove_file(obsolete_sessions)?;
+        }
+
+        self.rewrite_json_array("state-segments.json", |item| {
+            item.get("state").and_then(Value::as_str) != Some("break")
+        })?;
+        self.rewrite_json_array("nudges.json", |item| {
+            !matches!(
+                item.get("reason").and_then(Value::as_str),
+                Some("longFocusRest" | "veryLongFocusRest" | "breakEnding")
+            )
+        })?;
+        self.rewrite_json_array_objects("focus-sessions.json", |object| {
+            object.remove("autoStartBreak");
+            object.remove("breakDurationSeconds");
+        })?;
+
+        let settings_path = self.root.join("settings.json");
+        if settings_path.exists() {
+            let bytes = fs::read(&settings_path)?;
+            if let Ok(mut settings) = serde_json::from_slice::<Value>(&bytes) {
+                if let Some(reminder) = settings.get_mut("reminder").and_then(Value::as_object_mut) {
+                    reminder.remove("enableFocusRestNudges");
+                    reminder.remove("longFocusMinutes");
+                    reminder.remove("veryLongFocusMinutes");
+                }
+                self.write_json("settings.json", &settings)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn rewrite_json_array<F>(&self, name: &str, mut keep: F) -> io::Result<()>
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        let path = self.root.join(name);
+        if !path.exists() {
+            return Ok(());
+        }
+        let bytes = fs::read(&path)?;
+        let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
+            return Ok(());
+        };
+        let Some(items) = value.as_array_mut() else {
+            return Ok(());
+        };
+        let original_len = items.len();
+        items.retain(|item| keep(item));
+        if items.len() != original_len {
+            self.write_json(name, &value)?;
+        }
+        Ok(())
+    }
+
+    fn rewrite_json_array_objects<F>(&self, name: &str, mut update: F) -> io::Result<()>
+    where
+        F: FnMut(&mut serde_json::Map<String, Value>),
+    {
+        let path = self.root.join(name);
+        if !path.exists() {
+            return Ok(());
+        }
+        let bytes = fs::read(&path)?;
+        let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
+            return Ok(());
+        };
+        let Some(items) = value.as_array_mut() else {
+            return Ok(());
+        };
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                update(object);
+            }
+        }
+        self.write_json(name, &value)
+    }
+
     fn read_json(&self, name: &str, default_value: Value) -> io::Result<Value> {
         let path = self.root.join(name);
         if !path.exists() {
@@ -408,7 +486,6 @@ mod tests {
             "appUsage": [],
             "inputActivity": [],
             "focusSessions": [],
-            "breakSessions": [],
             "nudges": []
         });
 
@@ -419,7 +496,6 @@ mod tests {
             "appUsage",
             "inputActivity",
             "focusSessions",
-            "breakSessions",
             "nudges",
         ] {
             assert!(snapshot.get(key).is_some(), "missing {key}");
@@ -454,6 +530,41 @@ mod tests {
         assert!(root.join("settings.json").exists());
         assert!(!legacy.exists());
         let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn store_purges_obsolete_recovery_data_on_load() {
+        let root = temp_store_root("purge-obsolete-recovery");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("schema.json"),
+            format!(r#"{{"schemaVersion":"{}"}}"#, SCHEMA_VERSION),
+        )
+        .unwrap();
+        fs::write(root.join("break-sessions.json"), "[]").unwrap();
+        fs::write(
+            root.join("state-segments.json"),
+            r#"[{"id":"old","state":"break"},{"id":"keep","state":"focus"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("focus-sessions.json"),
+            r#"[{"id":"focus","autoStartBreak":true,"breakDurationSeconds":300}]"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("settings.json"),
+            r#"{"reminder":{"enableFocusRestNudges":true,"longFocusMinutes":50,"veryLongFocusMinutes":90}}"#,
+        )
+        .unwrap();
+
+        let store = FocusPetStore::from_root(root.clone());
+        let snapshot = store.load_snapshot().unwrap();
+        assert!(!root.join("break-sessions.json").exists());
+        assert_eq!(snapshot["stateSegments"].as_array().unwrap().len(), 1);
+        assert!(snapshot["focusSessions"][0].get("autoStartBreak").is_none());
+        assert!(snapshot["settings"]["reminder"].get("longFocusMinutes").is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

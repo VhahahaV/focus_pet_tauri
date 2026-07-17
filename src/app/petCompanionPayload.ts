@@ -1,5 +1,6 @@
 import type {
   AppRuntimeState,
+  AppThemeID,
   DailySummary,
   InputWorkloadSummary,
   PetIntent,
@@ -7,18 +8,16 @@ import type {
 } from "../core/types";
 
 export interface PetCompanionViewState {
+  theme: AppThemeID;
   petSettings: PetSettings;
   currentPetIntent: PetIntent;
   summary: Pick<DailySummary, "focusSeconds" | "distractedSeconds">;
   todayWorkload: Pick<InputWorkloadSummary, "estimatedTypedCharacters" | "pointerActionCount">;
   latestPetBubble?: string;
-  breakActive: boolean;
 }
 
-export const makePetCompanionViewState = (
-  state: AppRuntimeState,
-  breakActive: boolean,
-): PetCompanionViewState => ({
+export const makePetCompanionViewState = (state: AppRuntimeState): PetCompanionViewState => ({
+  theme: state.settings.appearance.theme,
   petSettings: state.settings.pet,
   currentPetIntent: state.currentPetIntent,
   summary: {
@@ -30,5 +29,4 @@ export const makePetCompanionViewState = (
     pointerActionCount: state.todayWorkload.pointerActionCount,
   },
   latestPetBubble: state.latestPetBubble,
-  breakActive,
 });

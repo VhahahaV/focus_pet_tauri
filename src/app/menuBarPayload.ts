@@ -11,6 +11,5 @@ export interface MenuBarPayload {
     id: string;
     taskName: string;
   };
-  activeBreakActive: boolean;
   hasAvailablePetPacks: boolean;
 }

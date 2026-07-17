@@ -48,14 +48,14 @@
   --distracted-100: #fff6ea;
   --distracted-050: #fffaf2;
 
-  /* Rest */
-  --rest-600: #3d9964;
-  --rest-500: #68be8b;
-  --rest-400: #85cda1;
-  --rest-300: #b6e2c4;
-  --rest-200: #ddf4e5;
-  --rest-100: #f2fbf5;
-  --rest-050: #f7fcf9;
+  /* Success */
+  --success-600: #3d9964;
+  --success-500: #68be8b;
+  --success-400: #85cda1;
+  --success-300: #b6e2c4;
+  --success-200: #ddf4e5;
+  --success-100: #f2fbf5;
+  --success-050: #f7fcf9;
 
   /* Supporting semantic colors */
   --away-500: #9aa8b8;
@@ -166,11 +166,11 @@
   --status-border: var(--distracted-200);
 }
 
-:where(.is-rest, .state-rest, .status-rest) {
-  --status-primary: var(--rest-500);
-  --status-strong: var(--rest-600);
-  --status-soft: var(--rest-100);
-  --status-border: var(--rest-200);
+:where(.is-success, .state-success, .status-success) {
+  --status-primary: var(--success-500);
+  --status-strong: var(--success-600);
+  --status-soft: var(--success-100);
+  --status-border: var(--success-200);
 }
 
 :where(.is-away, .state-away, .status-away, .is-neutral, .status-neutral) {

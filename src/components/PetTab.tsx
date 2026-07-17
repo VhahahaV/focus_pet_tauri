@@ -336,7 +336,7 @@ export const PetTab = () => {
           </section>
         ) : null}
 
-        <section className="pet-settings-section status-rest">
+        <section className="pet-settings-section status-success">
           <h3><Sparkles size={15} /> 显示行为</h3>
           <div className="pet-toggle-grid">
             <TogglePill status="pet" checked={!bundle.state.settings.pet.hidden} disabled={petPacks.length === 0} onCheckedChange={actions.togglePetHidden}>

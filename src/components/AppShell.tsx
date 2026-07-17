@@ -8,7 +8,8 @@ import {
   Settings,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useState, type PointerEvent } from "react";
 import type { FocusPetAppController } from "../app/useFocusPetApp";
 import type { DashboardTab } from "../app/types";
 import { GlassSurface } from "./ui";
@@ -26,6 +27,20 @@ const tabDescriptions: Record<DashboardTab, string> = {
   pet: "陪伴与行为",
   settings: "偏好与权限",
 };
+
+const resizeDirections = [
+  "North",
+  "NorthEast",
+  "East",
+  "SouthEast",
+  "South",
+  "SouthWest",
+  "West",
+  "NorthWest",
+] as const;
+
+const resizeClass = (direction: (typeof resizeDirections)[number]): string =>
+  direction.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
 
 export const AppShell = ({
   app,
@@ -47,13 +62,35 @@ export const AppShell = ({
   const announcementIsWarning = Boolean(
     announcement && !announcementIsError && /暂无|需要|未开启|未授予/.test(announcement),
   );
+  const beginResize = (direction: (typeof resizeDirections)[number], event: PointerEvent<HTMLDivElement>) => {
+    if (!("__TAURI_INTERNALS__" in window) || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void getCurrentWindow().startResizeDragging(direction).catch(() => undefined);
+  };
 
   return (
     <div className="app-stage">
+      <div
+        className="window-drag-strip"
+        data-tauri-drag-region
+        aria-hidden="true"
+        onDoubleClick={() => {
+          if ("__TAURI_INTERNALS__" in window) void getCurrentWindow().toggleMaximize().catch(() => undefined);
+        }}
+      />
+      {resizeDirections.map((direction) => (
+        <div
+          className={`window-resize-handle is-${resizeClass(direction)}`}
+          key={direction}
+          aria-hidden="true"
+          onPointerDown={(event) => beginResize(direction, event)}
+        />
+      ))}
       <div className="app-shell">
         <aside className="sidebar">
-          <div className="brand-mark">
-            <img src={`${import.meta.env.BASE_URL}assets/AppIcon.png`} alt="" />
+          <div className="brand-mark" data-tauri-drag-region>
+            <img src={`${import.meta.env.BASE_URL}assets/AppIcon.png`} alt="" draggable={false} />
             <div>
               <strong>Focus Pet</strong>
               <span>陪你稳住专注</span>
@@ -110,7 +147,7 @@ export const AppShell = ({
           {announcement ? (
             <GlassSurface
               roleType="menu"
-              status={announcementIsError ? "error" : announcementIsWarning ? "warning" : "rest"}
+              status={announcementIsError ? "error" : announcementIsWarning ? "warning" : "success"}
               className={`workspace-toast ${announcementIsError ? "is-error" : announcementIsWarning ? "is-warning" : "is-success"}`}
               role="status"
               aria-live="polite"

@@ -1,13 +1,14 @@
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bell, BellOff, CheckCircle2, Coffee, Eye, EyeOff, LayoutDashboard, PanelsTopLeft, Power, Settings, SquareArrowDown } from "lucide-react";
+import { Bell, BellOff, CheckCircle2, Eye, EyeOff, LayoutDashboard, PanelsTopLeft, Power, Settings, SquareArrowDown } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { NativeMenuAction } from "../app/nativeMenu";
 import type { MenuBarPayload } from "../app/menuBarPayload";
 import { focusStateLabels } from "../core/labels";
 import { formatClock, formatDuration, formatPercentage } from "../core/formatters";
 import { defaultAppSettings } from "../core/settings";
-import { nativeQuitApp } from "../store/native";
+import { nativePerformMenuBarAction, nativeQuitApp } from "../store/native";
+import { useDocumentTheme } from "../themes";
 
 const fallbackMenuPayload = (): MenuBarPayload => {
   const now = new Date().toISOString();
@@ -24,7 +25,6 @@ const fallbackMenuPayload = (): MenuBarPayload => {
       date: now.slice(0, 10),
       focusSeconds: 0,
       distractedSeconds: 0,
-      breakSeconds: 0,
       awaySeconds: 0,
       nudgeCount: 0,
       longestFocusSeconds: 0,
@@ -46,21 +46,20 @@ const fallbackMenuPayload = (): MenuBarPayload => {
       activeCategoryDuration: 0,
       activeAppDuration: 0,
       isFocusSessionActive: false,
-      isBreakActive: false,
       isSystemSleeping: false,
       isScreenLocked: false,
       source: ["frontmostApplication"],
     },
     settings: defaultAppSettings(),
     statusMessage: "等待主窗口同步",
-    activeBreakActive: false,
     hasAvailablePetPacks: true,
   };
 };
 
 const sendMenuAction = async (action: NativeMenuAction) => {
   if (!("__TAURI_INTERNALS__" in window)) return;
-  await emitTo("main", "focus-pet-native-menu", { action }).catch(() => undefined);
+  await nativePerformMenuBarAction(action).catch(() => false);
+  await getCurrentWindow().hide().catch(() => undefined);
 };
 
 const terminateApp = async () => {
@@ -74,7 +73,7 @@ const reminderPauseTitle = (payload: MenuBarPayload): string => {
   return "提醒开启";
 };
 
-const MenuMetricChip = ({ title, value, state }: { title: string; value: string; state: "focus" | "distracted" | "break" }) => (
+const MenuMetricChip = ({ title, value, state }: { title: string; value: string; state: "focus" | "distracted" }) => (
   <span className={`menu-metric-chip state-${state}`}>
     <i />
     <small>{title}</small>
@@ -91,7 +90,7 @@ const MenuActionButton = ({
   title: string;
   icon: ReactNode;
   action: NativeMenuAction;
-  tone?: "focus" | "neutral" | "rest" | "warning" | "pet";
+  tone?: "focus" | "neutral" | "warning" | "pet";
 }) => (
   <button className={`menu-action-button tone-${tone}`} type="button" onClick={() => void sendMenuAction(action)}>
     <span>{icon}</span>
@@ -101,6 +100,7 @@ const MenuActionButton = ({
 
 export const MenuBarView = () => {
   const [payload, setPayload] = useState<MenuBarPayload>(() => fallbackMenuPayload());
+  useDocumentTheme(payload.settings.appearance.theme);
   const stateLabel = focusStateLabels[payload.currentDecision.state];
   const hasVisibleWidgets =
     payload.settings.desktopWidget.currentStatusVisible || payload.settings.desktopWidget.recentRhythmVisible;
@@ -116,12 +116,11 @@ export const MenuBarView = () => {
     () => [
       payload.currentDecision.state,
       payload.activeFocus?.id ?? "no-focus",
-      payload.activeBreakActive ? "break" : "no-break",
       remindersPaused ? "paused" : "active",
       hasVisibleWidgets ? "widgets" : "no-widgets",
       payload.settings.pet.hidden ? "pet-hidden" : "pet-visible",
     ].join("|"),
-    [hasVisibleWidgets, payload.activeBreakActive, payload.activeFocus?.id, payload.currentDecision.state, payload.settings.pet.hidden, remindersPaused],
+    [hasVisibleWidgets, payload.activeFocus?.id, payload.currentDecision.state, payload.settings.pet.hidden, remindersPaused],
   );
 
   useEffect(() => {
@@ -131,6 +130,15 @@ export const MenuBarView = () => {
       unlisten = dispose;
     });
     return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return undefined;
+    const hideOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") void getCurrentWindow().hide().catch(() => undefined);
+    };
+    window.addEventListener("keydown", hideOnEscape);
+    return () => window.removeEventListener("keydown", hideOnEscape);
   }, []);
 
   return (
@@ -150,7 +158,6 @@ export const MenuBarView = () => {
       <section className="menu-status-strip" aria-label="状态摘要">
         <MenuMetricChip title="专注" value={formatDuration(payload.summary.focusSeconds)} state="focus" />
         <MenuMetricChip title="走神" value={formatDuration(payload.summary.distractedSeconds)} state="distracted" />
-        <MenuMetricChip title="休息" value={formatDuration(payload.summary.breakSeconds)} state="break" />
       </section>
 
       <div className="menu-glass-divider" />
@@ -166,12 +173,6 @@ export const MenuBarView = () => {
         {payload.activeFocus ? (
           <MenuActionButton title="完成任务" icon={<CheckCircle2 size={15} />} action="finish-focus" />
         ) : null}
-        <MenuActionButton
-          title={payload.activeBreakActive ? "结束休息" : `休息 ${payload.settings.breakMinutes} 分钟`}
-          icon={<Coffee size={15} />}
-          action="toggle-break"
-          tone="rest"
-        />
         <MenuActionButton
           title={remindersPaused ? "恢复提醒" : "暂停提醒"}
           icon={remindersPaused ? <Bell size={15} /> : <BellOff size={15} />}

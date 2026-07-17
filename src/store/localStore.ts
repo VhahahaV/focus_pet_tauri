@@ -11,19 +11,25 @@ export const emptySnapshot = (): LocalStoreSnapshot => ({
   appUsage: [],
   inputActivity: [],
   focusSessions: [],
-  breakSessions: [],
   nudges: [],
 });
 
 export const normalizeSnapshot = (snapshot: Partial<LocalStoreSnapshot> = {}): LocalStoreSnapshot => ({
   settings: normalizeAppSettings(snapshot.settings),
   classificationRules: snapshot.classificationRules ?? [],
-  stateSegments: snapshot.stateSegments ?? [],
+  stateSegments: (snapshot.stateSegments ?? []).filter((segment) => (segment as { state: string }).state !== "break"),
   appUsage: snapshot.appUsage ?? [],
   inputActivity: snapshot.inputActivity ?? [],
-  focusSessions: snapshot.focusSessions ?? [],
-  breakSessions: snapshot.breakSessions ?? [],
-  nudges: snapshot.nudges ?? [],
+  focusSessions: (snapshot.focusSessions ?? []).map((session) => {
+    const { autoStartBreak: _autoStartBreak, breakDurationSeconds: _breakDurationSeconds, ...current } = session as typeof session & {
+      autoStartBreak?: boolean;
+      breakDurationSeconds?: number;
+    };
+    return current;
+  }),
+  nudges: (snapshot.nudges ?? []).filter((nudge) =>
+    !["longFocusRest", "veryLongFocusRest", "breakEnding"].includes(nudge.reason as string),
+  ),
 });
 
 export interface RetentionResult {
@@ -31,7 +37,6 @@ export interface RetentionResult {
   removedAppUsageSegments: number;
   removedInputActivityBuckets: number;
   removedFocusSessions: number;
-  removedBreakSessions: number;
   removedNudges: number;
   totalRemoved: number;
 }
@@ -54,14 +59,12 @@ export const pruneSnapshotForRetention = (
   const appUsage = normalized.appUsage.filter((segment) => new Date(segment.end).getTime() >= appUsageCutoff);
   const inputActivity = normalized.inputActivity.filter((bucket) => new Date(bucket.end).getTime() >= inputCutoff);
   const focusSessions = normalized.focusSessions.filter((session) => new Date(session.end ?? session.start).getTime() >= sessionCutoff);
-  const breakSessions = normalized.breakSessions.filter((session) => new Date(session.end ?? session.start).getTime() >= sessionCutoff);
   const nudges = normalized.nudges.filter((nudge) => new Date(nudge.time).getTime() >= nudgeCutoff);
   const result = {
     removedStateSegments: normalized.stateSegments.length - stateSegments.length,
     removedAppUsageSegments: normalized.appUsage.length - appUsage.length,
     removedInputActivityBuckets: normalized.inputActivity.length - inputActivity.length,
     removedFocusSessions: normalized.focusSessions.length - focusSessions.length,
-    removedBreakSessions: normalized.breakSessions.length - breakSessions.length,
     removedNudges: normalized.nudges.length - nudges.length,
     totalRemoved: 0,
   };
@@ -70,7 +73,6 @@ export const pruneSnapshotForRetention = (
     result.removedAppUsageSegments +
     result.removedInputActivityBuckets +
     result.removedFocusSessions +
-    result.removedBreakSessions +
     result.removedNudges;
 
   return {
@@ -80,7 +82,6 @@ export const pruneSnapshotForRetention = (
       appUsage,
       inputActivity,
       focusSessions,
-      breakSessions,
       nudges,
     },
     result,

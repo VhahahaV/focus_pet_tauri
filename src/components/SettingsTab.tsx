@@ -1,5 +1,6 @@
 import {
   Bell,
+  Bot,
   CheckCircle2,
   Clock3,
   Database,
@@ -10,6 +11,7 @@ import {
   LoaderCircle,
   Lock,
   Monitor,
+  Palette,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
@@ -24,9 +26,10 @@ import { formatDate } from "../core/formatters";
 import { judgmentPresetSettings, matchingJudgmentPreset, type JudgmentSensitivityPreset } from "../core/settings";
 import { CommandButton } from "./common";
 import { SegmentedControl, Stepper, TogglePill } from "./ui";
+import { appThemes } from "../themes";
 
-type SettingsModuleID = "desktopWidgets" | "reminders" | "recognition" | "permissions" | "data" | "about";
-type SettingsStatus = "focus" | "distracted" | "privacy" | "warning" | "pet" | "rest" | "neutral";
+type SettingsModuleID = "appearance" | "desktopWidgets" | "reminders" | "recognition" | "permissions" | "data" | "about";
+type SettingsStatus = "focus" | "distracted" | "privacy" | "warning" | "pet" | "success" | "neutral";
 
 const settingsModules: Array<{
   id: SettingsModuleID;
@@ -35,6 +38,7 @@ const settingsModules: Array<{
   Icon: LucideIcon;
   status: SettingsStatus;
 }> = [
+  { id: "appearance", title: "外观主题", subtitle: "全局视觉语言", Icon: Palette, status: "pet" },
   { id: "desktopWidgets", title: "桌面状态卡", subtitle: "当前与节奏卡", Icon: Monitor, status: "focus" },
   { id: "reminders", title: "提醒", subtitle: "气泡与系统通知", Icon: Bell, status: "focus" },
   { id: "recognition", title: "识别", subtitle: "状态判断", Icon: SlidersHorizontal, status: "distracted" },
@@ -42,6 +46,50 @@ const settingsModules: Array<{
   { id: "data", title: "数据", subtitle: "本地记录", Icon: Database, status: "privacy" },
   { id: "about", title: "关于", subtitle: "应用信息", Icon: Info, status: "warning" },
 ];
+
+const AppearanceSettings = () => {
+  const { bundle, actions } = useFocusPet();
+  const activeTheme = bundle.state.settings.appearance.theme;
+  return (
+    <div className="theme-choice-grid" role="radiogroup" aria-label="外观主题">
+      {appThemes.map((theme) => {
+        const selected = activeTheme === theme.id;
+        return (
+          <button
+            className={`theme-choice-card ${selected ? "is-selected" : ""}`}
+            data-theme-preview={theme.id}
+            key={theme.id}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            aria-pressed={selected}
+            onClick={() => actions.updateSettings((settings) => ({
+              ...settings,
+              appearance: { ...settings.appearance, theme: theme.id },
+            }))}
+          >
+            <span className="theme-choice-preview" aria-hidden>
+              <span className="theme-preview-window">
+                <i />
+                <b />
+                <em />
+              </span>
+              <span className="theme-preview-swatches">
+                {theme.swatches.map((swatch) => <i key={swatch} style={{ backgroundColor: swatch }} />)}
+              </span>
+            </span>
+            <span className="theme-choice-copy">
+              <strong>{theme.name}</strong>
+              <small>{theme.englishName}</small>
+              <span>{theme.description}</span>
+            </span>
+            <span className="theme-choice-check" aria-hidden>{selected ? "✓" : ""}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 const judgmentPresetLabels: Record<JudgmentSensitivityPreset, string> = {
   relaxed: "宽松",
@@ -149,7 +197,7 @@ const RecognitionSettings = () => {
       : diagnostic.inputMonitoringStatus !== "已允许"
         ? "权限待补"
         : "运行中";
-  const statusClass: SettingsStatus = statusTitle === "运行中" ? "rest" : statusTitle === "已暂停" ? "distracted" : "warning";
+  const statusClass: SettingsStatus = statusTitle === "运行中" ? "success" : statusTitle === "已暂停" ? "distracted" : "warning";
   const refresh = async () => {
     setIsRefreshing(true);
     try {
@@ -357,7 +405,7 @@ const ReminderSettings = () => {
         </div>
       </SettingsSubsection>
 
-      <SettingsSubsection title="触发条件" Icon={Clock3} status="rest">
+      <SettingsSubsection title="触发条件" Icon={Clock3} status="neutral">
         <div className="settings-toggle-grid">
           <TogglePillButton
             label="走神提醒事件"
@@ -365,13 +413,6 @@ const ReminderSettings = () => {
             status="distracted"
             checked={reminder.enableDistractedNudges}
             onChange={(checked) => actions.updateSettings((settings) => ({ ...settings, reminder: { ...settings.reminder, enableDistractedNudges: checked } }))}
-          />
-          <TogglePillButton
-            label="专注休息事件"
-            Icon={Clock3}
-            status="rest"
-            checked={reminder.enableFocusRestNudges}
-            onChange={(checked) => actions.updateSettings((settings) => ({ ...settings, reminder: { ...settings.reminder, enableFocusRestNudges: checked } }))}
           />
         </div>
         <div className="settings-control-grid">
@@ -394,24 +435,6 @@ const ReminderSettings = () => {
             onChange={(value) => actions.updateSettings((settings) => ({ ...settings, reminder: { ...settings.reminder, strongDistractedMinutes: value } }))}
           />
           <NumberControl
-            title="长专注阈值"
-            value={reminder.longFocusMinutes}
-            min={5}
-            max={180}
-            suffix="分钟"
-            status="rest"
-            onChange={(value) => actions.updateSettings((settings) => ({ ...settings, reminder: { ...settings.reminder, longFocusMinutes: value } }))}
-          />
-          <NumberControl
-            title="超长专注阈值"
-            value={reminder.veryLongFocusMinutes}
-            min={10}
-            max={240}
-            suffix="分钟"
-            status="rest"
-            onChange={(value) => actions.updateSettings((settings) => ({ ...settings, reminder: { ...settings.reminder, veryLongFocusMinutes: value } }))}
-          />
-          <NumberControl
             title="提醒冷却"
             value={reminder.cooldownMinutes}
             min={1}
@@ -428,12 +451,20 @@ const ReminderSettings = () => {
               状态判断进入走神时立即作为基础桌宠状态；达到 {reminder.lightDistractedMinutes} 分钟触发温和提醒，达到 {reminder.strongDistractedMinutes} 分钟触发强提醒。
             </span>
           </article>
+        </div>
+      </SettingsSubsection>
+
+      <SettingsSubsection title="智能体任务" Icon={Bot} status="pet">
+        <div className="reminder-explanation-grid">
           <article>
-            <strong>专注休息提示</strong>
-            <span>
-              连续专注达到 {reminder.longFocusMinutes} 分钟触发休息提示，达到 {reminder.veryLongFocusMinutes} 分钟升级为超长专注提示。
-            </span>
+            <strong>Codex / Claude Code 完成通知</strong>
+            <span>通过本机 Hook 接收任务完成事件，桌宠会展示任务摘要；事件读取后立即从收件箱清除，不上传会话内容。</span>
           </article>
+        </div>
+        <div className="settings-command-row">
+          <CommandButton onClick={actions.testAgentCompletion}>
+            <Bot size={15} /> 测试桌宠通知
+          </CommandButton>
         </div>
       </SettingsSubsection>
 
@@ -529,7 +560,7 @@ const PermissionSettings = () => {
                 <strong>{item.title}</strong>
                 <small>{item.subtitle}</small>
               </div>
-              <em className={`settings-status-badge status-${allowed ? "rest" : "warning"}`}>{item.status}</em>
+              <em className={`settings-status-badge status-${allowed ? "success" : "warning"}`}>{item.status}</em>
               {item.canRequest && !allowed ? (
                 <CommandButton loading={pendingAction === `request:${item.id}`} loadingLabel="请求中" disabled={Boolean(pendingAction)} onClick={() => void runPermissionAction(`request:${item.id}`, () => actions.requestSystemPermission(item.destination))}>
                   <ShieldCheck size={15} /> 请求
@@ -638,12 +669,13 @@ const PrivacyDataSettings = () => {
 const AboutSettings = () => (
   <div className="about-copy swift-about-copy">
     <strong>Focus Pet</strong>
-    <span>Focus Pet 使用前台 App、窗口标题、输入空闲和专注/休息会话判断状态。所有统计保存在本机。</span>
+    <span>Focus Pet 使用前台 App、窗口标题、输入空闲和专注会话判断状态。所有统计保存在本机。</span>
     <small>迁移构建日期 {formatDate(new Date())}</small>
   </div>
 );
 
 const moduleContent: Record<SettingsModuleID, ReactNode> = {
+  appearance: <AppearanceSettings />,
   desktopWidgets: <DesktopWidgetSettings />,
   reminders: <ReminderSettings />,
   recognition: <RecognitionSettings />,

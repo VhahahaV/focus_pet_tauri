@@ -152,7 +152,7 @@ const HoverLine = ({ title, value, state }: { title: string; value: string; stat
 
 const HeatmapHoverCard = ({ hover }: { hover: HeatmapHoverState }) => {
   const workSeconds = hover.day.focusSeconds + hover.day.distractedSeconds;
-  const totalSeconds = workSeconds + hover.day.breakSeconds + hover.day.awaySeconds;
+  const totalSeconds = workSeconds + hover.day.awaySeconds;
   return (
     <HoverCard className="history-hover-card heatmap-hover-card" style={{ "--hover-x": `${hover.x}px`, "--hover-y": `${hover.y}px` } as CSSProperties}>
       <div className="history-hover-title">
@@ -167,7 +167,6 @@ const HeatmapHoverCard = ({ hover }: { hover: HeatmapHoverState }) => {
       </div>
       <HoverLine title="专注" value={formatDuration(hover.day.focusSeconds)} state="focus" />
       <HoverLine title="走神" value={formatDuration(hover.day.distractedSeconds)} state="distracted" />
-      <HoverLine title="休息" value={formatDuration(hover.day.breakSeconds)} state="break" />
       {hover.day.awaySeconds > 0 ? <HoverLine title="暂离" value={formatDuration(hover.day.awaySeconds)} state="away" /> : null}
     </HoverCard>
   );
@@ -270,7 +269,6 @@ export const SessionsTab = () => {
   const stateTiles: Array<{ state: FocusState; seconds: number }> = [
     { state: "focus", seconds: history.focusSeconds },
     { state: "distracted", seconds: history.distractedSeconds },
-    { state: "break", seconds: history.breakSeconds },
     { state: "away", seconds: history.awaySeconds },
   ];
   const relativeHoverPoint = (event: PointerEvent<Element>, selector: string, width = 204): { x: number; y: number } => {
@@ -306,12 +304,6 @@ export const SessionsTab = () => {
           <div className="swift-heatmap-main">
             {heatmapScope === "week" ? (
               <div className="swift-week-heatmap" onPointerLeave={() => setHeatmapHover(null)}>
-                <div className="swift-weekday-labels" aria-hidden>
-                  <span />
-                  {["一", "二", "三", "四", "五", "六", "日"].map((label) => (
-                    <em key={label}>{label}</em>
-                  ))}
-                </div>
                 <div className="swift-week-chart">
                   <Heatmap
                     className="fp-week-heatmap"
@@ -319,6 +311,7 @@ export const SessionsTab = () => {
                     columns={attentionHistory.weeks.length}
                     rows={7}
                     columnLabels={attentionHistory.weeks.map((week) => monthDayTitle(week.start))}
+                    rowLabels={["一", "二", "三", "四", "五", "六", "日"]}
                     cells={attentionHistory.weeks.flatMap((week, column) => week.days.map((day, row): HeatmapCell => ({
                       id: day.date,
                       column,
@@ -526,7 +519,7 @@ export const SessionsTab = () => {
 
         <div className="activity-state-strip">
           {stateTiles.map((item) => {
-            const total = history.focusSeconds + history.distractedSeconds + history.breakSeconds + history.awaySeconds;
+            const total = history.focusSeconds + history.distractedSeconds + history.awaySeconds;
             return (
               <span className={`state-${item.state}`} key={item.state}>
                 <strong>{focusStateLabels[item.state].title}</strong>

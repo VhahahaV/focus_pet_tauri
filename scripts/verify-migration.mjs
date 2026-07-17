@@ -79,7 +79,6 @@ addCheck("core Swift modules have React equivalents", () =>
   contains(projectRoot, "src/core/stateEngine.ts", [
     "isSystemSleeping",
     "isScreenLocked",
-    "activeBreak",
     "longInputIdleAway",
     "entertainmentStable",
     "recentInputRecovery",
@@ -126,7 +125,7 @@ addCheck("UI surfaces migrated to React components", () =>
   ]) &&
   contains(projectRoot, "tests/e2e/dashboard.spec.ts", [
     "Swift-style shell and Today surface render",
-    "break recovery can be started from Today page",
+    "computer monitor can be customized and keeps the Today cards aligned",
     "desktop widget views render without the main runtime shell",
     "settings expose all modules without a secondary navigation rail",
     "pet settings expose hover and random action controls",

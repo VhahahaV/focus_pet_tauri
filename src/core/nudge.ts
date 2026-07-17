@@ -11,8 +11,6 @@ import { makeID } from "./utils";
 export const defaultNudgePolicyThresholds = (): NudgePolicyThresholds => ({
   lightDistractedSeconds: 5 * 60,
   strongDistractedSeconds: 12 * 60,
-  longFocusSeconds: 45 * 60,
-  veryLongFocusSeconds: 90 * 60,
   welcomeBackAwaySeconds: 30 * 60,
   cooldownSeconds: 10 * 60,
 });
@@ -24,12 +22,8 @@ export const defaultPetIntentForNudgeReason = (reason: NudgeReason): PetIntentKi
     case "distractedStrong":
     case "frequentSwitching":
       return "nudgeStrong";
-    case "longFocusRest":
-    case "veryLongFocusRest":
     case "focusSessionCompleted":
-      return "focusRestHint";
-    case "breakEnding":
-      return "breakEnding";
+      return "taskCompleted";
     case "welcomeBack":
       return "welcomeBack";
   }
@@ -41,13 +35,8 @@ const cooldownReasons = (reason: NudgeReason): NudgeReason[] => {
     case "distractedStrong":
     case "frequentSwitching":
       return ["distractedOverThreshold", "distractedStrong", "frequentSwitching"];
-    case "longFocusRest":
-    case "veryLongFocusRest":
-      return ["longFocusRest", "veryLongFocusRest"];
     case "focusSessionCompleted":
       return ["focusSessionCompleted"];
-    case "breakEnding":
-      return ["breakEnding"];
     case "welcomeBack":
       return ["welcomeBack"];
   }
@@ -55,9 +44,6 @@ const cooldownReasons = (reason: NudgeReason): NudgeReason[] => {
 
 const cooldownSeconds = (reason: NudgeReason, thresholds: NudgePolicyThresholds): number => {
   switch (reason) {
-    case "longFocusRest":
-    case "veryLongFocusRest":
-      return Math.max(thresholds.cooldownSeconds, 30 * 60);
     case "welcomeBack":
       return Math.max(thresholds.cooldownSeconds, 2 * 60 * 60);
     default:
@@ -113,12 +99,6 @@ export const evaluateNudge = (
 
   switch (state.state) {
     case "focus":
-      if (state.stableDuration >= thresholds.veryLongFocusSeconds) {
-        return event("veryLongFocusRest", state, now, "focusRestHint", "离屏活动 5 分钟", lastTriggeredAt, thresholds);
-      }
-      if (state.stableDuration >= thresholds.longFocusSeconds) {
-        return event("longFocusRest", state, now, "focusRestHint", "休息 5 分钟", lastTriggeredAt, thresholds);
-      }
       return undefined;
     case "distracted":
       if (state.stableDuration >= thresholds.strongDistractedSeconds) {
@@ -128,7 +108,6 @@ export const evaluateNudge = (
         return event("distractedOverThreshold", state, now, "nudgeGentle", "回到任务 2 分钟", lastTriggeredAt, thresholds);
       }
       return undefined;
-    case "break":
     case "away":
       return undefined;
   }
@@ -138,7 +117,6 @@ export const reminderAllowsReason = (
   reason: NudgeReason,
   flags: {
     enableDistractedNudges: boolean;
-    enableFocusRestNudges: boolean;
     enableWelcomeBackNudges: boolean;
   },
 ): boolean => {
@@ -147,11 +125,8 @@ export const reminderAllowsReason = (
     case "distractedStrong":
     case "frequentSwitching":
       return flags.enableDistractedNudges;
-    case "longFocusRest":
-    case "veryLongFocusRest":
     case "focusSessionCompleted":
-    case "breakEnding":
-      return flags.enableFocusRestNudges;
+      return true;
     case "welcomeBack":
       return flags.enableWelcomeBackNudges;
   }

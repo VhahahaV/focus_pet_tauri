@@ -11,7 +11,7 @@ import {
 } from "react";
 import { Check, Minus, Plus } from "lucide-react";
 
-export type UIStatus = "focus" | "distracted" | "rest" | "away" | "pet" | "privacy" | "warning" | "error" | "neutral";
+export type UIStatus = "focus" | "distracted" | "success" | "away" | "pet" | "privacy" | "warning" | "error" | "neutral";
 export type GlassRole = "data" | "control" | "badge" | "button" | "hero" | "stage" | "menu";
 
 const cx = (...names: Array<string | false | null | undefined>) => names.filter(Boolean).join(" ");

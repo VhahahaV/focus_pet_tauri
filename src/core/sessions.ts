@@ -1,11 +1,9 @@
-import type { BreakSession, BreakSource, FocusSession, FocusSessionStatus } from "./types";
+import type { FocusSession, FocusSessionStatus } from "./types";
 import { makeID, secondsBetween, safeTrim } from "./utils";
 
 export const makeFocusSession = (
   taskName: string,
   minutes: number,
-  autoStartBreak: boolean,
-  breakMinutes: number,
   start = new Date(),
 ): FocusSession => ({
   id: makeID("focus"),
@@ -21,8 +19,6 @@ export const makeFocusSession = (
   mainAppName: undefined,
   completed: false,
   status: "active",
-  autoStartBreak,
-  breakDurationSeconds: Math.max(60, Math.round(breakMinutes * 60)),
 });
 
 export const remainingFocusSeconds = (session: FocusSession, now = new Date()): number =>
@@ -41,30 +37,5 @@ export const finishFocusSession = (
   mainAppName: mainAppName ?? session.mainAppName,
 });
 
-export const makeBreakSession = (
-  minutes: number,
-  source: BreakSource = "manual",
-  start = new Date(),
-): BreakSession => ({
-  id: makeID("break"),
-  start: start.toISOString(),
-  targetDurationSeconds: Math.max(60, Math.round(minutes * 60)),
-  end: undefined,
-  source,
-  completed: false,
-});
-
-export const remainingBreakSeconds = (session: BreakSession, now = new Date()): number =>
-  Math.max(0, session.targetDurationSeconds - secondsBetween(session.start, session.end ?? now));
-
-export const finishBreakSession = (session: BreakSession, completed: boolean, end = new Date()): BreakSession => ({
-  ...session,
-  end: end.toISOString(),
-  completed,
-});
-
 export const activeFocusSession = (sessions: FocusSession[]): FocusSession | undefined =>
   [...sessions].reverse().find((session) => session.status === "active" && !session.end);
-
-export const activeBreakSession = (sessions: BreakSession[]): BreakSession | undefined =>
-  [...sessions].reverse().find((session) => !session.end);

@@ -39,10 +39,6 @@ export const evaluateState = (
     return decision(snapshot, "away", 0.96, ["screenLocked"], Math.max(snapshot.idleSeconds, snapshot.activeCategoryDuration));
   }
 
-  if (snapshot.isBreakActive) {
-    return decision(snapshot, "break", 0.96, ["activeBreak"], snapshot.activeCategoryDuration);
-  }
-
   if (snapshot.idleSeconds >= idleAwaySeconds) {
     return decision(snapshot, "away", 0.88, ["longInputIdleAway"], snapshot.idleSeconds);
   }

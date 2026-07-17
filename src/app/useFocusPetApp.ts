@@ -11,14 +11,16 @@ import type {
 } from "../core/types";
 import { sanitizeWindowTitle } from "../core/activity";
 import { ActivityClassifier, loadCatalogEntries } from "../core/classification";
-import { activeBreakSession, activeFocusSession } from "../core/sessions";
+import { activeFocusSession } from "../core/sessions";
 import { buildDailySummary } from "../core/summary";
 import { inputWorkloadSummary, makeInputTimelineSnapshot } from "../core/timeline";
 import { dayBounds } from "../core/utils";
+import { makePetIntent } from "../core/pet";
 import type { PetPackRecord } from "../resources/petPack";
 import { deleteAllData, emptySnapshot, exportSnapshot, loadSnapshot, pruneSnapshotForRetention, saveSnapshot } from "../store/localStore";
 import {
   nativeActivitySample,
+  nativeDrainAgentEvents,
   nativeDataSize,
   nativeDeletePetPack,
   nativeDeliverNotification,
@@ -58,13 +60,11 @@ export interface FocusPetAppController {
   selectedTab: DashboardTab;
   setSelectedTab: (tab: DashboardTab) => void;
   activeFocus: ReturnType<typeof activeFocusSession>;
-  activeBreak: ReturnType<typeof activeBreakSession>;
   installationNotice?: InstallationSnapshot;
   actions: {
     tick: () => Promise<void>;
     startFocusSession: (taskName: string, minutes: number) => void;
     finishFocusSession: (completed?: boolean) => void;
-    toggleBreak: () => void;
     pauseReminders: (minutes?: number) => void;
     resumeReminders: () => void;
     updateSettings: (updater: (settings: AppSettings) => AppSettings) => void;
@@ -90,6 +90,7 @@ export interface FocusPetAppController {
     importPetPackFromPath: (path: string) => Promise<void>;
     deletePetPack: (packID: string) => Promise<void>;
     showPetStatusBubble: () => void;
+    testAgentCompletion: () => void;
   };
 }
 
@@ -110,7 +111,6 @@ const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
     appUsage: retained.appUsage,
     inputActivity: retained.inputActivity,
     focusSessions: retained.focusSessions,
-    breakSessions: retained.breakSessions,
     nudges: retained.nudges,
   };
   return {
@@ -125,7 +125,6 @@ const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
       retainedState.stateSegments,
       retainedState.appUsage,
       retainedState.focusSessions,
-      retainedState.breakSessions,
       retainedState.nudges,
     ),
     todayWorkload: inputWorkloadSummary(retainedState.inputActivity, bounds.start, bounds.end),
@@ -491,6 +490,40 @@ export const useFocusPetApp = (): FocusPetAppController => {
 
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return undefined;
+    let disposed = false;
+    let polling = false;
+    const pollAgentEvents = async () => {
+      if (disposed || polling) return;
+      polling = true;
+      try {
+        const events = await nativeDrainAgentEvents();
+        for (const event of events) {
+          if (disposed) return;
+          mutate((state) => runtimeActions.transientPetIntent(
+            state,
+            "taskCompleted",
+            event.message,
+            "agent",
+            12_000,
+          ));
+          void nativeDeliverNotification(event.title, event.message).catch(() => false);
+        }
+      } catch {
+        // Agent integrations are optional; polling failures must not disturb activity tracking.
+      } finally {
+        polling = false;
+      }
+    };
+    void pollAgentEvents();
+    const interval = window.setInterval(() => void pollAgentEvents(), 1500);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [mutate, ready]);
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return undefined;
     let unlisten: (() => void) | undefined;
     void listen<{ label: DesktopWidgetMoveLabel; x: number; y: number }>("focus-pet-widget-moved", (event) => {
       mutate((state) => {
@@ -505,9 +538,18 @@ export const useFocusPetApp = (): FocusPetAppController => {
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return undefined;
     let unlisten: (() => void) | undefined;
-    void listen<{ x: number; y: number }>("focus-pet-companion-moved", (event) => {
-      mutate((state) =>
-        runtimeActions.transientPetIntent(
+    void listen<{ x: number; y: number; phase?: "dragging" | "landing" }>("focus-pet-companion-moved", (event) => {
+      mutate((state) => {
+        if (event.payload.phase === "dragging") {
+          return {
+            ...state,
+            currentPetIntent: makePetIntent("dragged", "physicalInteraction", {
+              startedAt: new Date().toISOString(),
+              interruptible: false,
+            }),
+          };
+        }
+        return runtimeActions.transientPetIntent(
           runtimeActions.updateSettings(state, (settings) => ({
             ...settings,
             pet: {
@@ -518,11 +560,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
             },
           })),
           "landing",
-          "",
+          "放在这里。",
           "physicalInteraction",
-          600,
-        ),
-      );
+          1500,
+        );
+      });
     }).then((dispose) => {
       unlisten = dispose;
     });
@@ -575,7 +617,6 @@ export const useFocusPetApp = (): FocusPetAppController => {
   }, [ready, tick]);
 
   const activeFocus = activeFocusSession(bundle.state.focusSessions);
-  const activeBreak = activeBreakSession(bundle.state.breakSessions);
 
   const widgetTimelines = useMemo(() => {
     const needsCurrent = desktopWidgetSettings.currentStatusVisible;
@@ -616,6 +657,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return;
     const widgetPayload = widgetTimelines ? {
+      theme: bundle.state.settings.appearance.theme,
       currentDecision: bundle.state.currentDecision,
       summary: bundle.state.summary,
       todayWorkload: bundle.state.todayWorkload,
@@ -635,7 +677,6 @@ export const useFocusPetApp = (): FocusPetAppController => {
       statusMessage: bundle.state.statusMessage,
       latestPetBubble: bundle.state.latestPetBubble,
       activeFocus: activeFocus ? { id: activeFocus.id, taskName: activeFocus.taskName } : undefined,
-      activeBreakActive: Boolean(activeBreak),
       hasAvailablePetPacks: petPacks.length > 0,
     };
     if (desktopWidgetSettings.currentStatusVisible && widgetPayload) {
@@ -648,12 +689,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
       void emitTo(
         "widget-pet-companion",
         "focus-pet-companion-state",
-        makePetCompanionViewState(bundle.state, Boolean(activeBreak)),
+        makePetCompanionViewState(bundle.state),
       );
     }
     void emitTo("widget-menu-bar", "focus-pet-menu-bar-state", menuBarPayload);
   }, [
-    activeBreak,
     activeFocus,
     bundle,
     desktopWidgetSettings.currentStatusVisible,
@@ -677,9 +717,6 @@ export const useFocusPetApp = (): FocusPetAppController => {
       },
       finishFocusSession(completed = true) {
         mutate((state) => runtimeActions.finishFocusSession(state, completed));
-      },
-      toggleBreak() {
-        mutate(runtimeActions.toggleBreak);
       },
       pauseReminders(minutes) {
         mutate((state) => runtimeActions.pauseReminders(state, minutes));
@@ -823,6 +860,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
       showPetStatusBubble() {
         mutate((state) => runtimeActions.transientPetIntent(state));
       },
+      testAgentCompletion() {
+        const message = "Codex 已完成：Focus Pet 智能体通知测试";
+        mutate((state) => runtimeActions.transientPetIntent(state, "taskCompleted", message, "agent", 12_000));
+        void nativeDeliverNotification("任务已完成", message).catch(() => false);
+      },
     }),
     [
       bundle.state,
@@ -845,7 +887,6 @@ export const useFocusPetApp = (): FocusPetAppController => {
     selectedTab,
     setSelectedTab,
     activeFocus,
-    activeBreak,
     installationNotice,
     actions,
   };

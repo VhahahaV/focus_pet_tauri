@@ -19,13 +19,9 @@ import { buildDailySummary } from "../core/summary";
 import { decisionSnapshot, evaluateState } from "../core/stateEngine";
 import { stateEngineThresholdsFromJudgment, nudgeThresholdsFromReminder, normalizeAppSettings } from "../core/settings";
 import {
-  activeBreakSession,
   activeFocusSession,
-  finishBreakSession,
   finishFocusSession,
-  makeBreakSession,
   makeFocusSession,
-  remainingBreakSeconds,
   remainingFocusSeconds,
 } from "../core/sessions";
 import { evaluateNudge, reminderAllowsReason } from "../core/nudge";
@@ -87,7 +83,6 @@ const initialActivitySnapshot = (now: Date): ActivitySnapshot => ({
   activeCategoryDuration: 0,
   activeAppDuration: 0,
   isFocusSessionActive: false,
-  isBreakActive: false,
   isSystemSleeping: false,
   isScreenLocked: false,
   source: ["frontmostApplication", "windowTitle", "idleTime", "appSwitching"],
@@ -112,7 +107,6 @@ export const runtimeFromSnapshot = (
         normalized.stateSegments,
         normalized.appUsage,
         normalized.focusSessions,
-        normalized.breakSessions,
         normalized.nudges,
       ),
       todayWorkload: inputWorkloadSummary(normalized.inputActivity, bounds.start, bounds.end),
@@ -157,11 +151,9 @@ const applyStability = (
 ) => {
   const applyImmediately =
     decision.state === "away" ||
-    decision.state === "break" ||
     decision.reason.includes("systemSleep") ||
     decision.reason.includes("screenLocked") ||
-    decision.reason.includes("longInputIdleAway") ||
-    decision.reason.includes("activeBreak");
+    decision.reason.includes("longInputIdleAway");
   let candidateSince = memory.candidateSince;
   let candidateState = memory.candidateState;
   if (candidateState !== decision.state) {
@@ -211,7 +203,6 @@ export const advanceRuntime = (
   const runtime: AppRuntimeState = {
     ...bundle.state,
     focusSessions: [...bundle.state.focusSessions],
-    breakSessions: [...bundle.state.breakSessions],
     nudges: [...bundle.state.nudges],
   };
   const memory: RuntimeMemory = {
@@ -235,7 +226,6 @@ export const advanceRuntime = (
   const backfilledAwaySeconds = backfillsAwayGap ? Math.max(0, rawTickSeconds - currentTickSeconds) : 0;
   const inferredSystemSleepGap = backfilledAwaySeconds > 0 && sleepLikeGap && !nativeSample.isScreenLocked;
   const activeFocus = activeFocusSession(runtime.focusSessions);
-  const activeBreak = activeBreakSession(runtime.breakSessions);
   const classifier = new ActivityClassifier(runtime.classificationRules, catalogEntries);
   const category = classifier.classify(nativeSample.appName, nativeSample.bundleID, nativeSample.windowTitle);
   const categoryKey = `${category}`;
@@ -257,7 +247,6 @@ export const advanceRuntime = (
     activeCategoryDuration: secondsBetween(memory.activeCategorySince, now),
     activeAppDuration: secondsBetween(memory.activeAppSince, now),
     isFocusSessionActive: Boolean(activeFocus),
-    isBreakActive: Boolean(activeBreak),
     privacy: runtime.settings.privacy,
     switchCountLast5Min: Math.max(nativeSample.switchCount, runtime.inputActivity.slice(-5).reduce((total, bucket) => total + bucket.switchCount, 0)),
     switchCountLast15Min: Math.max(nativeSample.switchCount, runtime.inputActivity.slice(-15).reduce((total, bucket) => total + bucket.switchCount, 0)),
@@ -349,16 +338,8 @@ export const advanceRuntime = (
     if (!updated.mainAppName && activitySnapshot.category === "work") updated.mainAppName = activitySnapshot.appName;
     if (remainingFocusSeconds(updated, now) <= 0) {
       runtime.focusSessions[index] = finishFocusSession(updated, "completed", now, updated.mainAppName);
-      if (updated.autoStartBreak) runtime.breakSessions.push(makeBreakSession(updated.breakDurationSeconds / 60, "afterFocusSession", now));
     } else {
       runtime.focusSessions[index] = updated;
-    }
-  }
-
-  if (activeBreak) {
-    const index = runtime.breakSessions.findIndex((session) => session.id === activeBreak.id);
-    if (remainingBreakSeconds(activeBreak, now) <= 0) {
-      runtime.breakSessions[index] = finishBreakSession(activeBreak, true, now);
     }
   }
 
@@ -402,7 +383,7 @@ export const advanceRuntime = (
   }
 
   const bounds = dayBounds(now);
-  runtime.summary = buildDailySummary(now, runtime.stateSegments, runtime.appUsage, runtime.focusSessions, runtime.breakSessions, runtime.nudges);
+  runtime.summary = buildDailySummary(now, runtime.stateSegments, runtime.appUsage, runtime.focusSessions, runtime.nudges);
   runtime.todayWorkload = inputWorkloadSummary(runtime.inputActivity, bounds.start, bounds.end);
   runtime.recognitionDiagnostic = {
     sampledAt: now.toISOString(),
@@ -426,7 +407,6 @@ export const runtimeSnapshot = (state: AppRuntimeState): LocalStoreSnapshot => (
   appUsage: state.appUsage,
   inputActivity: state.inputActivity,
   focusSessions: state.focusSessions,
-  breakSessions: state.breakSessions,
   nudges: state.nudges,
 });
 
@@ -437,7 +417,7 @@ export const runtimeActions = {
       ...state,
       focusSessions: [
         ...state.focusSessions,
-        makeFocusSession(taskName, minutes, state.settings.autoStartBreak, state.settings.breakMinutes),
+        makeFocusSession(taskName, minutes),
       ],
       statusMessage: "专注会话已开始。",
     };
@@ -452,30 +432,6 @@ export const runtimeActions = {
       ),
       statusMessage: completed ? "专注会话已完成。" : "专注会话已取消。",
     };
-  },
-  startBreak(state: AppRuntimeState, minutes: number): AppRuntimeState {
-    if (activeBreakSession(state.breakSessions)) return state;
-    return {
-      ...state,
-      breakSessions: [...state.breakSessions, makeBreakSession(minutes)],
-      statusMessage: "休息已开始。",
-    };
-  },
-  endBreak(state: AppRuntimeState): AppRuntimeState {
-    const active = activeBreakSession(state.breakSessions);
-    if (!active) return state;
-    return {
-      ...state,
-      breakSessions: state.breakSessions.map((session) =>
-        session.id === active.id ? finishBreakSession(session, false) : session,
-      ),
-      statusMessage: "休息已结束。",
-    };
-  },
-  toggleBreak(state: AppRuntimeState): AppRuntimeState {
-    return activeBreakSession(state.breakSessions)
-      ? runtimeActions.endBreak(state)
-      : runtimeActions.startBreak(state, state.settings.breakMinutes);
   },
   pauseReminders(state: AppRuntimeState, minutes?: number): AppRuntimeState {
     const pauseMinutes = minutes ?? state.settings.reminder.pauseMinutes;
@@ -585,7 +541,6 @@ export const runtimeActions = {
       appUsage: [],
       inputActivity: [],
       focusSessions: [],
-      breakSessions: [],
       nudges: [],
       statusMessage: "本地统计数据已清空。",
     };

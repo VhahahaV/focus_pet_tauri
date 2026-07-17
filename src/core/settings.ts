@@ -1,16 +1,26 @@
 import type {
   AppSettings,
+  AppearanceSettings,
   DataRetentionSettings,
   DesktopWidgetSettings,
   JudgmentSettings,
   LoggingSettings,
   PetSettings,
   ReminderSettings,
+  SystemMonitorModule,
+  SystemMonitorSettings,
   WindowTitlePrivacy,
 } from "./types";
 import { clamp } from "./utils";
+import { defaultAppTheme, normalizeAppTheme } from "./theme";
 
 export type JudgmentSensitivityPreset = "relaxed" | "balanced" | "strict" | "custom";
+
+export const defaultAppearanceSettings = (): AppearanceSettings => ({ theme: defaultAppTheme });
+
+export const normalizeAppearanceSettings = (settings: Partial<AppearanceSettings> = {}): AppearanceSettings => ({
+  theme: normalizeAppTheme(settings.theme),
+});
 
 export const defaultPrivacy = (): WindowTitlePrivacy => ({
   storeRawTitle: false,
@@ -35,12 +45,9 @@ export const defaultReminderSettings = (): ReminderSettings => ({
   pauseUntil: undefined,
   pauseMinutes: 30,
   enableDistractedNudges: true,
-  enableFocusRestNudges: true,
   enableWelcomeBackNudges: false,
   lightDistractedMinutes: 5,
   strongDistractedMinutes: 12,
-  longFocusMinutes: 45,
-  veryLongFocusMinutes: 90,
   cooldownMinutes: 10,
 });
 
@@ -48,16 +55,34 @@ export const normalizeReminderSettings = (settings: Partial<ReminderSettings> = 
   const base = { ...defaultReminderSettings(), ...settings };
   const lightDistractedMinutes = clamp(base.lightDistractedMinutes, 1, 60);
   const strongDistractedMinutes = clamp(base.strongDistractedMinutes, lightDistractedMinutes, 120);
-  const longFocusMinutes = clamp(base.longFocusMinutes, 5, 180);
-  const veryLongFocusMinutes = clamp(base.veryLongFocusMinutes, longFocusMinutes, 240);
   return {
     ...base,
     pauseMinutes: clamp(base.pauseMinutes, 5, 240),
     lightDistractedMinutes,
     strongDistractedMinutes,
-    longFocusMinutes,
-    veryLongFocusMinutes,
     cooldownMinutes: clamp(base.cooldownMinutes, 1, 60),
+  };
+};
+
+const systemMonitorModules: SystemMonitorModule[] = ["cpu", "cores", "memory", "disk", "gpu", "thermal"];
+
+export const defaultSystemMonitorSettings = (): SystemMonitorSettings => ({
+  refreshSeconds: 2,
+  modules: ["cpu", "memory", "disk", "gpu"],
+});
+
+export const normalizeSystemMonitorSettings = (
+  settings: Partial<SystemMonitorSettings> = {},
+): SystemMonitorSettings => {
+  const requested = settings.modules ?? defaultSystemMonitorSettings().modules;
+  const modules = [...new Set(requested)].filter((module): module is SystemMonitorModule =>
+    systemMonitorModules.includes(module as SystemMonitorModule),
+  );
+  return {
+    refreshSeconds: [1, 2, 5, 10].reduce((best, current) =>
+      Math.abs(current - (settings.refreshSeconds ?? 2)) < Math.abs(best - (settings.refreshSeconds ?? 2)) ? current : best,
+    ),
+    modules: modules.length > 0 ? modules : defaultSystemMonitorSettings().modules,
   };
 };
 
@@ -208,6 +233,7 @@ export const defaultAppSettings = (): AppSettings => {
   const desktopWidget = defaultDesktopWidgetSettings();
   return {
     hasCompletedOnboarding: false,
+    appearance: defaultAppearanceSettings(),
     privacy: defaultPrivacy(),
     reminder: defaultReminderSettings(),
     retention: defaultRetentionSettings(),
@@ -215,10 +241,9 @@ export const defaultAppSettings = (): AppSettings => {
     judgment: defaultJudgmentSettings(),
     pet: defaultPetSettings(),
     desktopWidget,
+    systemMonitor: defaultSystemMonitorSettings(),
     desktopWidgetVisible: desktopWidget.currentStatusVisible || desktopWidget.recentRhythmVisible,
     focusTargetMinutes: 25,
-    breakMinutes: 5,
-    autoStartBreak: true,
   };
 };
 
@@ -231,6 +256,7 @@ export const normalizeAppSettings = (settings: Partial<AppSettings> = {}): AppSe
   return {
     ...defaultAppSettings(),
     ...settings,
+    appearance: normalizeAppearanceSettings(settings.appearance),
     privacy: normalizePrivacy(settings.privacy),
     reminder: normalizeReminderSettings(settings.reminder),
     retention: normalizeRetentionSettings(settings.retention),
@@ -238,18 +264,15 @@ export const normalizeAppSettings = (settings: Partial<AppSettings> = {}): AppSe
     judgment: normalizeJudgmentSettings(settings.judgment),
     pet: normalizePetSettings(settings.pet),
     desktopWidget,
+    systemMonitor: normalizeSystemMonitorSettings(settings.systemMonitor),
     desktopWidgetVisible: desktopWidget.currentStatusVisible || desktopWidget.recentRhythmVisible,
     focusTargetMinutes: Math.max(1, settings.focusTargetMinutes ?? 25),
-    breakMinutes: Math.max(1, settings.breakMinutes ?? 5),
-    autoStartBreak: settings.autoStartBreak ?? true,
   };
 };
 
 export const nudgeThresholdsFromReminder = (settings: ReminderSettings) => ({
   lightDistractedSeconds: settings.lightDistractedMinutes * 60,
   strongDistractedSeconds: settings.strongDistractedMinutes * 60,
-  longFocusSeconds: settings.longFocusMinutes * 60,
-  veryLongFocusSeconds: settings.veryLongFocusMinutes * 60,
   welcomeBackAwaySeconds: 30 * 60,
   cooldownSeconds: settings.cooldownMinutes * 60,
 });

@@ -11,7 +11,6 @@ import type {
 export const focusStateLabels: Record<FocusState, { title: string; symbol: string; short: string }> = {
   focus: { title: "专注", symbol: "checkmark.circle.fill", short: "稳" },
   distracted: { title: "走神", symbol: "eye.trianglebadge.exclamationmark", short: "散" },
-  break: { title: "休息", symbol: "cup.and.saucer.fill", short: "歇" },
   away: { title: "暂离", symbol: "moon.zzz.fill", short: "离" },
 };
 
@@ -31,22 +30,17 @@ export const ruleMatchKindLabels: Record<RuleMatchKind, string> = {
 export const nudgeReasonLabels: Record<NudgeReason, string> = {
   distractedOverThreshold: "注意力提醒",
   distractedStrong: "需要收束一下",
-  longFocusRest: "建议休息",
-  veryLongFocusRest: "该休息了",
   focusSessionCompleted: "专注完成",
-  breakEnding: "休息结束",
   welcomeBack: "回到电脑",
   frequentSwitching: "切换过多",
 };
 
 export const petIntentLabels: Record<PetIntentKind, string> = {
   quietCompanion: "安静陪伴",
-  focusRestHint: "专注休息提示",
   distractedObserve: "走神观察",
   nudgeGentle: "温和提醒",
   nudgeStrong: "强提醒",
-  breakCompanion: "休息陪伴",
-  breakEnding: "休息结束",
+  taskCompleted: "任务完成",
   sleep: "暂离睡觉",
   welcomeBack: "欢迎回来",
   moveLeft: "向左移动",
@@ -73,7 +67,6 @@ export const stateReasonLabels: Record<StateReason, string> = {
   screenLocked: "屏幕锁定",
   longInputIdleAway: "输入长时间空闲",
   inputIdleDistracted: "输入空闲",
-  activeBreak: "休息中",
   activeFocusSession: "专注会话",
   workCategory: "工作分类",
   entertainmentStable: "娱乐内容持续",

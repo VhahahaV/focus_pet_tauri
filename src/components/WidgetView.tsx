@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { formatCount, formatPercentage } from "../core/formatters";
 import type {
   ActivitySnapshot,
+  AppThemeID,
   DailySummary,
   FocusState,
   InputTimelineSnapshot,
@@ -12,6 +13,7 @@ import type {
   StateDecision,
 } from "../core/types";
 import { SegmentedControl } from "./ui";
+import { defaultAppTheme, useDocumentTheme } from "../themes";
 
 type WidgetMode = "currentStatus" | "recentRhythm";
 type WidgetMoveLabel = "currentStatus" | "recentRhythm";
@@ -20,6 +22,7 @@ type RhythmWindowHours = 4 | 8 | 12;
 const rhythmWindowHours = [4, 8, 12] as const;
 
 interface WidgetPayload {
+  theme: AppThemeID;
   currentDecision: StateDecision;
   summary: DailySummary;
   todayWorkload: InputWorkloadSummary;
@@ -58,8 +61,6 @@ const stateHeadline = (state: FocusState): string => {
       return "专注中";
     case "distracted":
       return "走神中";
-    case "break":
-      return "休息中";
     case "away":
       return "暂离中";
   }
@@ -71,8 +72,6 @@ const stateDuration = (summary: DailySummary, state: FocusState): number => {
       return summary.focusSeconds;
     case "distracted":
       return summary.distractedSeconds;
-    case "break":
-      return summary.breakSeconds;
     case "away":
       return summary.awaySeconds;
   }
@@ -89,13 +88,13 @@ const fallbackPayload = (): WidgetPayload => {
     stateRanges: [
       { state: "focus", startProgress: 0, endProgress: 0.62 },
       { state: "distracted", startProgress: 0.62, endProgress: 0.72 },
-      { state: "break", startProgress: 0.72, endProgress: 0.86 },
+      { state: "away", startProgress: 0.72, endProgress: 0.86 },
       { state: "focus", startProgress: 0.86, endProgress: 1 },
     ],
     appSegments: [],
     inputBars: [],
     switchMarkers: [],
-    stateDurations: { focus: 96 * 60, distracted: 14 * 60, break: 18 * 60, away: 0 },
+    stateDurations: { focus: 96 * 60, distracted: 14 * 60, away: 18 * 60 },
     keyboardCount: 1240,
     pointerCount: 386,
     switchCount: 11,
@@ -104,6 +103,7 @@ const fallbackPayload = (): WidgetPayload => {
     maxPointerCount: 1,
   };
   return {
+    theme: defaultAppTheme,
     currentDecision: {
       timestamp: now,
       state: "focus",
@@ -116,7 +116,6 @@ const fallbackPayload = (): WidgetPayload => {
       date: now.slice(0, 10),
       focusSeconds: 0,
       distractedSeconds: 0,
-      breakSeconds: 0,
       awaySeconds: 0,
       nudgeCount: 0,
       longestFocusSeconds: 0,
@@ -146,7 +145,6 @@ const fallbackPayload = (): WidgetPayload => {
       activeCategoryDuration: 0,
       activeAppDuration: 0,
       isFocusSessionActive: false,
-      isBreakActive: false,
       isSystemSleeping: false,
       isScreenLocked: false,
       source: ["frontmostApplication"],
@@ -161,6 +159,7 @@ const fallbackPayload = (): WidgetPayload => {
 
 export const WidgetView = ({ mode }: { mode: WidgetMode }) => {
   const [payload, setPayload] = useState<WidgetPayload>(() => fallbackPayload());
+  useDocumentTheme(payload.theme);
   const moveLabel: WidgetMoveLabel = mode === "recentRhythm" ? "recentRhythm" : "currentStatus";
 
   useEffect(() => {
@@ -203,7 +202,7 @@ const CurrentStatusWidget = ({ payload, onDragStart }: { payload: WidgetPayload;
   const durationChips: Array<{ state: FocusState; title: string }> = [
     { state: "focus", title: "专" },
     { state: "distracted", title: "走" },
-    { state: "break", title: "休" },
+    { state: "away", title: "离" },
   ];
   return (
     <main className={`widget-card widget-status state-${currentState} movement-${payload.movementMode ?? "free"}`} onPointerDown={onDragStart}>
@@ -241,17 +240,15 @@ const RecentRhythmWidget = ({ payload, onDragStart }: { payload: WidgetPayload; 
   const stateDurations = rhythm.stateDurations;
   const focusSeconds = stateDurations.focus ?? 0;
   const distractedSeconds = stateDurations.distracted ?? 0;
-  const breakSeconds = stateDurations.break ?? 0;
-  const activeSeconds = focusSeconds + distractedSeconds + breakSeconds;
+  const activeSeconds = focusSeconds + distractedSeconds;
   const focusRatio = activeSeconds > 0 ? focusSeconds / activeSeconds : 0;
   const caption = focusRatio >= 0.7 ? "稳定" : focusRatio >= 0.5 ? "有波动" : "偏离较多";
   const metrics = useMemo(
     () => [
       { state: "focus" as const, title: "专注", seconds: focusSeconds },
       { state: "distracted" as const, title: "走神", seconds: distractedSeconds },
-      { state: "break" as const, title: "休息", seconds: breakSeconds },
     ],
-    [breakSeconds, distractedSeconds, focusSeconds],
+    [distractedSeconds, focusSeconds],
   );
   const timelineRanges = useMemo(
     () => {
@@ -270,7 +267,6 @@ const RecentRhythmWidget = ({ payload, onDragStart }: { payload: WidgetPayload; 
   );
   const focusDeg = focusRatio * 360;
   const distractedDeg = (activeSeconds > 0 ? distractedSeconds / activeSeconds : 0) * 360;
-  const breakDeg = (activeSeconds > 0 ? breakSeconds / activeSeconds : 0) * 360;
 
   return (
     <main className={`widget-card widget-rhythm movement-${payload.movementMode ?? "free"}`} onPointerDown={onDragStart}>
@@ -286,7 +282,6 @@ const RecentRhythmWidget = ({ payload, onDragStart }: { payload: WidgetPayload; 
           style={{
             "--focus-end": `${focusDeg}deg`,
             "--distracted-end": `${focusDeg + distractedDeg}deg`,
-            "--break-end": `${focusDeg + distractedDeg + breakDeg}deg`,
           } as CSSProperties}
           aria-label={`专注占比 ${formatPercentage(focusRatio)}`}
         >

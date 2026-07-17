@@ -19,9 +19,12 @@ import "./styles/history.css";
 import "./styles/pet.css";
 import "./styles/settings.css";
 import "./styles/widgets.css";
+import "./styles/themes.css";
+import { useDocumentTheme } from "./themes";
 
 const MainApp = () => {
   const app = useFocusPetApp();
+  useDocumentTheme(app.bundle.state.settings.appearance.theme);
   const page = {
     today: <TodayTab />,
     sessions: <SessionsTab />,

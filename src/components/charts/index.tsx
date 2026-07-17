@@ -98,27 +98,41 @@ export interface HeatmapProps {
   label: string;
   className?: string;
   columnLabels?: string[];
+  rowLabels?: string[];
   onHover?: (cell: HeatmapCell, event: PointerEvent<SVGRectElement>) => void;
 }
 
-export const Heatmap = ({ cells, columns, rows, label, className, columnLabels, onHover }: HeatmapProps) => {
+export const Heatmap = ({ cells, columns, rows, label, className, columnLabels, rowLabels, onHover }: HeatmapProps) => {
   const size = 18;
   const gap = 5;
   const labelHeight = columnLabels?.length ? 22 : 0;
-  const width = Math.max(size, columns * (size + gap) - gap);
+  const rowLabelWidth = rowLabels?.length ? 18 : 0;
+  const width = rowLabelWidth + Math.max(size, columns * (size + gap) - gap);
   const height = labelHeight + Math.max(size, rows * (size + gap) - gap);
   return (
     <ChartFrame className={`fp-heatmap ${className ?? ""}`} label={label} viewBox={`0 0 ${width} ${height}`}>
       {columnLabels?.map((columnLabel, column) => (
-        <text className="heatmap-column-label" key={`${columnLabel}-${column}`} x={column * (size + gap) + size / 2} y="12" textAnchor="middle">
+        <text className="heatmap-column-label" key={`${columnLabel}-${column}`} x={rowLabelWidth + column * (size + gap) + size / 2} y="12" textAnchor="middle">
           {columnLabel}
+        </text>
+      ))}
+      {rowLabels?.slice(0, rows).map((rowLabel, row) => (
+        <text
+          className="heatmap-row-label"
+          key={`${rowLabel}-${row}`}
+          x={rowLabelWidth - 5}
+          y={labelHeight + row * (size + gap) + size / 2}
+          dominantBaseline="middle"
+          textAnchor="end"
+        >
+          {rowLabel}
         </text>
       ))}
       {cells.map((cell) => (
         <rect
           className={`heatmap-cell ${cell.intensity > 0 ? "has-activity" : ""} ${cell.disabled ? "is-empty" : ""}`}
           key={cell.id}
-          x={cell.column * (size + gap)}
+          x={rowLabelWidth + cell.column * (size + gap)}
           y={labelHeight + cell.row * (size + gap)}
           width={size}
           height={size}
@@ -216,7 +230,7 @@ export interface ProgressRingProps extends SVGAttributes<SVGSVGElement> {
   children?: ReactNode;
 }
 
-export const ProgressRing = ({ value, label, status = "rest", children, className, ...props }: ProgressRingProps) => {
+export const ProgressRing = ({ value, label, status = "success", children, className, ...props }: ProgressRingProps) => {
   const progress = Math.max(0, Math.min(1, value));
   const circumference = 2 * Math.PI * 20;
   return (

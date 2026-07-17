@@ -142,7 +142,7 @@ const printNativeChecklist = () => {
 2. Open Settings > Permissions, click Refresh Permissions, then click Test Notification and confirm a system notification is shown.
 3. Open Settings > Recognition, click Refresh Diagnostics, and confirm the foreground app/status updates for this OS.
 4. Enable both desktop status cards and the pet companion; confirm widget windows appear, move freely when enabled, and restore position.
-5. Use the tray/menu to open Today, Pet, Settings, toggle widgets, toggle pet, pause reminders, toggle break, and quit.
+5. Use the tray/menu to open Today, Pet, Settings, toggle widgets, toggle pet, pause reminders, and quit.
 6. Import a pet pack from a folder, pet.json, single zip, and multi-pack zip; confirm preview, frame playback, audio, hide/delete, and reimport restore.
 7. Start and finish a focus session; confirm local persistence after restart, export/delete data, and log folder/current-log actions.
 ${platformNativeChecklist.map((item, index) => `${index + 8}. ${item}`).join("\n")}

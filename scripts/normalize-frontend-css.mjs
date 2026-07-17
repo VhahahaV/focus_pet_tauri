@@ -30,7 +30,7 @@ const classifiedModule = (selector) => {
   if (/(?:settings|recognition|permission|rule-form|session-input|diagnostic|command-button|control-panel)/.test(selector)) return "settings";
   if (/(?:swift-pet|pet-settings|pet-pack|pet-import|pet-placement|pet-slider|pet-toggle|pet-validation|pet-section|random-action)/.test(selector)) return "pet";
   if (/(?:history|activity-|heatmap|sessions|attention)/.test(selector)) return "history";
-  if (/(?:swift-today|today-|timeline|focus-card|focus-duration|break-|window-picker|minute-selector|rhythm|app-track|app-segment|input-bars|state-track|state-block)/.test(selector)) return "today";
+  if (/(?:swift-today|today-|timeline|focus-card|focus-duration|window-picker|rhythm|app-track|app-segment|input-bars|state-track|state-block|system-monitor)/.test(selector)) return "today";
   if (/(?:sidebar|workspace|brand-mark|nav-|toast|install|app-shell|main-shell|floating-refresh|dock)/.test(selector)) return "shell";
   if (/^\.fp-/.test(selector)) return "primitives";
   if (/^(?:\*|html|body|#root|button|input|select|a|::selection|:root)/.test(selector)) return "base";

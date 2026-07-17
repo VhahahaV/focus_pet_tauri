@@ -10,7 +10,6 @@ export type NativeMenuAction =
   | "toggle-pet"
   | "pause-reminders"
   | "resume-reminders"
-  | "toggle-break"
   | "finish-focus";
 
 export const nativeMenuTab = (action: NativeMenuAction): DashboardTab | undefined => {
@@ -50,8 +49,6 @@ export const applyNativeMenuAction = (
       return runtimeActions.pauseReminders(state, state.settings.reminder.pauseMinutes);
     case "resume-reminders":
       return runtimeActions.resumeReminders(state);
-    case "toggle-break":
-      return runtimeActions.toggleBreak(state);
     case "finish-focus":
       return runtimeActions.finishFocusSession(state, true);
     default:

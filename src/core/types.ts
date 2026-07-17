@@ -1,4 +1,4 @@
-export type FocusState = "focus" | "distracted" | "break" | "away";
+export type FocusState = "focus" | "distracted" | "away";
 
 export type ActivityCategory = "work" | "entertainment" | "ignore" | "neutral";
 
@@ -8,7 +8,6 @@ export type ActivitySignalSource =
   | "idleTime"
   | "appSwitching"
   | "focusSession"
-  | "breakSession"
   | "systemSleep"
   | "screenLock";
 
@@ -17,7 +16,6 @@ export type StateReason =
   | "screenLocked"
   | "longInputIdleAway"
   | "inputIdleDistracted"
-  | "activeBreak"
   | "activeFocusSession"
   | "workCategory"
   | "entertainmentStable"
@@ -77,7 +75,6 @@ export interface ActivitySnapshot {
   activeCategoryDuration: number;
   activeAppDuration: number;
   isFocusSessionActive: boolean;
-  isBreakActive: boolean;
   isSystemSleeping: boolean;
   isScreenLocked: boolean;
   source: ActivitySignalSource[];
@@ -126,19 +123,6 @@ export interface FocusSession {
   mainAppName?: string;
   completed: boolean;
   status: FocusSessionStatus;
-  autoStartBreak: boolean;
-  breakDurationSeconds: number;
-}
-
-export type BreakSource = "manual" | "afterFocusSession" | "longFocusSuggestion";
-
-export interface BreakSession {
-  id: string;
-  start: string;
-  targetDurationSeconds: number;
-  end?: string;
-  source: BreakSource;
-  completed: boolean;
 }
 
 export type PetAction =
@@ -153,8 +137,6 @@ export type PetAction =
   | "distractedLook"
   | "nudgeGentle"
   | "nudgeStrong"
-  | "breakRelax"
-  | "breakEnd"
   | "welcomeBack"
   | "dragged"
   | "landing"
@@ -162,16 +144,14 @@ export type PetAction =
   | "screenTransfer"
   | "mouseSummon";
 
-export type PetIntentSource = "state" | "nudge" | "interaction" | "physicalInteraction";
+export type PetIntentSource = "state" | "nudge" | "agent" | "interaction" | "physicalInteraction";
 
 export type PetIntentKind =
   | "quietCompanion"
-  | "focusRestHint"
   | "distractedObserve"
   | "nudgeGentle"
   | "nudgeStrong"
-  | "breakCompanion"
-  | "breakEnding"
+  | "taskCompleted"
   | "sleep"
   | "welcomeBack"
   | "moveLeft"
@@ -197,10 +177,7 @@ export interface PetIntent {
 export type NudgeReason =
   | "distractedOverThreshold"
   | "distractedStrong"
-  | "longFocusRest"
-  | "veryLongFocusRest"
   | "focusSessionCompleted"
-  | "breakEnding"
   | "welcomeBack"
   | "frequentSwitching";
 
@@ -220,8 +197,6 @@ export interface NudgeEvent {
 export interface NudgePolicyThresholds {
   lightDistractedSeconds: number;
   strongDistractedSeconds: number;
-  longFocusSeconds: number;
-  veryLongFocusSeconds: number;
   welcomeBackAwaySeconds: number;
   cooldownSeconds: number;
 }
@@ -236,13 +211,17 @@ export interface ReminderSettings {
   pauseUntil?: string;
   pauseMinutes: number;
   enableDistractedNudges: boolean;
-  enableFocusRestNudges: boolean;
   enableWelcomeBackNudges: boolean;
   lightDistractedMinutes: number;
   strongDistractedMinutes: number;
-  longFocusMinutes: number;
-  veryLongFocusMinutes: number;
   cooldownMinutes: number;
+}
+
+export type SystemMonitorModule = "cpu" | "cores" | "memory" | "disk" | "gpu" | "thermal";
+
+export interface SystemMonitorSettings {
+  refreshSeconds: number;
+  modules: SystemMonitorModule[];
 }
 
 export interface DataRetentionSettings {
@@ -298,8 +277,15 @@ export interface DesktopWidgetSettings {
   movementMode: DesktopWidgetMovementMode;
 }
 
+export type AppThemeID = "neobrutalism" | "mid-century-modern" | "constructivism";
+
+export interface AppearanceSettings {
+  theme: AppThemeID;
+}
+
 export interface AppSettings {
   hasCompletedOnboarding: boolean;
+  appearance: AppearanceSettings;
   privacy: WindowTitlePrivacy;
   reminder: ReminderSettings;
   retention: DataRetentionSettings;
@@ -307,10 +293,9 @@ export interface AppSettings {
   judgment: JudgmentSettings;
   pet: PetSettings;
   desktopWidget: DesktopWidgetSettings;
+  systemMonitor: SystemMonitorSettings;
   desktopWidgetVisible: boolean;
   focusTargetMinutes: number;
-  breakMinutes: number;
-  autoStartBreak: boolean;
 }
 
 export interface StateSegment {
@@ -355,7 +340,6 @@ export interface InputWorkloadSummary {
 export interface WorkTimelineBreakdown {
   focusSeconds: number;
   distractedSeconds: number;
-  breakSeconds: number;
   awaySeconds: number;
 }
 
@@ -363,7 +347,6 @@ export interface DailySummary {
   date: string;
   focusSeconds: number;
   distractedSeconds: number;
-  breakSeconds: number;
   awaySeconds: number;
   longestFocusSeconds: number;
   focusSessionCount: number;
@@ -448,11 +431,9 @@ export interface ActivityHistorySnapshot {
   dayCount: number;
   focusSeconds: number;
   distractedSeconds: number;
-  breakSeconds: number;
   awaySeconds: number;
   averageFocusSeconds: number;
   averageDistractedSeconds: number;
-  averageBreakSeconds: number;
   averageAwaySeconds: number;
   appActiveSeconds: number;
   averageAppActiveSeconds: number;
@@ -468,7 +449,6 @@ export interface AttentionDayBucket {
   date: string;
   focusSeconds: number;
   distractedSeconds: number;
-  breakSeconds: number;
   awaySeconds: number;
 }
 
@@ -483,7 +463,6 @@ export interface AttentionMonthCalendar {
   days: Array<AttentionDayBucket | null>;
   focusSeconds: number;
   distractedSeconds: number;
-  breakSeconds: number;
   awaySeconds: number;
 }
 
@@ -494,7 +473,6 @@ export interface AttentionHistorySnapshot {
   months: AttentionMonthCalendar[];
   focusSeconds: number;
   distractedSeconds: number;
-  breakSeconds: number;
   awaySeconds: number;
 }
 
@@ -505,8 +483,55 @@ export interface LocalStoreSnapshot {
   appUsage: AppUsageSegment[];
   inputActivity: InputActivityBucket[];
   focusSessions: FocusSession[];
-  breakSessions: BreakSession[];
   nudges: NudgeEvent[];
+}
+
+export interface SystemMonitorCoreSample {
+  name: string;
+  usage: number;
+  frequencyMHz: number;
+}
+
+export interface SystemMonitorDiskSample {
+  name: string;
+  mountPoint: string;
+  totalBytes: number;
+  availableBytes: number;
+  usage: number;
+}
+
+export interface SystemMonitorThermalSample {
+  label: string;
+  celsius: number;
+}
+
+export interface SystemMonitorFanSample {
+  label: string;
+  rpm: number;
+}
+
+export interface SystemMetricsSample {
+  sampledAt: string;
+  cpuUsage: number;
+  cpuName: string;
+  cores: SystemMonitorCoreSample[];
+  memoryTotalBytes: number;
+  memoryUsedBytes: number;
+  memoryUsage: number;
+  disks: SystemMonitorDiskSample[];
+  gpuName?: string;
+  gpuUsage?: number;
+  temperatures: SystemMonitorThermalSample[];
+  fans: SystemMonitorFanSample[];
+}
+
+export interface AgentCompletionEvent {
+  id: string;
+  provider: string;
+  status: "completed" | "failed";
+  title: string;
+  message: string;
+  occurredAt: string;
 }
 
 export interface NativeActivitySample {
@@ -565,6 +590,6 @@ export interface AppRuntimeState extends LocalStoreSnapshot {
   dataSizeBytes: number;
 }
 
-export const focusStates: FocusState[] = ["focus", "distracted", "break", "away"];
+export const focusStates: FocusState[] = ["focus", "distracted", "away"];
 
 export const userFacingCategories: ActivityCategory[] = ["work", "entertainment", "ignore"];

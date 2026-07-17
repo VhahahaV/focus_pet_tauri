@@ -23,7 +23,7 @@
 
 .fp-progress-ring .track{stroke:var(--chart-neutral-track)}
 
-.fp-progress-ring .value{stroke:var(--status-primary,var(--rest-500));stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:var(--ring-offset,0);transition:stroke-dashoffset var(--duration-module) var(--ease-out)}
+.fp-progress-ring .value{stroke:var(--status-primary,var(--success-500));stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:var(--ring-offset,0);transition:stroke-dashoffset var(--duration-module) var(--ease-out)}
 
 .fp-status-timeline{width:100%;display:block}
 
@@ -35,7 +35,6 @@
 
 .fp-status-timeline .is-distracted{fill:var(--distracted-500)}
 
-.fp-status-timeline .is-rest{fill:var(--rest-500)}
 
 .fp-status-timeline .is-away{fill:var(--away-500)}
 

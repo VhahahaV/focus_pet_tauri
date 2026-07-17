@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ActivityClassifier } from "../core/classification";
 import { sanitizeWindowTitle } from "../core/activity";
 import { evaluateState } from "../core/stateEngine";
-import { finishBreakSession, finishFocusSession, makeBreakSession, makeFocusSession, remainingFocusSeconds } from "../core/sessions";
+import { finishFocusSession, makeFocusSession, remainingFocusSeconds } from "../core/sessions";
 import { evaluateNudge } from "../core/nudge";
 import { makeActivityHistorySnapshot, makeAttentionHistorySnapshot, recordInputActivity, recordStateSegment } from "../core/timeline";
 import { buildDailySummary } from "../core/summary";
@@ -29,7 +29,6 @@ const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapsh
   activeCategoryDuration: 240,
   activeAppDuration: 240,
   isFocusSessionActive: false,
-  isBreakActive: false,
   isSystemSleeping: false,
   isScreenLocked: false,
   source: ["frontmostApplication"],
@@ -60,8 +59,7 @@ describe("Focus Pet migrated core", () => {
     expect(sanitized.titleDisplay).toContain("•");
   });
 
-  it("evaluates the four-state priority rules", () => {
-    expect(evaluateState(baseSnapshot({ isBreakActive: true }), "focus").state).toBe("break");
+  it("evaluates the three-state priority rules", () => {
     expect(evaluateState(baseSnapshot({ idleSeconds: 800 }), "focus").state).toBe("away");
     expect(evaluateState(baseSnapshot({ idleSeconds: 220 }), "focus").state).toBe("distracted");
     expect(evaluateState(baseSnapshot({ category: "work" }), "distracted").state).toBe("focus");
@@ -84,7 +82,7 @@ describe("Focus Pet migrated core", () => {
       stableDuration: 10,
     };
     const segments = recordStateSegment(decision, baseSnapshot({ timestamp: decision.timestamp }), [], 10);
-    const summary = buildDailySummary(new Date("2026-07-07T12:00:00.000Z"), segments, [], [], [], []);
+    const summary = buildDailySummary(new Date("2026-07-07T12:00:00.000Z"), segments, [], [], []);
     expect(summary.focusSeconds).toBe(10);
     expect(summary.appUsage[0]?.appName).toBe("Cursor");
   });
@@ -215,7 +213,7 @@ describe("Focus Pet migrated core", () => {
   });
 
   it("tracks focus-session remaining time", () => {
-    const session = makeFocusSession("迁移", 25, true, 5, new Date("2026-07-07T10:00:00.000Z"));
+    const session = makeFocusSession("迁移", 25, new Date("2026-07-07T10:00:00.000Z"));
     expect(remainingFocusSeconds(session, new Date("2026-07-07T10:10:00.000Z"))).toBe(900);
   });
 
@@ -334,7 +332,6 @@ describe("Focus Pet migrated core", () => {
       appUsage: runtime.state.appUsage,
       inputActivity: runtime.state.inputActivity,
       focusSessions: runtime.state.focusSessions,
-      breakSessions: runtime.state.breakSessions,
       nudges: runtime.state.nudges,
     };
     const advanced = advanceRuntime(
@@ -362,7 +359,6 @@ describe("Focus Pet migrated core", () => {
     expect(runtime.state.appUsage).toBe(previousArrays.appUsage);
     expect(runtime.state.inputActivity).toBe(previousArrays.inputActivity);
     expect(runtime.state.focusSessions).toBe(previousArrays.focusSessions);
-    expect(runtime.state.breakSessions).toBe(previousArrays.breakSessions);
     expect(runtime.state.nudges).toBe(previousArrays.nudges);
     expect(advanced.state.stateSegments).not.toBe(previousArrays.stateSegments);
     expect(advanced.state.appUsage).not.toBe(previousArrays.appUsage);
@@ -569,8 +565,6 @@ describe("Focus Pet migrated core", () => {
     const remindersPaused = applyRequiredMenuAction("pause-reminders");
     expect(remindersPaused.settings.reminder.pauseUntil).toBeTruthy();
 
-    const breakStarted = applyRequiredMenuAction("toggle-break");
-    expect(breakStarted.breakSessions.some((session) => !session.end)).toBe(true);
   });
 
   it("persists desktop widget window positions for later native sync", () => {
@@ -740,17 +734,15 @@ describe("Focus Pet migrated core", () => {
       },
     };
     const oldFocus = finishFocusSession(
-      makeFocusSession("old", 25, true, 5, new Date(oldStart)),
+      makeFocusSession("old", 25, new Date(oldStart)),
       "completed",
       new Date(oldEnd),
     );
     const recentFocus = finishFocusSession(
-      makeFocusSession("recent", 25, true, 5, new Date(recentStart)),
+      makeFocusSession("recent", 25, new Date(recentStart)),
       "completed",
       new Date(recentEnd),
     );
-    const oldBreak = finishBreakSession(makeBreakSession(5, "manual", new Date(oldStart)), true, new Date(oldEnd));
-    const recentBreak = finishBreakSession(makeBreakSession(5, "manual", new Date(recentStart)), true, new Date(recentEnd));
     const pruned = pruneSnapshotForRetention(
       {
         settings,
@@ -768,7 +760,6 @@ describe("Focus Pet migrated core", () => {
           { start: recentStart, end: recentEnd, keyboardCount: 2, pointerCount: 2, switchCount: 2 },
         ],
         focusSessions: [oldFocus, recentFocus],
-        breakSessions: [oldBreak, recentBreak],
         nudges: [
           { id: "old-nudge", time: oldEnd, reason: "distractedOverThreshold", state: "distracted", appName: "Old", category: "entertainment", petIntent: "nudgeGentle", channel: "desktop", cooldownSeconds: 600, message: "old" },
           { id: "recent-nudge", time: recentEnd, reason: "distractedOverThreshold", state: "distracted", appName: "Recent", category: "entertainment", petIntent: "nudgeGentle", channel: "desktop", cooldownSeconds: 600, message: "recent" },
@@ -776,12 +767,11 @@ describe("Focus Pet migrated core", () => {
       },
       new Date("2026-07-08T09:00:00.000Z"),
     );
-    expect(pruned.result.totalRemoved).toBe(6);
+    expect(pruned.result.totalRemoved).toBe(5);
     expect(pruned.snapshot.stateSegments.map((segment) => segment.id)).toEqual(["recent-state"]);
     expect(pruned.snapshot.appUsage.map((segment) => segment.id)).toEqual(["recent-usage"]);
     expect(pruned.snapshot.inputActivity[0].keyboardCount).toBe(2);
     expect(pruned.snapshot.focusSessions.map((session) => session.taskName)).toEqual(["recent"]);
-    expect(pruned.snapshot.breakSessions.map((session) => session.id)).toEqual([recentBreak.id]);
     expect(pruned.snapshot.nudges.map((nudge) => nudge.id)).toEqual(["recent-nudge"]);
   });
 
@@ -793,14 +783,25 @@ describe("Focus Pet migrated core", () => {
         summary: { ...runtime.summary, focusSeconds: 420, distractedSeconds: 30 },
         todayWorkload: { ...runtime.todayWorkload, estimatedTypedCharacters: 128, pointerActionCount: 42 },
       },
-      true,
     );
 
     expect(payload.summary).toEqual({ focusSeconds: 420, distractedSeconds: 30 });
     expect(payload.todayWorkload).toEqual({ estimatedTypedCharacters: 128, pointerActionCount: 42 });
-    expect(payload.breakActive).toBe(true);
     expect(payload).not.toHaveProperty("stateSegments");
     expect(payload).not.toHaveProperty("appUsage");
     expect(payload).not.toHaveProperty("inputActivity");
+  });
+
+  it("turns an agent completion event into a high-priority pet intent", () => {
+    const state = runtimeActions.transientPetIntent(
+      emptyRuntime().state,
+      "taskCompleted",
+      "Codex 已完成：主题验收",
+      "agent",
+      12_000,
+    );
+    expect(state.currentPetIntent.kind).toBe("taskCompleted");
+    expect(state.currentPetIntent.source).toBe("agent");
+    expect(state.latestPetBubble).toBe("Codex 已完成：主题验收");
   });
 });

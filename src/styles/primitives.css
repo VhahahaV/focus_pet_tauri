@@ -49,7 +49,6 @@
 
 .state-distracted{--state-color:var(--distracted-500);--state-strong:var(--distracted-600);--state-soft:var(--distracted-100);color:var(--distracted-600);background-color:var(--distracted-100)}
 
-.state-break{--state-color:var(--rest-500);--state-strong:var(--rest-600);--state-soft:var(--rest-100);color:var(--rest-600);background-color:var(--rest-100)}
 
 .state-away{--state-color:var(--away-500);--state-strong:var(--text-secondary);--state-soft:var(--away-100);color:var(--text-secondary);background-color:var(--away-100)}
 
@@ -57,7 +56,6 @@
 
 .status-token.state-distracted{background:var(--state-color);color:var(--card)}
 
-.status-token.state-break{background:var(--state-color);color:var(--card)}
 
 .status-token.state-away{background:var(--state-color);color:var(--card)}
 
@@ -65,7 +63,6 @@
 
 .state-badge.state-distracted{border:1px solid color-mix(in oklab,var(--state-color),white 62%)}
 
-.state-badge.state-break{border:1px solid color-mix(in oklab,var(--state-color),white 62%)}
 
 .state-badge.state-away{border:1px solid color-mix(in oklab,var(--state-color),white 62%)}
 
@@ -129,7 +126,7 @@
 
 .status-pet{--status:var(--warning);--status-soft:rgba(215,141,90,0.13)}
 
-.status-rest{--status:var(--rest-500);--status-soft:rgba(79,173,133,0.13)}
+.status-success{--status:var(--success-500);--status-soft:rgba(79,173,133,0.13)}
 
 .status-neutral{--status:var(--text-tertiary);--status-soft:rgba(123,141,163,0.12)}
 
@@ -157,7 +154,7 @@
 
 .semantic-strip{position:absolute;left:8px;top:16px;bottom:16px;width:4px;border-radius:999px;background:var(--focus-500)}
 
-.semantic-strip.green{background:var(--rest-500)}
+.semantic-strip.green{background:var(--success-500)}
 
 .state-label{top:29px}
 

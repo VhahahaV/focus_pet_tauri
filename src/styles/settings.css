@@ -73,13 +73,13 @@
 
 .pet-settings-shell>.status-pet{grid-column:1;grid-row:2/span 3;position:sticky;top:88px;align-self:start}
 
-.pet-settings-shell>.status-rest{grid-column:2}
+.pet-settings-shell>.status-success{grid-column:2}
 
 .pet-settings-shell>.status-privacy{grid-column:2}
 
 .pet-settings-shell:has(>.status-focus)>.status-focus{grid-column:2}
 
-.pet-settings-shell:has(>.status-focus)>.status-rest{grid-column:2}
+.pet-settings-shell:has(>.status-focus)>.status-success{grid-column:2}
 
 .pet-settings-shell:has(>.status-focus)>.status-privacy{grid-column:2}
 
@@ -247,7 +247,7 @@
 
 .settings-chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 
-.settings-chip-row span{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:999px;background:rgba(79,173,133,0.11);color:var(--rest-600);font-size:11px;font-weight:750}
+.settings-chip-row span{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:999px;background:rgba(79,173,133,0.11);color:var(--success-600);font-size:11px;font-weight:750}
 
 .settings-chip-row span.warn{background:rgba(215,166,66,0.14);color:var(--distracted-600)}
 
@@ -489,13 +489,13 @@
 
 .pet-settings-shell:has(>.status-focus)>.status-focus{grid-column:1/-1}
 
-.pet-settings-shell>.status-rest{grid-column:1}
+.pet-settings-shell>.status-success{grid-column:1}
 
 .pet-settings-shell>.status-privacy{grid-column:2}
 
 @media (max-width:760px){.pet-settings-shell{grid-template-columns:1fr}}
 
-@media (max-width:760px){.pet-settings-shell>.status-rest,.pet-settings-shell>.status-privacy{grid-column:1}}
+@media (max-width:760px){.pet-settings-shell>.status-success,.pet-settings-shell>.status-privacy{grid-column:1}}
 
 /* Each settings module is a full-width reading row; avoid half-empty desktop cards. */
 .swift-settings-page{grid-template-columns:minmax(0,1fr);gap:14px}
@@ -507,7 +507,7 @@
 
 .pet-settings-shell>.status-pet,
 .pet-settings-shell:has(>.status-focus)>.status-focus,
-.pet-settings-shell:has(>.status-focus)>.status-rest,
+.pet-settings-shell:has(>.status-focus)>.status-success,
 .pet-settings-shell:has(>.status-focus)>.status-privacy,
-.pet-settings-shell>.status-rest,
+.pet-settings-shell>.status-success,
 .pet-settings-shell>.status-privacy{grid-column:1/-1;grid-row:auto;position:static}

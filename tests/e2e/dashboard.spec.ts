@@ -49,7 +49,13 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
   await expect(dashboardNav.getByRole("button", { name: "今日" })).toBeVisible();
   await expect(page.getByLabel("桌宠停靠区")).toHaveCount(0);
   await expect(page.getByText("今日态势")).toBeVisible();
-  await expect(page.getByText("休息恢复")).toBeVisible();
+  await expect(page.getByText("电脑状态")).toBeVisible();
+  await expect(page.getByText("专注占比")).toBeVisible();
+  await expect(page.getByText("最长连贯")).toBeVisible();
+  await expect(page.locator(".today-mini-pet img")).toBeAttached();
+  await expect(page.locator(".today-top-app-stat .today-top-app-icon")).toBeVisible();
+  await expect(page.getByText("已进入稳定工作")).toHaveCount(0);
+  await expect(page.getByText(/App、输入和切换节奏/)).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "活动时间窗" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "6h" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "24h" })).toBeVisible();
@@ -58,9 +64,22 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
   await expect(page.locator(".input-stack").first()).toBeVisible();
   await expect(page.locator(".input-stack .pointer-segment").first()).toBeAttached();
   await expect(page.locator(".input-stack .keyboard-segment").first()).toBeAttached();
-  const topCardHeights = await page.locator(".today-top-grid > section").evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
-  expect(Math.max(...topCardHeights)).toBeLessThanOrEqual((page.viewportSize()?.width ?? 1440) <= 560 ? 220 : 160);
+  if ((page.viewportSize()?.width ?? 0) >= 900) {
+    const topCardHeights = await page.locator(".today-top-grid > section").evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
+    expect(Math.max(...topCardHeights) - Math.min(...topCardHeights)).toBeLessThanOrEqual(1);
+    const focusColumns = await page.evaluate(() => {
+      const duration = document.querySelector(".today-focus-hero")?.getBoundingClientRect();
+      const stats = document.querySelector(".today-focus-stat-grid")?.getBoundingClientRect();
+      return { durationRight: duration?.right ?? 0, statsLeft: stats?.left ?? 0 };
+    });
+    expect(focusColumns.durationRight).toBeLessThanOrEqual(focusColumns.statsLeft);
+  }
   await expect(page.getByText("时间去哪了")).toBeVisible();
+  const appListLayout = await page.locator(".today-app-usage-list").evaluate((list) => {
+    const style = getComputedStyle(list);
+    return { maxHeight: style.maxHeight, overflowY: style.overflowY, gridAutoRows: style.gridAutoRows };
+  });
+  expect(appListLayout).toMatchObject({ maxHeight: "264px", overflowY: "auto", gridAutoRows: "48px" });
   await expect(page.locator(".today-app-meter-fill").first()).toBeVisible();
   expect(await page.locator(".today-app-meter-fill > span[class^='state-']").count()).toBeGreaterThan(0);
   await expect(page.locator(".today-app-meter i")).toHaveCount(0);
@@ -117,13 +136,49 @@ test("development component gallery renders every primitive family", async ({ pa
   await expect(page.locator(".fp-heatmap")).toBeVisible();
 });
 
-test("break recovery can be started from Today page", async ({ page }) => {
+test("computer monitor can be customized and keeps the Today cards aligned", async ({ page }) => {
   await loadBuiltApp(page);
-  await page.getByRole("button", { name: /开始恢复/ }).click();
-  await expect(page.getByText("正在恢复", { exact: true })).toBeVisible();
-  await expect(page.getByRole("meter", { name: "休息进度" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "休息分钟" })).toHaveCount(0);
-  await expect(page.getByRole("main").getByRole("button", { name: /结束休息/ })).toBeVisible();
+  await page.getByRole("button", { name: "自定义电脑状态模块" }).click();
+  await expect(page.getByLabel("电脑状态模块排版")).toBeVisible();
+  await page.getByRole("button", { name: "分核 每个逻辑核心" }).click();
+  await expect(page.getByText("CPU 分核")).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) >= 900) {
+    const heights = await page.locator(".today-top-grid > section").evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+  }
+  await expect(page.getByText(/休息/)).toHaveCount(0);
+});
+
+test("timeline density scales with its window and hover colors follow every theme", async ({ page }) => {
+  await loadBuiltApp(page);
+  const dashboardNav = page.getByRole("navigation", { name: "Dashboard" });
+  const barDensity = async () => page.locator(".input-stack").first().evaluate((bar) =>
+    Number.parseFloat(getComputedStyle(bar).getPropertyValue("--timeline-density")),
+  );
+  await page.getByRole("radio", { name: "2h", exact: true }).click();
+  const twoHourDensity = await barDensity();
+  await page.getByRole("radio", { name: "24h", exact: true }).click();
+  const twentyFourHourDensity = await barDensity();
+  expect(twentyFourHourDensity).toBeGreaterThan(twoHourDensity);
+
+  await dashboardNav.getByRole("button", { name: "设置" }).click();
+  const themeNames = [
+    "新粗野主义 Neobrutalism 饱和色块、粗黑描边与硬偏移阴影",
+    "中世纪现代 Mid-Century Modern 奶咖底色、胡桃木文字与温暖有机色彩",
+    "构成主义 Constructivism 红黑块面、新闻纸底与前倾的海报构图",
+  ];
+  const colors: string[] = [];
+  for (const name of themeNames) {
+    await page.getByRole("radio", { name, exact: true }).click();
+    colors.push(await page.locator("html").evaluate((root) => getComputedStyle(root).getPropertyValue("--chart-kbd").trim()));
+  }
+  expect(new Set(colors).size).toBe(3);
+  await dashboardNav.getByRole("button", { name: "今日" }).click();
+  await page.locator(".input-stack").last().hover();
+  await expect(page.locator(".timeline-hover-bubble")).toBeVisible();
+  const hoverColor = await page.locator(".timeline-hover-bubble").evaluate((bubble) => getComputedStyle(bubble).borderColor);
+  expect(hoverColor).not.toBe("rgb(101, 230, 91)");
+  expect(hoverColor).not.toBe("rgb(108, 69, 255)");
 });
 
 test("desktop widget views render without the main runtime shell", async ({ page }) => {
@@ -174,12 +229,23 @@ test("desktop widget views render without the main runtime shell", async ({ page
   expect(rhythmMetrics.cardScrollWidth).toBeLessThanOrEqual(rhythmMetrics.cardWidth);
   expect(rhythmMetrics.cardScrollHeight).toBeLessThanOrEqual(rhythmMetrics.cardHeight);
 
-  await page.setViewportSize({ width: 260, height: 260 });
+  await page.setViewportSize({ width: 330, height: 430 });
   await loadBuiltApp(page, "https://focus-pet.local/?widget=petCompanion");
   await expect(page.locator(".window-pet")).toBeVisible();
   await expect(page.locator(".window-pet img")).toBeVisible();
   await page.locator(".window-pet").dispatchEvent("pointerover");
   await expect(page.getByRole("button", { name: "桌宠切换动作" })).toBeVisible();
+  await expect(page.getByText("当前状态")).toBeVisible();
+  await expect(page.getByText("专注", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "打开桌宠面板" })).toContainText("面板");
+  await expect(page.getByRole("button", { name: "桌宠切换动作" })).toContainText("动作");
+  await expect(page.getByRole("button", { name: "打开桌宠设置" })).toContainText("设置");
+  const hoverPanelStyle = await page.locator(".pet-hover-panel").evaluate((panel) => {
+    const style = getComputedStyle(panel);
+    return { width: panel.getBoundingClientRect().width, background: style.backgroundColor };
+  });
+  expect(hoverPanelStyle.width).toBeGreaterThanOrEqual(268);
+  expect(hoverPanelStyle.background).not.toMatch(/\/ 0\.|rgba\([^)]*,\s*0\./);
 
   await page.setViewportSize({ width: 360, height: 374 });
   await loadBuiltApp(page, "https://focus-pet.local/?widget=menuBar");
@@ -187,7 +253,7 @@ test("desktop widget views render without the main runtime shell", async ({ page
   await expect(page.getByLabel("状态摘要")).toBeVisible();
   await expect(page.getByRole("button", { name: "打开面板" })).toBeVisible();
   await expect(page.getByRole("button", { name: "桌面状态卡" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "休息 5 分钟" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /显示桌宠|隐藏桌宠/ })).toBeVisible();
   await expect(page.getByText("提醒开启")).toBeVisible();
   await expect(page.getByRole("button", { name: "退出" })).toBeVisible();
   await expect(page.getByText("等待主窗口同步")).toBeHidden();
@@ -212,7 +278,7 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await loadBuiltApp(page);
   await page.getByRole("navigation", { name: "Dashboard" }).getByRole("button", { name: "设置" }).click();
   await expect(page.getByRole("navigation", { name: "设置模块" })).toHaveCount(0);
-  for (const title of ["桌面状态卡", "提醒", "识别", "权限", "数据", "关于"]) {
+  for (const title of ["外观主题", "桌面状态卡", "提醒", "识别", "权限", "数据", "关于"]) {
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
   }
   const settingsWidths = await page.locator(".settings-content-panel").evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().width));
@@ -222,8 +288,11 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.getByRole("radio", { name: "自由拖动" })).toBeVisible();
 
   await expect(page.getByText("回归提醒")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "智能体任务" })).toBeVisible();
+  await expect(page.getByText("Codex / Claude Code 完成通知")).toBeVisible();
+  await expect(page.getByRole("button", { name: "测试桌宠通知" })).toBeVisible();
   await expect(page.getByText("温和走神阈值")).toBeVisible();
-  await expect(page.locator(".settings-module-reminders .settings-number-stepper")).toHaveCount(6);
+  await expect(page.locator(".settings-module-reminders .settings-number-stepper")).toHaveCount(4);
   await expect(page.getByRole("button", { name: "温和走神阈值 增加" })).toBeVisible();
   await page.getByRole("button", { name: "温和走神阈值 增加" }).click();
   await expect(page.getByRole("group", { name: "温和走神阈值 6分钟" })).toBeVisible();
@@ -238,13 +307,35 @@ test("settings expose all modules without a secondary navigation rail", async ({
 
   await expect(page.getByText("刷新于")).toBeVisible();
   await expect(page.getByRole("button", { name: "请求" }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "测试" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "测试", exact: true })).toBeVisible();
   await expect(page.getByText("隐私与安全")).toBeVisible();
 
   await expect(page.getByText("本机数据")).toBeVisible();
   await expect(page.getByText("启用日志")).toBeVisible();
   await expect(page.getByRole("button", { name: /打开日志/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /复制路径/ })).toBeVisible();
+});
+
+test("appearance themes switch globally and persist their selection", async ({ page }) => {
+  await loadBuiltApp(page);
+  await page.getByRole("navigation", { name: "Dashboard" }).getByRole("button", { name: "设置" }).click();
+  const midCentury = page.getByRole("radio", {
+    name: "中世纪现代 Mid-Century Modern 奶咖底色、胡桃木文字与温暖有机色彩",
+    exact: true,
+  });
+  const constructivism = page.getByRole("radio", {
+    name: "构成主义 Constructivism 红黑块面、新闻纸底与前倾的海报构图",
+    exact: true,
+  });
+
+  await midCentury.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "mid-century-modern");
+  await expect(midCentury).toHaveAttribute("aria-checked", "true");
+
+  await constructivism.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "constructivism");
+  await expect(constructivism).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("focus-pet-appearance-theme"))).toBe("constructivism");
 });
 
 test("pet settings expose hover and random action controls", async ({ page }) => {

@@ -5,7 +5,10 @@ import * as csstree from "css-tree";
 
 const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
 const roots = [join(projectRoot, "src")];
-const tokenFile = join(projectRoot, "src", "styles", "tokens.css");
+const tokenFiles = new Set([
+  join(projectRoot, "src", "styles", "tokens.css"),
+  join(projectRoot, "src", "styles", "themes.css"),
+]);
 const rawHexPattern = /#[\da-f]{3,8}\b/gi;
 const failures = [];
 const cssFiles = [];
@@ -18,7 +21,7 @@ const visit = (path) => {
   }
   if (!/\.(?:css|tsx?)$/.test(path)) return;
   if (path.endsWith(".css")) cssFiles.push(path);
-  if (path === tokenFile) return;
+  if (tokenFiles.has(path)) return;
   const lines = readFileSync(path, "utf8").split(/\r?\n/);
   lines.forEach((line, index) => {
     const matches = line.match(rawHexPattern);

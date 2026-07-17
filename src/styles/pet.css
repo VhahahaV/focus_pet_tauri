@@ -145,7 +145,7 @@
 
 .pet-pack-card-main small{margin-top:2px;color:var(--text-tertiary);font-size:11px;font-weight:690}
 
-.pet-pack-card-main svg{color:var(--rest-500)}
+.pet-pack-card-main svg{color:var(--success-500)}
 
 .pet-pack-delete-button{width:30px;height:30px;display:grid;place-items:center;border:1px solid rgba(222,127,105,0.18);border-radius:8px;background:rgba(222,127,105,0.08);color:var(--distracted-500)}
 
@@ -319,7 +319,7 @@
 
 .pet-pack-card{border-radius:10px}
 
-.pet-pack-card.active{border-color:var(--rest-300);background:var(--rest-100)}
+.pet-pack-card.active{border-color:var(--success-300);background:var(--success-100)}
 
 .pet-pack-empty-card{width:100%;min-height:126px;justify-content:center;padding:18px;border:1px dashed var(--border-strong);border-radius:10px;background:var(--card-soft);color:var(--text-secondary);text-align:left}
 

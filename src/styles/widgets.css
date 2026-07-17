@@ -45,7 +45,6 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .widget-rhythm-timeline i.state-distracted{background:var(--distracted-500)}
 
-.widget-rhythm-timeline i.state-break{background:var(--rest-500)}
 
 .widget-rhythm-timeline i.state-away{background:var(--away-300)}
 
@@ -99,9 +98,9 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .pet-companion.window-pet{inset:0;display:grid;place-items:end center;padding:12px;background:transparent;pointer-events:auto}
 
-.pet-companion .pet-avatar-button{pointer-events:auto;border:0;background:transparent;padding:0;width:var(--pet-size);height:var(--pet-size)}
+.pet-companion .pet-avatar-button{position:relative;pointer-events:auto;border:0;background:transparent;padding:0;width:var(--pet-hit-size,var(--pet-size));height:var(--pet-hit-size,var(--pet-size))}
 
-.pet-companion .pet-avatar-button img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 14px 20px rgba(60,78,98,0.18));user-select:none}
+.pet-companion .pet-avatar-button img{position:absolute;left:50%;bottom:0;width:var(--pet-size);height:var(--pet-size);object-fit:contain;filter:drop-shadow(0 14px 20px rgba(60,78,98,0.18));pointer-events:none;transform:translateX(-50%);user-select:none}
 
 .pet-hover-panel{position:absolute;right:calc(var(--pet-size)*0.08);bottom:calc(var(--pet-size) + 16px);width:min(248px,calc(100vw - 24px));padding:10px;border-radius:16px;background:rgba(255,255,255,0.96);border:1px solid rgba(201,218,236,0.9);box-shadow:0 18px 36px rgba(61,82,107,0.16);pointer-events:none;opacity:0;transform:translateY(6px) scale(0.98);transition:opacity 160ms ease,transform 160ms ease}
 
@@ -147,10 +146,6 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .widget-rhythm .state-distracted{--widget-state:var(--distracted-500);--widget-strong:var(--distracted-600)}
 
-.widget-status.state-break{--widget-state:var(--rest-500);--widget-strong:var(--rest-600)}
-
-.widget-rhythm .state-break{--widget-state:var(--rest-500);--widget-strong:var(--rest-600)}
-
 .widget-status.state-away{--widget-state:var(--away-400);--widget-strong:var(--away-500)}
 
 .widget-rhythm .state-away{--widget-state:var(--away-400);--widget-strong:var(--away-500)}
@@ -163,15 +158,11 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .widget-label.state-distracted{--widget-state:var(--distracted-500)}
 
-.widget-label.state-break{--widget-state:var(--rest-500)}
-
 .widget-label.state-away{--widget-state:var(--away-400)}
 
 .widget-label.state-focus{background:transparent;background-color:transparent}
 
 .widget-label.state-distracted{background:transparent;background-color:transparent}
-
-.widget-label.state-break{background:transparent;background-color:transparent}
 
 .widget-label.state-away{background:transparent;background-color:transparent}
 
@@ -205,15 +196,13 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .widget-duration-strip span.state-distracted{background:transparent;background-color:transparent}
 
-.widget-duration-strip span.state-break{background:transparent;background-color:transparent}
-
 .widget-duration-strip span.state-away{background:transparent;background-color:transparent}
 
 .widget-duration-strip b{color:var(--widget-state,var(--focus-500));padding-right:2px}
 
 .widget-rhythm{display:flex;flex-direction:column}
 
-.widget-donut{width:92px;height:92px;display:grid;place-items:center;position:relative;border-radius:999px;background:conic-gradient(var(--focus-500) 0deg var(--focus-end),var(--distracted-500) var(--focus-end) var(--distracted-end),var(--rest-500) var(--distracted-end) var(--break-end),rgb(92 105 119/0.16) var(--break-end) 360deg)}
+.widget-donut{width:92px;height:92px;display:grid;place-items:center;position:relative;border-radius:999px;background:conic-gradient(var(--focus-500) 0deg var(--focus-end),var(--distracted-500) var(--focus-end) var(--distracted-end),rgb(92 105 119/0.16) var(--distracted-end) 360deg)}
 
 .widget-donut::after{content:"";position:absolute;inset:17px;border-radius:inherit;background:rgba(255,255,255,0.88)}
 
@@ -225,13 +214,9 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .menu-bar-card.state-distracted{background:radial-gradient(circle at 18% 0%,rgba(255,255,255,0.92),transparent 34%),radial-gradient(circle at 92% 18%,color-mix(in srgb,var(--state) 20%,transparent),transparent 36%),linear-gradient(135deg,rgba(255,255,255,0.84),rgba(244,249,253,0.66));background-color:transparent;color:var(--text-primary)}
 
-.menu-bar-card.state-break{background:radial-gradient(circle at 18% 0%,rgba(255,255,255,0.92),transparent 34%),radial-gradient(circle at 92% 18%,color-mix(in srgb,var(--state) 20%,transparent),transparent 36%),linear-gradient(135deg,rgba(255,255,255,0.84),rgba(244,249,253,0.66));background-color:transparent;color:var(--text-primary)}
-
 .menu-bar-card.state-away{background:radial-gradient(circle at 18% 0%,rgba(255,255,255,0.92),transparent 34%),radial-gradient(circle at 92% 18%,color-mix(in srgb,var(--state) 20%,transparent),transparent 36%),linear-gradient(135deg,rgba(255,255,255,0.84),rgba(244,249,253,0.66));background-color:transparent;color:var(--text-primary)}
 
 .menu-bar-card.state-distracted{--state:var(--distracted-500)}
-
-.menu-bar-card.state-break{--state:var(--rest-500)}
 
 .menu-bar-card.state-away{--state:var(--away-500)}
 
@@ -259,13 +244,9 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .menu-metric-chip.state-distracted{--metric:var(--distracted-500)}
 
-.menu-metric-chip.state-break{--metric:var(--rest-500)}
-
 .menu-metric-chip.state-focus{background:color-mix(in srgb,var(--metric) 10%,white 90%);background-color:color-mix(in srgb,var(--metric) 10%,white 90%);color:var(--text-primary)}
 
 .menu-metric-chip.state-distracted{background:color-mix(in srgb,var(--metric) 10%,white 90%);background-color:color-mix(in srgb,var(--metric) 10%,white 90%);color:var(--text-primary)}
-
-.menu-metric-chip.state-break{background:color-mix(in srgb,var(--metric) 10%,white 90%);background-color:color-mix(in srgb,var(--metric) 10%,white 90%);color:var(--text-primary)}
 
 .menu-metric-chip.state-away{background:color-mix(in srgb,var(--metric) 10%,white 90%);background-color:color-mix(in srgb,var(--metric) 10%,white 90%);color:var(--text-primary)}
 
@@ -285,8 +266,6 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .menu-action-button.tone-neutral{--tone:var(--text-tertiary)}
 
-.menu-action-button.tone-rest{--tone:var(--rest-500)}
-
 .menu-action-button.tone-warning{--tone:var(--warning)}
 
 .menu-action-button.tone-pet{--tone:var(--warning)}
@@ -303,7 +282,7 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .menu-status-message{margin:-6px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-@media (max-width:640px){.pet-companion{transform:scale(0.82);transform-origin:bottom right}}
+@media (max-width:640px){.pet-companion:not(.window-pet){transform:scale(0.82);transform-origin:bottom right}}
 
 .widget-card{border-color:rgba(255,255,255,0.78);border-radius:20px;background:radial-gradient(circle at 92% 0%,rgba(79,143,223,0.16),transparent 40%),rgba(250,252,253,0.9);box-shadow:0 12px 28px rgba(39,54,72,0.13),inset 0 1px rgba(255,255,255,0.92);backdrop-filter:blur(22px) saturate(1.16)}
 
@@ -337,8 +316,8 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .floating-pet-bubble::after{position:absolute;right:18px;bottom:-5px;width:10px;height:10px;border-right:1px solid var(--border-default);border-bottom:1px solid var(--border-default);background:color-mix(in srgb,var(--card) 82%,transparent);content:"";transform:rotate(45deg)}
 
-/* The companion window is transparent at rest; only the character and compact controls are interactive. */
-.pet-companion.window-pet{inset:0;display:grid;place-items:end center;padding:8px;background:transparent;pointer-events:none}
+/* The companion window stays transparent while idle; only the character and compact controls are interactive. */
+.pet-companion.window-pet{inset:0;display:grid;place-items:end center;padding:10px;background:transparent;opacity:1;pointer-events:none}
 
 .window-pet .pet-avatar-button{position:relative;z-index:2;pointer-events:auto;cursor:grab;touch-action:none}
 
@@ -348,27 +327,35 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .window-pet .pet-avatar-button:focus-visible img{filter:drop-shadow(0 5px 7px rgb(43 60 78/0.16)) drop-shadow(0 0 4px rgb(89 153 226/0.3))}
 
-.window-pet .pet-avatar-button img{filter:drop-shadow(0 5px 7px rgb(43 60 78/0.16))}
+.window-pet .pet-avatar-button img{opacity:var(--pet-opacity);filter:drop-shadow(0 5px 7px rgb(43 60 78/0.16))}
 
-.window-pet .pet-hover-panel{right:auto;left:50%;bottom:calc(var(--pet-size) + 8px);width:min(210px,calc(100vw - 12px));display:grid;gap:6px;padding:7px;border:1px solid rgb(125 169 218/0.42);border-radius:12px;background:rgb(249 252 255/0.96);box-shadow:0 7px 18px rgb(37 65 94/0.12),inset 0 1px 0 rgb(255 255 255/0.94);backdrop-filter:none;transform:translate(-50%,4px) scale(0.985);transform-origin:bottom center}
+.window-pet .pet-hover-panel{right:auto;left:50%;bottom:calc(var(--pet-size) + 12px);width:min(276px,calc(100vw - 20px));display:grid;gap:12px;padding:14px;border:1px solid var(--border-strong);border-radius:16px;background:var(--card);box-shadow:0 18px 42px rgb(37 65 94/0.22),inset 0 1px 0 rgb(255 255 255/0.82);backdrop-filter:none;opacity:0;transform:translate(-50%,7px) scale(0.975);transform-origin:bottom center}
 
 .window-pet.is-hovering .pet-hover-panel,.window-pet .pet-hover-panel:focus-within{opacity:1;pointer-events:auto;transform:translate(-50%,0) scale(1)}
 
-.pet-hover-heading{min-width:0;display:flex;align-items:center;gap:6px;padding:0 2px}
+.pet-hover-heading{min-width:0;display:grid;grid-template-columns:9px minmax(0,1fr);align-items:center;gap:9px;padding:0 2px}
 
-.pet-hover-heading>span{width:6px;height:6px;flex:0 0 auto;border-radius:50%;background:var(--focus-500);box-shadow:0 0 0 3px color-mix(in srgb,var(--focus-500) 13%,transparent)}
+.pet-hover-heading>span{width:9px;height:9px;border-radius:50%;background:var(--focus-500);box-shadow:0 0 0 4px color-mix(in srgb,var(--focus-500) 14%,transparent)}
 
-.pet-hover-panel .pet-hover-heading strong{min-width:0;margin:0;overflow:hidden;color:var(--text-secondary);font-size:10px;font-weight:720;text-overflow:ellipsis;white-space:nowrap}
+.pet-hover-heading>div{min-width:0;display:grid;gap:1px}
 
-.window-pet .pet-hover-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px}
+.pet-hover-heading small{color:var(--text-tertiary);font-size:9px;font-weight:720;letter-spacing:.05em}
 
-.window-pet .pet-hover-metrics span{min-width:0;min-height:26px;display:flex;align-items:center;justify-content:center;gap:3px;padding:3px;border:0;border-radius:7px;background:rgb(89 153 226/0.075);color:var(--focus-600);text-align:center}
+.pet-hover-panel .pet-hover-heading strong{min-width:0;margin:0;overflow:hidden;color:var(--text-primary);font-size:14px;font-weight:820;line-height:1.2;text-overflow:ellipsis;white-space:nowrap}
 
-.window-pet .pet-hover-metrics em{min-width:0;margin:0;overflow:hidden;color:var(--text-secondary);font-size:8px;font-style:normal;font-variant-numeric:tabular-nums;text-overflow:ellipsis;white-space:nowrap}
+.window-pet .pet-hover-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 
-.window-pet .pet-hover-actions{display:grid;grid-template-columns:repeat(6,1fr);gap:3px;margin:0;padding-top:5px;border-top:1px solid rgb(141 168 196/0.18)}
+.window-pet .pet-hover-metrics>span{min-width:0;min-height:50px;display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border-default);border-radius:11px;background:var(--inset-surface);color:var(--focus-600);text-align:left}
 
-.window-pet .pet-hover-actions button{min-width:0;min-height:25px;display:grid;place-items:center;padding:0;border:0;border-radius:7px;background:transparent;color:var(--text-tertiary)}
+.window-pet .pet-hover-metrics>span>span{min-width:0;display:grid;gap:2px}
+
+.window-pet .pet-hover-metrics small{color:var(--text-tertiary);font-size:9px;font-weight:720}
+
+.window-pet .pet-hover-metrics em{min-width:0;margin:0;overflow:hidden;color:var(--text-primary);font-size:13px;font-style:normal;font-weight:820;font-variant-numeric:tabular-nums;line-height:1.1;text-overflow:ellipsis;white-space:nowrap}
+
+.window-pet .pet-hover-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:0;padding-top:10px;border-top:1px solid var(--divider)}
+
+.window-pet .pet-hover-actions button{min-width:0;min-height:44px;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 8px;border:1px solid var(--border-default);border-radius:10px;background:var(--control-surface);color:var(--text-secondary);font-size:10px;font-weight:780}
 
 @media (hover:hover) and (pointer:fine){.window-pet .pet-hover-actions button:hover{background:var(--focus-100);color:var(--focus-600)}}
 
@@ -381,10 +368,10 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .pet-hover-actions button{min-height:36px;border-radius:9px}
 
-.window-pet .pet-hover-panel{width:min(232px,calc(100vw - 12px));gap:7px;padding:8px}
+.window-pet .pet-hover-panel{width:min(276px,calc(100vw - 20px));gap:12px;padding:14px}
 
-.window-pet .pet-hover-actions{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding-top:7px}
+.window-pet .pet-hover-actions{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding-top:10px}
 
-.window-pet .pet-hover-actions button{min-height:34px;border-radius:9px;color:var(--text-secondary)}
+.window-pet .pet-hover-actions button{min-height:44px;border-radius:10px;color:var(--text-secondary)}
 
 .window-pet .pet-hover-actions button:active{transform:scale(.96)}

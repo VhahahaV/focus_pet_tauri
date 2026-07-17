@@ -32,6 +32,38 @@ working experience, not a mascot added on top of a generic dashboard.
   bottom-right edge, and soft status-aware shadow
 - Motion: 120-240ms, ease-out for state changes and module transitions
 
+## Appearance theme architecture
+
+- Persistent setting: `AppSettings.appearance.theme`; legacy snapshots without
+  the field normalize to `neobrutalism`.
+- Theme ID and normalization source: `src/core/theme.ts`.
+- User-facing registry metadata: `src/themes/index.ts`.
+- Shared component and layout CSS remains in `src/styles/*.css`; theme recipes
+  are the final override layer in `src/styles/themes.css`.
+- Components consume semantic tokens and state classes. They must not branch on
+  a theme ID. Theme-specific rendering belongs in the recipe layer.
+- Theme state is mirrored to the document and browser storage immediately, then
+  persisted in the normal app snapshot. The main dashboard, menu-bar panel,
+  status widgets, and pet companion receive the same theme.
+
+### Installed themes
+
+- `neobrutalism`: cream ground, saturated flat blocks, 2-3px black outlines,
+  zero-blur offset shadows, and push-into-shadow controls.
+- `mid-century-modern`: cream/oatmeal ground, walnut ink, mustard/avocado/
+  burnt-orange/teal accents, organic decoration, and shadowless flat surfaces.
+- `constructivism`: red/black slabs, newsprint ground, condensed grotesk type,
+  hard black rules, clipped grayscale imagery, and reduced-motion-safe diagonal
+  poster geometry.
+
+### Adding another theme
+
+1. Add the stable ID to `AppThemeID` and `appThemeIDs`.
+2. Add one metadata record to `appThemes` for the Settings preview.
+3. Add a token recipe and narrowly scoped material overrides to `themes.css`.
+4. Extend the registry and end-to-end tests; no business component should need
+   modification.
+
 ## Interaction principles
 
 - One clear primary action per module.

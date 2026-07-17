@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, PermissionSnapshot } from "../core/types";
+import type { AgentCompletionEvent, InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, PermissionSnapshot, SystemMetricsSample } from "../core/types";
 import type { PetPackRecord, PetSourceActionAssets } from "../resources/petPack";
 import { importedPetPackRecord } from "../resources/petPack";
 
@@ -30,6 +30,11 @@ export const nativeQuitApp = async (): Promise<boolean> => {
   return invoke<boolean>("quit_app");
 };
 
+export const nativePerformMenuBarAction = async (action: string): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("perform_menu_bar_action", { action });
+};
+
 export const nativeDataSize = async (): Promise<number> => {
   if (!isTauriRuntime()) return 0;
   return invoke<number>("data_size");
@@ -38,6 +43,21 @@ export const nativeDataSize = async (): Promise<number> => {
 export const nativeActivitySample = async (): Promise<NativeActivitySample | undefined> => {
   if (!isTauriRuntime()) return undefined;
   return invoke<NativeActivitySample>("sample_activity");
+};
+
+export const nativeSystemMetrics = async (): Promise<SystemMetricsSample | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<SystemMetricsSample>("sample_system_metrics");
+};
+
+export const nativeDrainAgentEvents = async (): Promise<AgentCompletionEvent[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<AgentCompletionEvent[]>("drain_agent_events");
+};
+
+export const nativeAgentEventInboxPath = async (): Promise<string | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<string>("agent_event_inbox_path");
 };
 
 export const nativePermissionSnapshot = async (): Promise<PermissionSnapshot | undefined> => {

@@ -27,6 +27,7 @@ chrono = { version = "0.4", features = ["serde"] }
 open = "5"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sysinfo = { version = "0.33.1", default-features = false, features = ["system", "disk", "component"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

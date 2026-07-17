@@ -5,6 +5,8 @@ export const intentPriority = (source: PetIntentSource): number => {
   switch (source) {
     case "physicalInteraction":
       return 500;
+    case "agent":
+      return 450;
     case "nudge":
       return 400;
     case "interaction":
@@ -16,12 +18,10 @@ export const intentPriority = (source: PetIntentSource): number => {
 
 export const preferredSourceActionIDs: Record<PetIntentKind, string[]> = {
   quietCompanion: ["default", "idle", "work", "focus", "normal", "onfloor", "stand", "breath"],
-  focusRestHint: ["stretch", "grooming", "blink", "idle", "default"],
   distractedObserve: ["distractedLook", "disturbed", "distracted", "nudgeGentle", "default", "idle"],
   nudgeGentle: ["nudgeGentle", "distractedLook", "patpat", "patpat1", "disturbed", "default"],
   nudgeStrong: ["nudgeStrong", "disturbed", "shake", "nudgeGentle", "distractedLook", "default"],
-  breakCompanion: ["breakRelax", "break", "relax", "onfloor", "sleep", "default", "idle"],
-  breakEnding: ["breakEnd", "mouseSummon", "cursorPounce", "welcomeBack", "wake", "default"],
+  taskCompleted: ["welcomeBack", "stretch", "mouseSummon", "cursorPounce", "default", "idle"],
   sleep: ["sleep", "sleeping", "nap", "onfloor", "default"],
   welcomeBack: ["welcomeBack", "wake", "mouseSummon", "default", "idle"],
   moveLeft: ["left_walk", "leftwalk", "left", "run", "right_walk", "right"],
@@ -36,12 +36,10 @@ export const preferredSourceActionIDs: Record<PetIntentKind, string[]> = {
 
 export const userMappingIntents: PetIntentKind[] = [
   "quietCompanion",
-  "focusRestHint",
   "distractedObserve",
   "nudgeGentle",
   "nudgeStrong",
-  "breakCompanion",
-  "breakEnding",
+  "taskCompleted",
   "sleep",
 ];
 
@@ -62,8 +60,6 @@ export const intentKindForState = (state: FocusState): PetIntentKind => {
       return "quietCompanion";
     case "distracted":
       return "distractedObserve";
-    case "break":
-      return "breakCompanion";
     case "away":
       return "sleep";
   }
@@ -73,18 +69,14 @@ export const legacyPetActionForIntent = (intent: PetIntentKind): PetAction => {
   switch (intent) {
     case "quietCompanion":
       return "idle";
-    case "focusRestHint":
-      return "stretch";
     case "distractedObserve":
       return "distractedLook";
     case "nudgeGentle":
       return "nudgeGentle";
     case "nudgeStrong":
       return "nudgeStrong";
-    case "breakCompanion":
-      return "breakRelax";
-    case "breakEnding":
-      return "breakEnd";
+    case "taskCompleted":
+      return "welcomeBack";
     case "sleep":
       return "sleep";
     case "welcomeBack":
@@ -117,17 +109,13 @@ export const intentFromLegacyAction = (action: PetAction): PetIntentKind => {
     case "sleep":
       return "sleep";
     case "stretch":
-      return "focusRestHint";
+      return "taskCompleted";
     case "distractedLook":
       return "distractedObserve";
     case "nudgeGentle":
       return "nudgeGentle";
     case "nudgeStrong":
       return "nudgeStrong";
-    case "breakRelax":
-      return "breakCompanion";
-    case "breakEnd":
-      return "breakEnding";
     case "welcomeBack":
       return "welcomeBack";
     case "dragged":

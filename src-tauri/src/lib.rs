@@ -1,13 +1,17 @@
+mod agent_events;
 mod native;
 mod notifications;
 mod pet_pack;
 mod store;
+mod system_monitor;
 
 use native::{NativeActivitySample, PermissionSnapshot};
+use agent_events::AgentCompletionEvent;
 use pet_pack::ImportedPetPack;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use store::FocusPetStore;
+use system_monitor::{SystemMetricsSample, SystemMonitorState};
 use tauri::{Emitter, Manager};
 
 const TRAY_OPEN_TODAY: &str = "open-today";
@@ -16,12 +20,38 @@ const TRAY_OPEN_SETTINGS: &str = "open-settings";
 const TRAY_TOGGLE_WIDGETS: &str = "toggle-widgets";
 const TRAY_TOGGLE_PET: &str = "toggle-pet";
 const TRAY_PAUSE_REMINDERS: &str = "pause-reminders";
-const TRAY_TOGGLE_BREAK: &str = "toggle-break";
+const TRAY_RESUME_REMINDERS: &str = "resume-reminders";
+const TRAY_FINISH_FOCUS: &str = "finish-focus";
 const TRAY_QUIT: &str = "quit";
 
 #[derive(Clone, serde::Serialize)]
 struct NativeMenuAction {
-    action: &'static str,
+    action: String,
+}
+
+#[tauri::command]
+fn perform_menu_bar_action(app: tauri::AppHandle, action: String) -> bool {
+    handle_native_menu_action(&app, &action);
+    true
+}
+
+#[tauri::command]
+fn sample_system_metrics(state: tauri::State<'_, SystemMonitorState>) -> Result<SystemMetricsSample, String> {
+    state.sample()
+}
+
+#[tauri::command]
+fn drain_agent_events() -> Result<Vec<AgentCompletionEvent>, String> {
+    agent_events::drain_events()
+}
+
+#[tauri::command]
+fn agent_event_inbox_path() -> String {
+    agent_events::inbox_path()
+}
+
+pub fn maybe_handle_agent_notification() -> bool {
+    agent_events::maybe_ingest_from_process_args()
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -425,8 +455,8 @@ fn sync_widget_windows(
         190.0,
         recent_rhythm_origin_x.zip(recent_rhythm_origin_y),
     )?;
-    let pet_window_width = (pet_size + 36.0).max(220.0).clamp(220.0, 300.0);
-    let pet_window_height = (pet_size + 92.0).clamp(220.0, 360.0);
+    let pet_window_width = pet_size.max((pet_size + 190.0).min(330.0));
+    let pet_window_height = pet_size + 310.0;
     let pet_origin = pet_origin_x.zip(pet_origin_y).or_else(|| {
         default_pet_origin(
             &app,
@@ -447,9 +477,15 @@ fn sync_widget_windows(
     Ok(true)
 }
 
-fn show_menu_bar_window(app: &tauri::AppHandle) {
+fn toggle_menu_bar_window(app: &tauri::AppHandle) {
     use tauri::Manager;
 
+    if let Some(window) = app.get_webview_window("widget-menu-bar") {
+        if window.is_visible().unwrap_or(false) {
+            window.hide().ok();
+            return;
+        }
+    }
     let width = 360.0;
     let height = 374.0;
     let origin = default_menu_bar_origin(app, width, height);
@@ -600,6 +636,7 @@ fn sync_widget_window(
         if let Some(window) = app.get_webview_window(label) {
             window.show().map_err(|error| error.to_string())?;
             window.set_always_on_top(true).ok();
+            window.set_visible_on_all_workspaces(true).ok();
             window.set_shadow(false).ok();
             window.set_size(LogicalSize::new(width, height)).ok();
             if let Some((x, y)) = origin {
@@ -615,6 +652,7 @@ fn sync_widget_window(
             .transparent(true)
             .shadow(false)
             .always_on_top(true)
+            .visible_on_all_workspaces(true)
             .skip_taskbar(true)
             .visible(true)
             .build()
@@ -708,9 +746,15 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-fn emit_menu_action(app: &tauri::AppHandle, action: &'static str) {
+fn emit_menu_action(app: &tauri::AppHandle, action: &str) {
     show_main_window(app);
-    app.emit_to("main", "focus-pet-native-menu", NativeMenuAction { action })
+    app.emit_to(
+        "main",
+        "focus-pet-native-menu",
+        NativeMenuAction {
+            action: action.to_string(),
+        },
+    )
         .ok();
 }
 
@@ -722,7 +766,8 @@ fn handle_native_menu_action(app: &tauri::AppHandle, action: &str) {
         TRAY_TOGGLE_WIDGETS => emit_menu_action(app, TRAY_TOGGLE_WIDGETS),
         TRAY_TOGGLE_PET => emit_menu_action(app, TRAY_TOGGLE_PET),
         TRAY_PAUSE_REMINDERS => emit_menu_action(app, TRAY_PAUSE_REMINDERS),
-        TRAY_TOGGLE_BREAK => emit_menu_action(app, TRAY_TOGGLE_BREAK),
+        TRAY_RESUME_REMINDERS => emit_menu_action(app, TRAY_RESUME_REMINDERS),
+        TRAY_FINISH_FOCUS => emit_menu_action(app, TRAY_FINISH_FOCUS),
         TRAY_QUIT => app.exit(0),
         _ => {}
     }
@@ -740,7 +785,6 @@ fn install_desktop_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .text(TRAY_TOGGLE_PET, "显示/隐藏桌宠")
         .separator()
         .text(TRAY_PAUSE_REMINDERS, "暂停提醒")
-        .text(TRAY_TOGGLE_BREAK, "开始/结束休息")
         .separator()
         .text(TRAY_QUIT, "退出")
         .build()?;
@@ -765,7 +809,6 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .text(TRAY_TOGGLE_WIDGETS, "显示/隐藏桌面状态卡")
         .text(TRAY_TOGGLE_PET, "显示/隐藏桌宠")
         .text(TRAY_PAUSE_REMINDERS, "暂停提醒")
-        .text(TRAY_TOGGLE_BREAK, "开始/结束休息")
         .separator()
         .text(TRAY_QUIT, "退出")
         .build()?;
@@ -778,28 +821,23 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
             handle_native_menu_action(app, event.id().as_ref());
         })
         .on_tray_icon_event(|tray, event| {
-            let should_show = matches!(
+            let should_toggle = matches!(
                 event,
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
                 }
-            ) || matches!(
-                event,
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                }
             );
-            if should_show {
-                show_menu_bar_window(tray.app_handle());
+            if should_toggle {
+                toggle_menu_bar_window(tray.app_handle());
             }
         });
 
-    if let Some(icon) = app.default_window_icon().cloned() {
-        tray = tray.icon(icon);
-    }
+    let status_icon = tauri::image::Image::from_bytes(include_bytes!(
+        "../../public/assets/StatusIcon.png"
+    ))?;
+    tray = tray.icon(status_icon);
 
     #[cfg(target_os = "macos")]
     {
@@ -955,6 +993,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            app.manage(SystemMonitorState::new());
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(desktop)]
@@ -972,6 +1011,11 @@ pub fn run() {
                     window.hide().ok();
                 }
             }
+            if window.label() == "widget-menu-bar" {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    window.hide().ok();
+                }
+            }
         })
         .on_menu_event(|app, event| {
             handle_native_menu_action(app, event.id().as_ref());
@@ -981,9 +1025,13 @@ pub fn run() {
             save_snapshot,
             export_snapshot,
             delete_all_data,
+            perform_menu_bar_action,
             quit_app,
             data_size,
             sample_activity,
+            sample_system_metrics,
+            drain_agent_events,
+            agent_event_inbox_path,
             permission_snapshot,
             app_icon,
             installation_snapshot,
