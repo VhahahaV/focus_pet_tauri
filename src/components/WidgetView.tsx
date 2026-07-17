@@ -12,7 +12,6 @@ import type {
   InputWorkloadSummary,
   StateDecision,
 } from "../core/types";
-import { SegmentedControl } from "./ui";
 import { defaultAppTheme, useDocumentTheme } from "../themes";
 
 type WidgetMode = "currentStatus" | "recentRhythm";
@@ -229,13 +228,7 @@ const CurrentStatusWidget = ({ payload, onDragStart }: { payload: WidgetPayload;
 };
 
 const RecentRhythmWidget = ({ payload, onDragStart }: { payload: WidgetPayload; onDragStart: () => void }) => {
-  const selectedWindow = selectedRhythmWindow(payload.selectedRecentRhythmWindowHours);
-  const [activeWindowHours, setActiveWindowHours] = useState<RhythmWindowHours>(selectedWindow);
-
-  useEffect(() => {
-    setActiveWindowHours(selectedWindow);
-  }, [selectedWindow]);
-
+  const activeWindowHours = selectedRhythmWindow(payload.selectedRecentRhythmWindowHours);
   const rhythm = payload.recentRhythms?.[activeWindowHours] ?? payload.inputTimeline;
   const stateDurations = rhythm.stateDurations;
   const focusSeconds = stateDurations.focus ?? 0;
@@ -272,9 +265,7 @@ const RecentRhythmWidget = ({ payload, onDragStart }: { payload: WidgetPayload; 
     <main className={`widget-card widget-rhythm movement-${payload.movementMode ?? "free"}`} onPointerDown={onDragStart}>
       <header className="widget-rhythm-header">
         <WidgetLabel title="最近节奏" state="focus" />
-        <div onPointerDown={(event) => event.stopPropagation()}>
-          <SegmentedControl className="widget-rhythm-switch" label="最近节奏时间窗口" value={activeWindowHours} options={rhythmWindowHours.map((hours) => ({ value: hours, label: `${hours}h` }))} onChange={setActiveWindowHours} />
-        </div>
+        <span className="widget-rhythm-range" aria-label={`统计范围近 ${activeWindowHours} 小时`}>近 {activeWindowHours} 小时</span>
       </header>
       <div className="widget-rhythm-body">
         <div
@@ -289,7 +280,7 @@ const RecentRhythmWidget = ({ payload, onDragStart }: { payload: WidgetPayload; 
         </div>
         <div className="widget-rhythm-copy">
           <strong>
-            近 {activeWindowHours} 小时{caption}
+            {caption}
           </strong>
           <div className="widget-rhythm-metrics">
             {metrics.map((metric) => (

@@ -673,3 +673,106 @@
 @media (max-width:700px){.today-focus-dashboard{grid-template-columns:1fr}.today-focus-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.today-focus-header>span,.today-mini-pet{display:none}}
 
 @media (prefers-reduced-motion:reduce){.system-usage-meter>span{transition:none}}
+
+/* Summary cards respond to their own width, not the outer window width. */
+.swift-focus-card,
+.system-monitor-card{padding-left:18px}
+
+.swift-focus-card::before,
+.system-monitor-card::before,
+.swift-focus-card .semantic-strip,
+.system-monitor-card .semantic-strip{display:none;content:none}
+
+.swift-focus-card{container:today-focus / inline-size}
+
+.today-focus-dashboard{
+  grid-template-columns:minmax(210px,.82fr) minmax(300px,1.18fr);
+  gap:16px;
+}
+
+.today-focus-stat-grid>span{overflow:hidden}
+
+@container today-focus (max-width:680px){
+  .swift-focus-card{min-height:220px}
+
+  .today-focus-dashboard{
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:auto auto;
+    gap:8px;
+    padding-top:8px;
+  }
+
+  .today-focus-hero{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    align-items:center;
+    gap:10px;
+  }
+
+  .today-focus-stat-grid{
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    grid-auto-rows:58px;
+    gap:6px;
+  }
+
+  .today-focus-stat-grid>span{padding:7px 8px;column-gap:5px}
+
+  .today-focus-stat-grid small{font-size:9px}
+
+  .today-focus-stat-grid strong{font-size:13px}
+
+  .today-top-app-icon{width:27px;height:27px;border-radius:7px}
+}
+
+@container today-focus (max-width:540px){
+  .swift-focus-card{min-height:220px}
+
+  .today-focus-stat-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+
+@container today-focus (max-width:340px){
+  .swift-focus-card{min-height:294px}
+
+  .today-focus-header>span{display:none}
+
+  .today-mini-pet{display:none}
+
+  .today-focus-hero{grid-template-columns:1fr}
+
+  .today-focus-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+/* The monitor is an equal-height peer of Today stance, so its modules consume
+   the full remaining card area instead of leaving an unused lower half. */
+.system-monitor-card{display:flex;flex-direction:column}
+
+.system-monitor-module-grid{
+  flex:1 1 auto;
+  min-height:0;
+  grid-auto-rows:minmax(62px,1fr);
+  align-content:stretch;
+  gap:6px;
+}
+
+.system-monitor-module{
+  height:100%;
+  grid-template-rows:auto minmax(6px,1fr) auto;
+  align-content:stretch;
+  padding:clamp(7px,.8vw,10px);
+}
+
+.system-monitor-module header{align-self:start}
+
+.system-monitor-module header strong{font-size:clamp(12px,1vw,15px)}
+
+.system-monitor-module .system-usage-meter{align-self:center;height:6px}
+
+.system-monitor-module>small{align-self:end;font-size:clamp(8px,.75vw,10px)}
+
+.module-thermal{grid-template-rows:auto 1fr}
+
+.module-thermal>small{align-self:end}
+
+.today-mini-pet-avatar.is-animated img{image-rendering:pixelated}
+
+@media (prefers-reduced-motion:reduce){.today-mini-pet-avatar.is-animated img{animation:none}}

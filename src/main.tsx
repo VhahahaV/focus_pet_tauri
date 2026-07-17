@@ -15,7 +15,7 @@ if (initialWidgetMode) {
   document.body.dataset.focusPetWidget = initialWidgetMode
 }
 
-if (initialWidgetMode === "petCompanion") {
+if (initialWidgetMode) {
   const transparentSurface = (element: HTMLElement) => {
     element.style.background = "transparent"
     element.style.backgroundColor = "transparent"

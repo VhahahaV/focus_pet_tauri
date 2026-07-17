@@ -53,6 +53,7 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
   await expect(page.getByText("专注占比")).toBeVisible();
   await expect(page.getByText("最长连贯")).toBeVisible();
   await expect(page.locator(".today-mini-pet img")).toBeAttached();
+  await expect(page.locator(".today-mini-pet-avatar")).toHaveAttribute("data-frame-count", /^\d+$/);
   await expect(page.locator(".today-top-app-stat .today-top-app-icon")).toBeVisible();
   await expect(page.getByText("已进入稳定工作")).toHaveCount(0);
   await expect(page.getByText(/App、输入和切换节奏/)).toHaveCount(0);
@@ -60,6 +61,10 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
   await expect(page.getByRole("radio", { name: "6h" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "24h" })).toBeVisible();
   await expect(page.getByText("App", { exact: true })).toHaveCount(0);
+  const summaryRails = await page.locator(".swift-focus-card, .system-monitor-card").evaluateAll((cards) =>
+    cards.map((card) => getComputedStyle(card, "::before").display),
+  );
+  expect(summaryRails.every((display) => display === "none")).toBe(true);
   await expect(page.locator(".input-bars")).toBeVisible();
   await expect(page.locator(".input-stack").first()).toBeVisible();
   await expect(page.locator(".input-stack .pointer-segment").first()).toBeAttached();
@@ -68,11 +73,13 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
     const topCardHeights = await page.locator(".today-top-grid > section").evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
     expect(Math.max(...topCardHeights) - Math.min(...topCardHeights)).toBeLessThanOrEqual(1);
     const focusColumns = await page.evaluate(() => {
-      const duration = document.querySelector(".today-focus-hero")?.getBoundingClientRect();
+      const hero = document.querySelector(".today-focus-hero")?.getBoundingClientRect();
       const stats = document.querySelector(".today-focus-stat-grid")?.getBoundingClientRect();
-      return { durationRight: duration?.right ?? 0, statsLeft: stats?.left ?? 0 };
+      if (!hero || !stats) return { overlaps: true };
+      const overlaps = hero.left < stats.right && hero.right > stats.left && hero.top < stats.bottom && hero.bottom > stats.top;
+      return { overlaps };
     });
-    expect(focusColumns.durationRight).toBeLessThanOrEqual(focusColumns.statsLeft);
+    expect(focusColumns.overlaps).toBe(false);
   }
   await expect(page.getByText("时间去哪了")).toBeVisible();
   const appListLayout = await page.locator(".today-app-usage-list").evaluate((list) => {
@@ -149,6 +156,34 @@ test("computer monitor can be customized and keeps the Today cards aligned", asy
   await expect(page.getByText(/休息/)).toHaveCount(0);
 });
 
+test("Today summary remains readable when the main window is narrowed", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await loadBuiltApp(page);
+  await expect(page.locator(".system-monitor-module-grid")).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const hero = document.querySelector(".today-focus-hero")?.getBoundingClientRect();
+    const stats = document.querySelector(".today-focus-stat-grid")?.getBoundingClientRect();
+    const tiles = [...document.querySelectorAll<HTMLElement>(".today-focus-stat-grid > span")];
+    const cards = [...document.querySelectorAll<HTMLElement>(".today-top-grid > section")];
+    const monitorCard = document.querySelector<HTMLElement>(".system-monitor-card");
+    const monitorGrid = document.querySelector<HTMLElement>(".system-monitor-module-grid");
+    const tileTops = tiles.map((tile) => tile.getBoundingClientRect().top);
+    const overlaps = Boolean(hero && stats && hero.left < stats.right && hero.right > stats.left && hero.top < stats.bottom && hero.bottom > stats.top);
+    return {
+      overlaps,
+      tilesFit: tiles.every((tile) => tile.scrollWidth <= tile.clientWidth && tile.scrollHeight <= tile.clientHeight),
+      heightDifference: cards.length > 1 ? Math.max(...cards.map((card) => card.offsetHeight)) - Math.min(...cards.map((card) => card.offsetHeight)) : 0,
+      monitorBottomGap: monitorCard && monitorGrid ? monitorCard.getBoundingClientRect().bottom - monitorGrid.getBoundingClientRect().bottom : Number.POSITIVE_INFINITY,
+      statRowSpread: tileTops.length > 0 ? Math.max(...tileTops) - Math.min(...tileTops) : Number.POSITIVE_INFINITY,
+    };
+  });
+  expect(layout.overlaps).toBe(false);
+  expect(layout.tilesFit).toBe(true);
+  expect(layout.heightDifference).toBeLessThanOrEqual(1);
+  expect(layout.monitorBottomGap).toBeLessThanOrEqual(18);
+  expect(layout.statRowSpread).toBeLessThanOrEqual(1);
+});
+
 test("timeline density scales with its window and hover colors follow every theme", async ({ page }) => {
   await loadBuiltApp(page);
   const dashboardNav = page.getByRole("navigation", { name: "Dashboard" });
@@ -182,7 +217,7 @@ test("timeline density scales with its window and hover colors follow every them
 });
 
 test("desktop widget views render without the main runtime shell", async ({ page }) => {
-  await page.setViewportSize({ width: 190, height: 190 });
+  await page.setViewportSize({ width: 204, height: 204 });
   await loadBuiltApp(page, "https://focus-pet.local/?widget=currentStatus");
   await expect(page.locator(".widget-status")).toBeVisible();
   await expect(page.getByText("当前状态")).toBeVisible();
@@ -197,22 +232,28 @@ test("desktop widget views render without the main runtime shell", async ({ page
       cardScrollWidth: card?.scrollWidth ?? 0,
       cardHeight: card?.clientHeight ?? 0,
       cardScrollHeight: card?.scrollHeight ?? 0,
+      cardLeft: card?.getBoundingClientRect().left ?? 0,
+      cardTop: card?.getBoundingClientRect().top ?? 0,
+      rootBackground: getComputedStyle(document.documentElement).backgroundColor,
     };
   });
-  expect(statusMetrics.pageWidth).toBeLessThanOrEqual(190);
-  expect(statusMetrics.pageHeight).toBeLessThanOrEqual(190);
+  expect(statusMetrics.pageWidth).toBeLessThanOrEqual(204);
+  expect(statusMetrics.pageHeight).toBeLessThanOrEqual(204);
   expect(statusMetrics.cardScrollWidth).toBeLessThanOrEqual(statusMetrics.cardWidth);
   expect(statusMetrics.cardScrollHeight).toBeLessThanOrEqual(statusMetrics.cardHeight);
+  expect(statusMetrics.cardLeft).toBeGreaterThan(0);
+  expect(statusMetrics.cardTop).toBeGreaterThan(0);
+  expect(statusMetrics.rootBackground).toBe("rgba(0, 0, 0, 0)");
 
-  await page.setViewportSize({ width: 380, height: 190 });
+  await page.setViewportSize({ width: 400, height: 204 });
   await loadBuiltApp(page, "https://focus-pet.local/?widget=recentRhythm");
   await expect(page.locator(".widget-rhythm")).toBeVisible();
   await expect(page.getByText("最近节奏")).toBeVisible();
-  await expect(page.getByRole("radio", { name: "4h" })).toBeVisible();
-  await expect(page.getByRole("radio", { name: "8h" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "4h" })).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "8h" })).toHaveCount(0);
+  await expect(page.getByLabel("统计范围近 4 小时")).toBeVisible();
   await expect(page.getByLabel("最近状态时间线")).toBeVisible();
-  await page.getByRole("radio", { name: "8h" }).click();
-  await expect(page.getByText("近 8 小时稳定")).toBeVisible();
+  await expect(page.getByText("稳定", { exact: true })).toBeVisible();
   const rhythmMetrics = await page.evaluate(() => {
     const card = document.querySelector(".widget-rhythm") as HTMLElement | null;
     return {
@@ -224,8 +265,8 @@ test("desktop widget views render without the main runtime shell", async ({ page
       cardScrollHeight: card?.scrollHeight ?? 0,
     };
   });
-  expect(rhythmMetrics.pageWidth).toBeLessThanOrEqual(380);
-  expect(rhythmMetrics.pageHeight).toBeLessThanOrEqual(190);
+  expect(rhythmMetrics.pageWidth).toBeLessThanOrEqual(400);
+  expect(rhythmMetrics.pageHeight).toBeLessThanOrEqual(204);
   expect(rhythmMetrics.cardScrollWidth).toBeLessThanOrEqual(rhythmMetrics.cardWidth);
   expect(rhythmMetrics.cardScrollHeight).toBeLessThanOrEqual(rhythmMetrics.cardHeight);
 

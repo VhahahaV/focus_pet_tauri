@@ -375,3 +375,76 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 .window-pet .pet-hover-actions button{min-height:44px;border-radius:10px;color:var(--text-secondary)}
 
 .window-pet .pet-hover-actions button:active{transform:scale(.96)}
+
+/* Desktop cards live inside transparent native windows. The inset keeps rounded
+   corners and theme shadows away from the WebView edge instead of exposing a
+   square page canvas around the card. */
+html[data-focus-pet-surface="widget"],
+body[data-focus-pet-surface="widget"],
+body[data-focus-pet-surface="widget"] #root{
+  width:100vw;
+  height:100vh;
+  min-width:0;
+  min-height:0;
+  overflow:hidden;
+  background:transparent;
+  background-color:transparent;
+  background-image:none;
+}
+
+body[data-focus-pet-surface="widget"]::before,
+body[data-focus-pet-surface="widget"]::after{display:none;content:none}
+
+.widget-card{
+  width:calc(100vw - 12px);
+  height:calc(100vh - 12px);
+  margin:6px;
+  padding:13px;
+}
+
+.widget-rhythm-header{gap:12px;padding-bottom:10px}
+
+.widget-rhythm-range{
+  color:var(--text-tertiary);
+  font-size:11px;
+  font-weight:760;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+
+.widget-rhythm-body{grid-template-columns:96px minmax(0,1fr);gap:16px}
+
+.widget-rhythm-copy{height:100px;gap:7px}
+
+.widget-rhythm-copy>strong{font-size:20px;letter-spacing:-.02em}
+
+.widget-rhythm-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding-top:0}
+
+.widget-rhythm-metrics span{
+  min-height:42px;
+  grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"value label";
+  align-items:center;
+  gap:6px;
+  padding:6px 9px;
+  font-size:9px;
+  text-align:right;
+}
+
+.widget-rhythm-metrics b{grid-area:value;font-size:12px}
+
+.widget-rhythm-timeline{height:12px;margin-top:auto}
+
+.widget-donut{width:96px;height:96px}
+
+.widget-donut::after{inset:18px}
+
+.widget-status-title{padding-top:14px}
+
+.widget-status-spacer{min-height:10px}
+
+@media (prefers-reduced-transparency:reduce){
+  html[data-focus-pet-surface="widget"],
+  body[data-focus-pet-surface="widget"],
+  body[data-focus-pet-surface="widget"] #root{background:transparent}
+}

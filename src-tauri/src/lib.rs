@@ -442,8 +442,8 @@ fn sync_widget_windows(
         "widget-current-status",
         "/?widget=currentStatus",
         current_status_visible,
-        190.0,
-        190.0,
+        204.0,
+        204.0,
         current_status_origin_x.zip(current_status_origin_y),
     )?;
     sync_widget_window(
@@ -451,8 +451,8 @@ fn sync_widget_windows(
         "widget-recent-rhythm",
         "/?widget=recentRhythm",
         recent_rhythm_visible,
-        380.0,
-        190.0,
+        400.0,
+        204.0,
         recent_rhythm_origin_x.zip(recent_rhythm_origin_y),
     )?;
     let pet_window_width = pet_size.max((pet_size + 190.0).min(330.0));

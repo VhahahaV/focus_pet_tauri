@@ -567,12 +567,12 @@
   :root[data-theme="constructivism"] :is(.command-button, .menu-action-button, .settings-icon-button, .pet-hover-actions button, .fp-stepper-actions button):hover { transform: none; }
 }
 
-/* Desktop pets are transparent system surfaces, never themed page canvases. */
-:root[data-focus-pet-widget="petCompanion"],
-:root[data-focus-pet-widget="petCompanion"] body,
-:root[data-focus-pet-widget="petCompanion"] body #root { width: 100vw; height: 100vh; min-width: 0; min-height: 0; background: transparent; background-color: transparent; background-image: none; }
-:root[data-focus-pet-widget="petCompanion"] body::before,
-:root[data-focus-pet-widget="petCompanion"] body::after { display: none; }
+/* Desktop widgets are transparent system surfaces, never themed page canvases. */
+:root[data-focus-pet-surface="widget"],
+:root[data-focus-pet-surface="widget"] body,
+:root[data-focus-pet-surface="widget"] body #root { width: 100vw; height: 100vh; min-width: 0; min-height: 0; background: transparent; background-color: transparent; background-image: none; }
+:root[data-focus-pet-surface="widget"] body::before,
+:root[data-focus-pet-surface="widget"] body::after { display: none; content: none; }
 
 :root[data-focus-pet-widget="petCompanion"][data-theme="neobrutalism"] .pet-hover-panel {
   border: 3px solid #111;

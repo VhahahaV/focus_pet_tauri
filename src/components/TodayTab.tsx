@@ -377,17 +377,41 @@ export const TodayTab = () => {
   const activeAppCount = summary.appUsage.filter((item) => item.seconds > 0).length;
   const topApp = summary.appUsage[0];
   const selectedPet = petPacks.find((record) => record.id === bundle.state.settings.pet.selectedPackID) ?? petPacks[0];
-  const miniPetURL = useMemo(() => {
+  const miniPetAnimation = useMemo(() => {
     const action = resolveDisplaySourceAction(
       bundle.state.currentPetIntent,
       selectedPet,
       bundle.state.settings.pet,
       {},
     ).action;
-    return sourceActionAssetsForID(selectedPet, action?.id)?.frameURLs[0]
-      ?? selectedPet?.previewURL
-      ?? `${import.meta.env.BASE_URL}assets/pet-pixel-cat.png`;
+    const fallback = selectedPet?.previewURL ?? `${import.meta.env.BASE_URL}assets/pet-pixel-cat.png`;
+    const frames = sourceActionAssetsForID(selectedPet, action?.id)?.frameURLs ?? [];
+    return {
+      frames: frames.length > 0 ? frames : [fallback],
+      fps: Math.min(6, Math.max(1, action?.fps ?? 6)),
+      key: `${selectedPet?.id ?? "fallback"}:${action?.id ?? "preview"}:${bundle.state.currentPetIntent.id}`,
+    };
   }, [bundle.state.currentPetIntent, bundle.state.settings.pet, selectedPet]);
+  const [miniPetFrameIndex, setMiniPetFrameIndex] = useState(0);
+
+  useEffect(() => {
+    setMiniPetFrameIndex(0);
+    miniPetAnimation.frames.forEach((source) => {
+      const image = new Image();
+      image.src = source;
+    });
+  }, [miniPetAnimation.key, miniPetAnimation.frames]);
+
+  useEffect(() => {
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (!bundle.state.settings.pet.animationEnabled || reducedMotion || miniPetAnimation.frames.length <= 1) return undefined;
+    const timer = window.setInterval(() => {
+      setMiniPetFrameIndex((index) => (index + 1) % miniPetAnimation.frames.length);
+    }, 1000 / miniPetAnimation.fps);
+    return () => window.clearInterval(timer);
+  }, [bundle.state.settings.pet.animationEnabled, miniPetAnimation.fps, miniPetAnimation.frames.length, miniPetAnimation.key]);
+
+  const miniPetURL = miniPetAnimation.frames[miniPetFrameIndex % miniPetAnimation.frames.length];
   const hourTicks = useMemo(() => timelineHourTicks(inputTimeline), [inputTimeline]);
   const [timelineHover, setTimelineHover] = useState<TimelineHoverDetail | null>(null);
 
@@ -455,7 +479,10 @@ export const TodayTab = () => {
                 <span>今日专注</span>
               </div>
               <div className="today-mini-pet" aria-label={`桌宠：${petIntentLabels[bundle.state.currentPetIntent.kind]}`}>
-                <span className="today-mini-pet-avatar"><img src={miniPetURL} alt="" draggable={false} /></span>
+                <span
+                  className={`today-mini-pet-avatar${miniPetAnimation.frames.length > 1 ? " is-animated" : ""}`}
+                  data-frame-count={miniPetAnimation.frames.length}
+                ><img src={miniPetURL} alt="" draggable={false} /></span>
                 <span className="today-mini-pet-copy">
                   <small>桌宠状态</small>
                   <strong>{petIntentLabels[bundle.state.currentPetIntent.kind]}</strong>
