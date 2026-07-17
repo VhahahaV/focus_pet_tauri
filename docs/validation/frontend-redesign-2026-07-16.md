@@ -76,3 +76,29 @@ modified. The native window was inspected at 1180×820. Review confirmed that
 Today has no redundant workspace header, its input bars remain readable,
 History insights sit beside the heatmap, and the desktop pet is transparent at
 rest with a compact icon toolbar. This completes the native sign-off.
+
+## Acceptance refinement — 2026-07-17
+
+- Today's two summary cards are 156 px tall at desktop width. The recovery
+  selector and action share a compact aligned row, leaving the activity window
+  above the fold.
+- Every input bucket now contains a green pointer segment and a purple keyboard
+  segment. Each channel is normalized against its own maximum before the two
+  segments are stacked, so neither input type hides the other.
+- The weekly heatmap is capped at 440 px and the History insight panel stretches
+  to the same bottom baseline as the chart and legend.
+- Today and History share one native application-icon loader with cached,
+  error-safe fallback behavior. Native History QA confirmed Edge, Cursor, and
+  WeChat icons instead of the former category initials.
+- Pet resources remain a horizontal shelf; action mapping, display behavior,
+  and position/appearance are page-level full-width rows. All Settings modules
+  use the same full-width reading rhythm.
+- The desktop companion hover toolbar contains only dashboard, rest, change
+  action, and pet settings, with larger hit targets.
+
+The final automated pass completed 33 Vitest tests, 12 Playwright cases,
+linting, frontend token verification, 20 Rust tests, and release `.app`/`.dmg`
+bundling. The native release was then cold-started after terminating the prior
+resident process. Computer Use screenshots verified Today and History at the
+real Tauri window size, including dual-color input bars, native icons, compact
+summary cards, and the aligned weekly heatmap/insight baseline.

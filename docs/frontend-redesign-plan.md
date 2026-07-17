@@ -650,6 +650,14 @@ the temporary validation bundles instead of being retained as repository
 history. `npm run verify:platform` is green for the Vitest, Playwright, Rust,
 and release `.app`/`.dmg` packaging checks.
 
+The 2026-07-17 acceptance refinement also makes every Pet display/appearance
+and Settings module a true full-width reading row, shortens both Today summary
+cards, stacks independently normalized keyboard and pointer input in each
+timeline column, uses native application icons in both Today and History, and
+reduces the companion hover toolbar to four high-frequency actions. Native QA
+was performed from a cold-started release process so LaunchServices could not
+reuse the previous bundle executable.
+
 Total: ~11–17 working days of focused frontend work.
 
 ## 7. Risks & guardrails

@@ -1,13 +1,14 @@
 import { BarChart3, CalendarDays, Clock3, Keyboard, MousePointer2, Percent, SquareStack, Zap } from "lucide-react";
 import { useMemo, useState, type CSSProperties, type PointerEvent } from "react";
 import { useFocusPet } from "../app/AppContext";
-import { categoryLabels, focusStateLabels } from "../core/labels";
+import { focusStateLabels } from "../core/labels";
 import { formatCount, formatDate, formatDuration, formatPercentage } from "../core/formatters";
 import { makeActivityHistorySnapshot, makeAttentionHistorySnapshot } from "../core/timeline";
 import type { AttentionDayBucket, FocusState, StateSegment } from "../core/types";
 import { secondsBetween } from "../core/utils";
 import { Heatmap, HourlyBars, type HeatmapCell } from "./charts";
 import { HoverCard, SegmentedControl, TogglePill } from "./ui";
+import { AppIcon } from "./AppIcon";
 
 const historyRanges = [3, 7, 15, 30, 60] as const;
 type HistoryRange = (typeof historyRanges)[number];
@@ -498,7 +499,7 @@ export const SessionsTab = () => {
                 {history.topApps.map((app, index) => (
                   <div className="activity-app-row" key={`${app.bundleID ?? app.appName}-${app.category}`}>
                     <em>{index + 1}</em>
-                    <span className={`category-dot category-${app.category}`}>{categoryLabels[app.category].title.slice(0, 1)}</span>
+                    <AppIcon className="activity-app-icon" appName={app.appName} bundleID={app.bundleID} category={app.category} />
                     <div>
                       <strong>{app.appName}</strong>
                       <i style={{ "--meter-width": `${Math.max(4, (app.averageSeconds / maxAppSeconds) * 100)}%` } as CSSProperties} />

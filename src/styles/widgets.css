@@ -375,3 +375,16 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 .window-pet .floating-pet-bubble{right:50%;bottom:calc(var(--pet-size) + 6px);max-width:170px;padding:5px 8px;border:1px solid rgb(125 169 218/0.34);border-radius:9px;background:rgb(249 252 255/0.96);box-shadow:0 5px 12px rgb(37 65 94/0.1);backdrop-filter:none;color:var(--text-secondary);font-size:10px;transform:translateX(50%)}
 
 .window-pet .floating-pet-bubble::after{display:none}
+
+/* Four high-frequency actions with comfortable desktop hit targets. */
+.pet-hover-actions{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+
+.pet-hover-actions button{min-height:36px;border-radius:9px}
+
+.window-pet .pet-hover-panel{width:min(232px,calc(100vw - 12px));gap:7px;padding:8px}
+
+.window-pet .pet-hover-actions{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding-top:7px}
+
+.window-pet .pet-hover-actions button{min-height:34px;border-radius:9px;color:var(--text-secondary)}
+
+.window-pet .pet-hover-actions button:active{transform:scale(.96)}

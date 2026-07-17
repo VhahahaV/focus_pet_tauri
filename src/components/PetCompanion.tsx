@@ -2,9 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useMemo, useState } from "react";
 import {
-  BellOff,
   Coffee,
-  EyeOff,
   Gauge,
   Keyboard,
   LayoutDashboard,
@@ -36,7 +34,7 @@ interface PetCompanionRendererProps {
 
 const fallbackPreviewURL = `${import.meta.env.BASE_URL}assets/pet-luo-xiaohei.png`;
 
-type PetCompanionAction = "open-dashboard" | "open-pet" | "toggle-break" | "pause-reminders" | "toggle-hidden";
+type PetCompanionAction = "open-dashboard" | "open-pet" | "toggle-break";
 
 const placementClass = (placement: PetPlacementMode): string => `placement-${placement}`;
 
@@ -50,10 +48,6 @@ const petActionToNativeMenuAction = (action: PetCompanionAction): NativeMenuActi
       return "open-pet";
     case "toggle-break":
       return "toggle-break";
-    case "pause-reminders":
-      return "pause-reminders";
-    case "toggle-hidden":
-      return "toggle-pet";
   }
 };
 
@@ -204,10 +198,8 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
           <div className="pet-hover-actions">
             <button type="button" title="打开面板" aria-label="打开桌宠面板" onClick={() => onAction?.("open-dashboard")}><LayoutDashboard size={14} /></button>
             <button type="button" title={breakActive ? "结束休息" : "开始休息"} aria-label={breakActive ? "桌宠结束休息" : "桌宠开始休息"} onClick={() => onAction?.("toggle-break")}><Coffee size={14} /></button>
-            <button type="button" title="暂停提醒" aria-label="桌宠暂停提醒" onClick={() => onAction?.("pause-reminders")}><BellOff size={14} /></button>
-            <button type="button" title="切换动作" aria-label="桌宠切换动作" onClick={cycleAction}><Shuffle size={14} /></button>
+            <button type="button" title="切换动作" aria-label="桌宠切换动作" onClick={cycleAction}><Shuffle size={16} /></button>
             <button type="button" title="桌宠设置" aria-label="打开桌宠设置" onClick={() => onAction?.("open-pet")}><Settings size={14} /></button>
-            <button type="button" title="隐藏桌宠" aria-label="隐藏桌宠" onClick={() => onAction?.("toggle-hidden")}><EyeOff size={14} /></button>
           </div>
         </div>
       ) : null}
@@ -227,12 +219,6 @@ export const PetCompanion = () => {
         break;
       case "toggle-break":
         actions.toggleBreak();
-        break;
-      case "pause-reminders":
-        actions.pauseReminders();
-        break;
-      case "toggle-hidden":
-        actions.togglePetHidden();
         break;
     }
   };

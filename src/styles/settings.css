@@ -496,3 +496,18 @@
 @media (max-width:760px){.pet-settings-shell{grid-template-columns:1fr}}
 
 @media (max-width:760px){.pet-settings-shell>.status-rest,.pet-settings-shell>.status-privacy{grid-column:1}}
+
+/* Each settings module is a full-width reading row; avoid half-empty desktop cards. */
+.swift-settings-page{grid-template-columns:minmax(0,1fr);gap:14px}
+
+.settings-content-panel,.settings-content-panel.settings-module-recognition,.settings-content-panel.settings-module-data{grid-column:1}
+
+/* Display behavior and appearance follow the same full-width rhythm as pack settings. */
+.pet-settings-shell{grid-template-columns:minmax(0,1fr)}
+
+.pet-settings-shell>.status-pet,
+.pet-settings-shell:has(>.status-focus)>.status-focus,
+.pet-settings-shell:has(>.status-focus)>.status-rest,
+.pet-settings-shell:has(>.status-focus)>.status-privacy,
+.pet-settings-shell>.status-rest,
+.pet-settings-shell>.status-privacy{grid-column:1/-1;grid-row:auto;position:static}

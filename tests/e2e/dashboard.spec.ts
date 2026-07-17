@@ -55,6 +55,11 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
   await expect(page.getByRole("radio", { name: "24h" })).toBeVisible();
   await expect(page.getByText("App", { exact: true })).toHaveCount(0);
   await expect(page.locator(".input-bars")).toBeVisible();
+  await expect(page.locator(".input-stack").first()).toBeVisible();
+  await expect(page.locator(".input-stack .pointer-segment").first()).toBeAttached();
+  await expect(page.locator(".input-stack .keyboard-segment").first()).toBeAttached();
+  const topCardHeights = await page.locator(".today-top-grid > section").evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
+  expect(Math.max(...topCardHeights)).toBeLessThanOrEqual((page.viewportSize()?.width ?? 1440) <= 560 ? 220 : 160);
   await expect(page.getByText("时间去哪了")).toBeVisible();
   await expect(page.locator(".today-app-meter-fill").first()).toBeVisible();
   expect(await page.locator(".today-app-meter-fill > span[class^='state-']").count()).toBeGreaterThan(0);
@@ -84,6 +89,7 @@ test("Swift-style shell and Today surface render", async ({ page }) => {
   await expect(page.getByRole("radio", { name: "60天" })).toBeVisible();
   await expect(page.getByRole("button", { name: "跳过周末" })).toBeVisible();
   await expect(page.getByText("日均应用活跃")).toBeVisible();
+  await expect(page.locator(".activity-app-icon").first()).toBeVisible();
   await expect(page.getByText("日均活跃输入")).toBeVisible();
   await page.locator(".fp-week-heatmap .heatmap-cell").first().hover();
   await expect(page.locator(".heatmap-hover-card")).toBeVisible();
@@ -209,6 +215,8 @@ test("settings expose all modules without a secondary navigation rail", async ({
   for (const title of ["桌面状态卡", "提醒", "识别", "权限", "数据", "关于"]) {
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
   }
+  const settingsWidths = await page.locator(".settings-content-panel").evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().width));
+  expect(Math.max(...settingsWidths) - Math.min(...settingsWidths)).toBeLessThanOrEqual(2);
   await expect(page.getByRole("button", { name: "当前状态卡" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "固定位置" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "自由拖动" })).toBeVisible();
@@ -252,4 +260,6 @@ test("pet settings expose hover and random action controls", async ({ page }) =>
   await expect(page.getByRole("button", { name: /悬浮状态弹窗/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /随机换动作/ })).toBeVisible();
   await expect(page.getByRole("radio", { name: "90 秒" })).toBeVisible();
+  const petSectionWidths = await page.locator(".pet-settings-section").evaluateAll((sections) => sections.map((section) => section.getBoundingClientRect().width));
+  expect(Math.max(...petSectionWidths) - Math.min(...petSectionWidths)).toBeLessThanOrEqual(2);
 });

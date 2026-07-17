@@ -529,3 +529,58 @@
 @media (max-width:980px){.today-top-grid{grid-template-columns:1fr}}
 
 @media (max-width:980px){.today-insights-grid{grid-template-columns:1fr}}
+
+/* Keep the summary cards compact so the activity window remains above the fold. */
+.today-top-grid{min-height:156px}
+
+.swift-focus-card,.swift-break-card{height:156px;min-height:156px}
+
+.swift-focus-card{padding:14px 18px 12px 26px}
+
+.focus-card-main{gap:14px}
+
+.focus-card-main h2{margin-top:1px;font-size:24px;line-height:1.08}
+
+.focus-card-main>div:first-child>p:last-child{margin-top:4px;line-height:1.35}
+
+.focus-duration strong{font-size:30px}
+
+.focus-duration span,.focus-duration em{margin-top:3px;font-size:11px}
+
+.today-chip-row{left:26px;right:18px;bottom:12px;justify-content:flex-start}
+
+.swift-break-card{display:grid;grid-template-columns:minmax(106px,.75fr) minmax(0,1.4fr);grid-template-areas:"header selector" "main action";align-items:center;gap:8px 12px;padding:14px 16px 14px 26px}
+
+.break-header{grid-area:header;gap:8px;font-size:15px}
+
+.break-main{grid-area:main;margin:0;justify-content:flex-start;gap:12px}
+
+.break-main>strong{font-size:22px;white-space:nowrap}
+
+.break-ring{width:40px;height:40px;flex:0 0 auto}
+
+.minute-selector,.break-progress-panel{grid-area:selector;width:100%;margin:0}
+
+.minute-selector{gap:4px;padding:3px}
+
+.minute-selector button{height:30px}
+
+.break-progress-panel{height:36px}
+
+.start-rest-button{grid-area:action;margin:0;height:38px;min-height:38px}
+
+.input-bars>span.input-stack{bottom:8px;height:calc(100% - 8px);display:flex;flex-direction:column-reverse;justify-content:flex-start;overflow:hidden;border-radius:3px 3px 1px 1px;background:transparent;box-shadow:0 2px 5px color-mix(in srgb,var(--chart-pointer) 14%,transparent)}
+
+.input-bars>span.input-stack>i{position:static;width:100%;height:var(--segment-height);min-height:0;flex:0 0 var(--segment-height);border-radius:0}
+
+.input-bars>span.input-stack>.pointer-segment{background:var(--chart-pointer)}
+
+.input-bars>span.input-stack>.keyboard-segment{background:var(--chart-kbd)}
+
+.input-bars>span.input-stack>.pointer-segment:first-child{border-radius:0 0 1px 1px}
+
+.input-bars>span.input-stack>.keyboard-segment:last-child{border-radius:3px 3px 0 0}
+
+@media (max-width:560px){.swift-focus-card,.swift-break-card{height:auto;min-height:172px}}
+
+@media (max-width:560px){.swift-break-card{grid-template-columns:1fr;grid-template-areas:"header" "main" "selector" "action"}}

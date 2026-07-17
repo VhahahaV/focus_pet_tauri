@@ -1,5 +1,5 @@
 import { ArrowRight, Clock3, Coffee, Keyboard, MousePointer2, RefreshCw, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { categoryLabels, focusStateLabels } from "../core/labels";
 import { formatClock, formatCount, formatDuration, formatPercentage } from "../core/formatters";
@@ -17,35 +17,11 @@ import type {
   StateSegment,
 } from "../core/types";
 import { secondsBetween } from "../core/utils";
-import { nativeAppIcon } from "../store/native";
 import { FilledPieChart, ProgressRing } from "./charts";
 import { Badge, HoverCard, PrimaryButton, SegmentedControl, SemanticCard } from "./ui";
+import { AppIcon } from "./AppIcon";
 
 const timelineWindows = [2, 4, 6, 8, 12, 24] as const;
-
-const appIconCache = new Map<string, string | null>();
-
-const NativeAppIcon = ({ appName, bundleID, category }: { appName: string; bundleID?: string; category: ActivityCategory }) => {
-  const key = (bundleID?.trim() || appName.trim()).toLowerCase();
-  const [iconURL, setIconURL] = useState<string | null | undefined>(() => appIconCache.get(key));
-  useEffect(() => {
-    let active = true;
-    if (appIconCache.has(key)) {
-      setIconURL(appIconCache.get(key));
-      return () => { active = false; };
-    }
-    void nativeAppIcon(bundleID, appName).then((url) => {
-      appIconCache.set(key, url ?? null);
-      if (active) setIconURL(url ?? null);
-    });
-    return () => { active = false; };
-  }, [appName, bundleID, key]);
-  return iconURL ? (
-    <span className="today-app-icon"><img src={iconURL} alt="" /></span>
-  ) : (
-    <span className={`today-app-icon fallback category-${category}`}>{appName.trim().slice(0, 1).toUpperCase()}</span>
-  );
-};
 
 const stateChartColors: Record<FocusState, string> = {
   focus: "var(--focus-500)",
@@ -382,7 +358,7 @@ const TodayInsightsGrid = ({ snapshot }: { snapshot: TodayInsightSnapshot }) => 
             {snapshot.appItems.slice(0, 6).map((item, index) => (
               <div className="today-app-usage-row" key={item.id}>
                 <em>{index + 1}</em>
-                <NativeAppIcon appName={item.appName} bundleID={item.bundleID} category={item.category} />
+                <AppIcon className="today-app-icon" appName={item.appName} bundleID={item.bundleID} category={item.category} />
                 <div className="today-app-name">
                   <strong>{item.appName}</strong>
                   <small>{categoryLabels[item.category].title}</small>
@@ -601,24 +577,27 @@ export const TodayTab = () => {
             ))}
             {inputTimeline.inputBars.map((bar, index) => {
               const count = bar.keyboardCount + bar.pointerCount;
-              const height = inputTimeline.maxInputCount > 0 ? (count / inputTimeline.maxInputCount) * 100 : 2;
+              const keyboardHeight = (bar.keyboardCount / Math.max(1, inputTimeline.maxKeyboardCount)) * 50;
+              const pointerHeight = (bar.pointerCount / Math.max(1, inputTimeline.maxPointerCount)) * 50;
               const bucketWidth = Math.max(0, (bar.endProgress - bar.startProgress) * 100);
               const barWidth = Math.max(0.1, bucketWidth * 0.56);
               const barOffset = Math.max(0, (bucketWidth - barWidth) / 2);
               return (
                 <span
-                  className={bar.keyboardCount >= bar.pointerCount ? "green" : "purple"}
+                  className="input-stack"
                   key={index}
                   onFocus={() => setTimelineHover(inputHoverDetail(bar))}
                   onPointerEnter={() => setTimelineHover(inputHoverDetail(bar))}
                   style={{
                     "--timeline-x": `${bar.startProgress * 100 + barOffset}%`,
                     "--timeline-width": `${barWidth}%`,
-                    "--timeline-height": `${Math.max(7, height)}%`,
                     "--timeline-opacity": count > 0 ? 1 : 0.28,
                   } as CSSProperties}
                   tabIndex={0}
-                />
+                >
+                  <i className="pointer-segment" style={{ "--segment-height": `${pointerHeight}%` } as CSSProperties} />
+                  <i className="keyboard-segment" style={{ "--segment-height": `${keyboardHeight}%` } as CSSProperties} />
+                </span>
               );
             })}
           </div>
