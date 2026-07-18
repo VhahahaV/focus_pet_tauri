@@ -101,6 +101,11 @@ export const nativeCurrentLogFile = async (openFile: boolean): Promise<string | 
   return invoke<string>("current_log_file", { openFile });
 };
 
+export const nativeAppendLogEntry = async (entry: Record<string, unknown>): Promise<string | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<string>("append_log_entry", { entry });
+};
+
 export const nativeImportPetPack = async (): Promise<PetPackRecord[] | undefined> => {
   if (!isTauriRuntime()) return undefined;
   const imported = await invoke<PetPackRecord[] | undefined>("choose_and_import_pet_pack");

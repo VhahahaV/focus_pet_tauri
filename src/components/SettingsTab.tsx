@@ -524,7 +524,7 @@ const PermissionSettings = () => {
     {
       id: "notifications",
       title: "通知",
-      subtitle: "系统提醒横幅",
+      subtitle: isWindows ? "系统提醒横幅（可能受 Windows 勿扰模式抑制）" : "系统提醒横幅",
       status: snapshot.notifications,
       Icon: Bell,
       destination: "notifications",

@@ -319,6 +319,15 @@ fn current_log_file(app: tauri::AppHandle, open_file: bool) -> Result<String, St
 }
 
 #[tauri::command]
+fn append_log_entry(app: tauri::AppHandle, entry: Value) -> Result<String, String> {
+    FocusPetStore::new(&app)
+        .map_err(|error| error.to_string())?
+        .append_log_entry(&entry)
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn choose_and_import_pet_pack(
     app: tauri::AppHandle,
 ) -> Result<Option<Vec<ImportedPetPack>>, String> {
@@ -364,8 +373,10 @@ fn delete_pet_pack(app: tauri::AppHandle, id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn deliver_notification(title: String, body: String) -> bool {
-    notifications::deliver(&title, &body)
+async fn deliver_notification(title: String, body: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || notifications::deliver(&title, &body))
+        .await
+        .unwrap_or(false)
 }
 
 fn application_bundle_path() -> PathBuf {
@@ -1074,6 +1085,7 @@ pub fn run() {
             data_storage_path,
             open_data_folder,
             current_log_file,
+            append_log_entry,
             choose_and_import_pet_pack,
             import_pet_pack_from_path,
             list_pet_packs,

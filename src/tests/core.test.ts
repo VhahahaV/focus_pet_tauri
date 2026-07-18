@@ -21,7 +21,7 @@ import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
 import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWindows";
 import { cyclePlayableSourceAction, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
-import { pruneSnapshotForRetention } from "../store/localStore";
+import { emptySnapshot, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -794,6 +794,64 @@ describe("Focus Pet migrated core", () => {
     expect(pruned.snapshot.inputActivity[0].keyboardCount).toBe(2);
     expect(pruned.snapshot.focusSessions.map((session) => session.taskName)).toEqual(["recent"]);
     expect(pruned.snapshot.nudges.map((nudge) => nudge.id)).toEqual(["recent-nudge"]);
+  });
+
+  it("removes private app and task metadata before a redacted native export", () => {
+    const start = "2026-07-18T09:00:00.000Z";
+    const end = "2026-07-18T09:10:00.000Z";
+    const session = {
+      ...finishFocusSession(makeFocusSession("Secret project", 25, new Date(start)), "completed", new Date(end)),
+      mainAppName: "Secret Editor",
+    };
+    const redacted = redactedSnapshot({
+      ...emptySnapshot(),
+      classificationRules: [
+        { id: "secret-rule", matchKind: "windowTitle", pattern: "Secret project", category: "work", priority: 0 },
+      ],
+      stateSegments: [
+        {
+          id: "secret-state",
+          start,
+          end,
+          state: "focus",
+          appName: "Secret Editor",
+          bundleID: "com.example.secret",
+          category: "work",
+          titleStored: true,
+          titleDisplay: "Secret project - Draft",
+          source: ["frontmostApplication"],
+        },
+      ],
+      appUsage: [
+        { id: "secret-usage", start, end, appName: "Secret Editor", bundleID: "com.example.secret", category: "work" },
+      ],
+      focusSessions: [session],
+      nudges: [
+        {
+          id: "secret-nudge",
+          time: end,
+          reason: "distractedOverThreshold",
+          state: "distracted",
+          appName: "Secret Game",
+          category: "entertainment",
+          petIntent: "nudgeGentle",
+          channel: "desktop",
+          cooldownSeconds: 600,
+          message: "return to focus",
+        },
+      ],
+    });
+
+    expect(redacted.classificationRules).toEqual([]);
+    expect(redacted.stateSegments[0]).toMatchObject({
+      appName: "工作工具",
+      titleStored: false,
+      bundleID: undefined,
+      titleDisplay: undefined,
+    });
+    expect(redacted.appUsage[0]).toMatchObject({ appName: "工作工具", bundleID: undefined });
+    expect(redacted.focusSessions[0]).toMatchObject({ taskName: "专注任务", mainAppName: undefined });
+    expect(redacted.nudges[0].appName).toBe("容易分心");
   });
 
   it("builds a compact desktop pet payload without persisted history", () => {

@@ -30,7 +30,10 @@ if (Get-Command New-BurntToastNotification -ErrorAction SilentlyContinue) {{
   $n.BalloonTipText = $body
   $n.Visible = $true
   $n.ShowBalloonTip(3500)
-  Start-Sleep -Milliseconds 800
+  # Keep the NotifyIcon alive for the requested display interval. Disposing it
+  # after only a few hundred milliseconds makes the fallback disappear before
+  # Windows has time to surface the balloon on busy systems.
+  Start-Sleep -Milliseconds 4000
   $n.Dispose()
   'sent'
 }}

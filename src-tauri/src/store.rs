@@ -85,6 +85,18 @@ impl FocusPetStore {
         Ok(path)
     }
 
+    pub fn append_log_entry(&self, entry: &Value) -> io::Result<PathBuf> {
+        self.prepare_store_for_access(true)?;
+        let path = self
+            .logs_dir()
+            .join(format!("focus-pet-{}.log", Utc::now().format("%Y-%m-%d")));
+        let serialized = serde_json::to_string(entry).map_err(io::Error::other)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        writeln!(file, "{serialized}")?;
+        file.flush()?;
+        Ok(path)
+    }
+
     pub fn pet_packs_dir(&self) -> PathBuf {
         self.root.join("PetPacks")
     }
@@ -143,7 +155,11 @@ impl FocusPetStore {
         let path = self
             .root
             .join(format!("{}-{}.json", prefix, Utc::now().timestamp()));
-        let bytes = serde_json::to_vec_pretty(snapshot).map_err(io::Error::other)?;
+        let mut exported = snapshot.clone();
+        if redacted {
+            redact_snapshot(&mut exported);
+        }
+        let bytes = serde_json::to_vec_pretty(&exported).map_err(io::Error::other)?;
         fs::write(&path, bytes)?;
         Ok(path)
     }
@@ -593,6 +609,74 @@ fn migrate_store_root_if_needed(source: &Path, destination: &Path) -> io::Result
     Ok(destination.join("schema.json").is_file())
 }
 
+fn redacted_app_name(category: Option<&str>) -> &'static str {
+    match category {
+        Some("work") => "工作工具",
+        Some("entertainment") => "容易分心",
+        Some("ignore") => "不参与判断",
+        _ => "旧数据",
+    }
+}
+
+fn redact_snapshot(snapshot: &mut Value) {
+    let Some(root) = snapshot.as_object_mut() else {
+        return;
+    };
+    if let Some(privacy) = root
+        .get_mut("settings")
+        .and_then(Value::as_object_mut)
+        .and_then(|settings| settings.get_mut("privacy"))
+        .and_then(Value::as_object_mut)
+    {
+        privacy.insert("storeRawTitle".to_string(), json!(false));
+        privacy.insert("storeOnlyCategoryResult".to_string(), json!(true));
+    }
+    root.insert("classificationRules".to_string(), json!([]));
+    for (key, strip_title) in [("stateSegments", true), ("appUsage", false)] {
+        if let Some(items) = root.get_mut(key).and_then(Value::as_array_mut) {
+            for item in items {
+                if let Some(object) = item.as_object_mut() {
+                    let category = object
+                        .get("category")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    object.insert(
+                        "appName".to_string(),
+                        json!(redacted_app_name(category.as_deref())),
+                    );
+                    object.remove("bundleID");
+                    if strip_title {
+                        object.insert("titleStored".to_string(), json!(false));
+                        object.remove("titleDisplay");
+                    }
+                }
+            }
+        }
+    }
+    if let Some(items) = root.get_mut("focusSessions").and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("taskName".to_string(), json!("专注任务"));
+                object.remove("mainAppName");
+            }
+        }
+    }
+    if let Some(items) = root.get_mut("nudges").and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                let category = object
+                    .get("category")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                object.insert(
+                    "appName".to_string(),
+                    json!(redacted_app_name(category.as_deref())),
+                );
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn migrate_store_contents_if_needed(source: &Path, destination: &Path) -> io::Result<bool> {
     if source == destination
@@ -795,6 +879,57 @@ mod tests {
         assert!(!destination.join("uninstall.exe").exists());
         assert!(old_install_dir.join("schema.json").is_file());
         let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn diagnostic_log_entries_are_persisted_as_json_lines() {
+        let root = temp_store_root("diagnostic-log-entry");
+        let store = FocusPetStore::from_root(root.clone());
+        let path = store
+            .append_log_entry(&json!({
+                "time": "2026-07-18T09:00:00Z",
+                "state": "focus",
+                "app": "Editor"
+            }))
+            .unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(contents.contains(r#""state":"focus""#));
+        assert!(contents.ends_with('\n'));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn redacted_native_exports_strip_private_fields() {
+        let root = temp_store_root("redacted-native-export");
+        let store = FocusPetStore::from_root(root.clone());
+        let path = store
+            .export_snapshot(
+                &json!({
+                    "settings": { "privacy": { "storeRawTitle": true, "storeOnlyCategoryResult": false } },
+                    "classificationRules": [{ "pattern": "Secret" }],
+                    "stateSegments": [{
+                        "appName": "Secret Editor",
+                        "bundleID": "com.example.secret",
+                        "category": "work",
+                        "titleStored": true,
+                        "titleDisplay": "Secret project"
+                    }],
+                    "appUsage": [{ "appName": "Secret Editor", "bundleID": "com.example.secret", "category": "work" }],
+                    "focusSessions": [{ "taskName": "Secret project", "mainAppName": "Secret Editor" }],
+                    "nudges": [{ "appName": "Secret Game", "category": "entertainment" }]
+                }),
+                true,
+            )
+            .unwrap();
+        let exported: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(exported["classificationRules"], json!([]));
+        assert_eq!(exported["stateSegments"][0]["appName"], json!("工作工具"));
+        assert!(exported["stateSegments"][0].get("bundleID").is_none());
+        assert!(exported["stateSegments"][0].get("titleDisplay").is_none());
+        assert_eq!(exported["focusSessions"][0]["taskName"], json!("专注任务"));
+        assert!(exported["focusSessions"][0].get("mainAppName").is_none());
+        assert_eq!(exported["nudges"][0]["appName"], json!("容易分心"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "windows")]

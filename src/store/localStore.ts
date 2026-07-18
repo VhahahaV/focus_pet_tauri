@@ -120,9 +120,12 @@ export const saveSnapshot = async (snapshot: LocalStoreSnapshot): Promise<boolea
 
 export const exportSnapshot = async (snapshot: LocalStoreSnapshot, redacted: boolean): Promise<string> => {
   const retained = pruneSnapshotForRetention(snapshot).snapshot;
-  const nativeURL = await nativeExportSnapshot(retained, redacted).catch(() => undefined);
+  // Redact before crossing the native boundary so every caller gets identical
+  // browser/native semantics; Rust repeats the transform as defense in depth.
+  const exported = redacted ? redactedSnapshot(retained) : retained;
+  const nativeURL = await nativeExportSnapshot(exported, redacted).catch(() => undefined);
   if (nativeURL) return nativeURL;
-  const blob = new Blob([JSON.stringify(redacted ? redactedSnapshot(retained) : retained, null, 2)], {
+  const blob = new Blob([JSON.stringify(exported, null, 2)], {
     type: "application/json",
   });
   return URL.createObjectURL(blob);

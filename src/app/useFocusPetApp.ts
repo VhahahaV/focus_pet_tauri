@@ -20,6 +20,7 @@ import type { PetPackRecord } from "../resources/petPack";
 import { deleteAllData, emptySnapshot, exportSnapshot, loadSnapshot, pruneSnapshotForRetention, saveSnapshot } from "../store/localStore";
 import {
   nativeActivitySample,
+  nativeAppendLogEntry,
   nativeDrainAgentEvents,
   nativeDataSize,
   nativeDataStoragePath,
@@ -89,7 +90,7 @@ export interface FocusPetAppController {
     copyDataPath: () => Promise<void>;
     openCurrentLogFile: () => Promise<void>;
     copyLogPath: () => Promise<void>;
-    writeDiagnosticsLogSnapshot: () => void;
+    writeDiagnosticsLogSnapshot: () => Promise<void>;
     refreshPetPacks: () => Promise<void>;
     importPetPack: () => Promise<void>;
     importPetPackFromPath: (path: string) => Promise<void>;
@@ -873,8 +874,22 @@ export const useFocusPetApp = (): FocusPetAppController => {
         }
         mutate((state) => ({ ...state, statusMessage: path ? "已复制日志文件路径。" : "当前环境无法复制日志路径。" }));
       },
-      writeDiagnosticsLogSnapshot() {
+      async writeDiagnosticsLogSnapshot() {
+        const state = bundle.state;
         mutate(runtimeActions.writeDiagnosticSnapshot);
+        if (!state.settings.logging.isEnabled) return;
+        const path = await nativeAppendLogEntry({
+          kind: "diagnostic",
+          time: new Date().toISOString(),
+          state: state.currentDecision.state,
+          app: state.currentSnapshot.appName,
+          reason: state.currentDecision.reason,
+          inputMonitoringStatus: state.permissionSnapshot.inputMonitoring,
+        }).catch(() => undefined);
+        mutate((current) => ({
+          ...current,
+          statusMessage: path ? "诊断快照已写入本机日志。" : "诊断日志写入失败，请检查数据目录权限。",
+        }));
       },
       async refreshPetPacks() {
         await refreshPetPacks();

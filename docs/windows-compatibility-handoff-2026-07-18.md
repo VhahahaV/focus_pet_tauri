@@ -2,7 +2,7 @@
 
 ## 当前结论
 
-`focus_pet_tauri` 的 Windows 主阻塞项已经解决：桌宠可以显示和切换位置，输入与前台切换事件可以持续采集，GPU 显示真实 PDH 数据，数据目录与安装目录已隔离，NSIS 安装版可以启动并保留 XiaoDai 资源和用户历史。
+`focus_pet_tauri` 的 Windows 主阻塞项已经解决：桌宠可以显示和切换位置，输入与前台切换事件可以持续采集，GPU 显示真实 PDH 数据，数据目录与安装目录已隔离，NSIS 安装版可以启动并保留 XiaoDai 资源和用户历史。继续回归时发现并修复了原生脱敏导出仍包含私密字段、诊断按钮未写入本机日志两个问题。
 
 - 工作分支：`codex/windows-compatibility`
 - 基线提交：`5d4006c`（`Polish dashboard cards and desktop widgets`）
@@ -109,6 +109,17 @@ Loader 校验：
 - 验证脚本只在运行 npm 包装命令时使用 shell，不再让全部 Windows 子进程强制 `shell: true`。
 - 修复 `GetLastInputInfo` 32 位 tick 回绕验证。
 - 验证并保留 VBScript/WiX 打包前置条件。
+- Windows 通知 fallback 会保持 NotifyIcon 到完整显示时长，通知命令改到阻塞线程执行，避免 4 秒 PowerShell fallback 卡住 Tauri IPC。
+- UI 明确提示 Windows 勿扰模式可能抑制系统横幅。本机实测通知命令成功返回，但通知中心显示“勿扰模式已开启”，因此当前环境没有显示 Focus Pet 横幅；应用没有擅自关闭系统勿扰设置。
+
+### 7. 脱敏导出与诊断日志
+
+- 修复 Tauri 原生脱敏导出：脱敏转换现在发生在调用 Rust 写文件之前，而不是只用于浏览器 Blob fallback。
+- Rust `export_snapshot` 同样执行服务端脱敏，形成前端预处理与原生写盘的双重保护；即使未来调用方漏做转换，也不会把规则、标题、bundle ID、真实应用名或任务名写入脱敏文件。
+- 安装版生成的最新脱敏文件已验证：规则数 0、`storeRawTitle: false`、`storeOnlyCategoryResult: true`、bundle ID 0、保留标题 0、异常真实应用名 0、私密专注任务名 0。
+- 完整导出和脱敏导出都会写入 `Focus Pet Data`，并能在 UI 显示“打开最近导出”。
+- 新增 `append_log_entry` Tauri 接口；“写入诊断”现在会向每日 `focus-pet-YYYY-MM-DD.log` 追加 JSON Lines，而不再只写 WebView 控制台。
+- 安装版实测日志条目包含 kind、time、state、app、reason 和输入监控状态，文件可从日志目录和“打开日志”入口访问。
 
 ## XiaoDaiLocal 资源包验证
 
@@ -139,10 +150,10 @@ Loader 校验：
 | `git diff --check` | 通过，仅有 Git 的 LF/CRLF 提示 |
 | TypeScript build | 通过 |
 | Oxlint | 通过，0 条错误 |
-| Vitest | 3 个文件、37 个测试全部通过 |
+| Vitest | 3 个文件、38 个测试全部通过 |
 | Playwright | desktop/mobile 共 18 个测试全部通过 |
 | `cargo fmt --check` | 通过 |
-| Rust release / gnullvm | 28 个测试全部通过 |
+| Rust release / gnullvm | 30 个测试全部通过 |
 | 原生适配验证 | 输入、前台进程、idle、通知 helper、原生对话框全部通过 |
 | 打包 preflight | 通过，包含 VBScript |
 
@@ -151,17 +162,17 @@ Loader 校验：
 ### NSIS
 
 - 路径：`src-tauri/target-gnullvm/release/bundle/nsis/Focus Pet_0.1.0_x64-setup.exe`
-- 大小：7,472,200 字节
-- 时间：2026-07-18 16:51:20
-- SHA-256：`5D246472EE76BCF131DDCF9F8845C67D89EFAE683CEF115E6E3228E1EEC288D5`
+- 大小：7,480,799 字节
+- 时间：2026-07-18 18:11:41
+- SHA-256：`524F74E2763F37DDDB357E4FD34E4BBD4348FCA76834F7E8EBFD8A746818A265`
 - 状态：安装、启动、桌宠、实时监控、卸载数据保留、重新安装均已通过。
 
 ### MSI
 
 - 路径：`src-tauri/target-gnullvm/release/bundle/msi/Focus Pet_0.1.0_x64_en-US.msi`
-- 大小：8,896,512 字节
-- 时间：2026-07-18 16:51:06
-- SHA-256：`137372868F61239AFFF6CC59FB2FF0C4FBB6ED32DCFA9F80CBCF024E50682F63`
+- 大小：8,908,800 字节
+- 时间：2026-07-18 18:11:28
+- SHA-256：`F0ACDAF3D3577B070B9D42CD2CBDAB6A988FD5C6C1D76E66F57A84F31DC53325`
 - 状态：构建通过。当前 MSI 为按机器安装，本机无管理员提权权限；静默安装返回 1603，日志中的精确原因是错误 1925（权限不足）。需要在管理员终端或干净 VM 中完成最终安装回归。
 
 ## 真实 UI 已验证范围
@@ -172,15 +183,17 @@ Loader 校验：
 - `current-status` 与 `recent-rhythm` 两种桌面卡均可创建、渲染且保持唯一实例；测试后已全部隐藏。
 - 桌宠在主程序运行期间不阻塞监控和存储。
 - NSIS 安装版最终状态为一个主窗口和一个桌宠窗口，无缺 DLL 错误弹窗。
+- 数据目录、日志目录、完整导出、脱敏导出和 JSON Lines 诊断日志已在安装版验证。
+- Windows 通知测试命令完成，但当前系统“勿扰模式”开启；通知中心没有记录 Focus Pet 横幅，此项需在关闭勿扰模式的测试机复验。
 
 ## 仍未完成的工作（后续优先级）
 
 ### P0：需要继续做真实 Windows 回归
 
 1. 托盘菜单全链路：重新打开主窗口、页面跳转、桌宠/小组件开关、休息、提醒暂停和退出。
-2. 测试通知真实进入 Windows 通知中心，并验证通知设置跳转；不要自动修改系统隐私策略。
+2. 在关闭 Windows 勿扰模式的测试机验证通知横幅和通知中心记录，并验证通知设置跳转；不要自动修改系统隐私策略。
 3. 小组件拖动、固定、位置跨重启持久化。
-4. 数据导出、日志目录、当前日志和“清理数据”接口；清理必须只在临时测试数据上验证。
+4. “清理数据”接口尚未在当前用户的真实历史上执行；必须改用临时用户或隔离数据根目录后验证。完整/脱敏导出、日志目录、当前日志和诊断写入已经通过。
 5. 长时间监控：空闲恢复、锁屏/解锁、32 位 tick 回绕附近行为、钩子线程异常恢复。
 6. 在管理员终端或干净 Windows VM 安装 MSI，并复验 loader、启动、卸载和数据保留。
 
@@ -200,4 +213,4 @@ Loader 校验：
 
 ## 继续开发建议
 
-下一轮从托盘、通知和数据导出/清理接口开始，再做锁屏长稳与 23 个桌宠动作目视验收。桌宠不显示、IPC 停滞、输入信号缺失、GPU 假 0、数据目录与安装目录冲突、NSIS 缺 WebView2Loader 已不再是阻塞项。
+下一轮从托盘菜单、隔离环境清理数据、关闭勿扰模式后的通知回归开始，再做锁屏长稳与 23 个桌宠动作目视验收。桌宠不显示、IPC 停滞、输入信号缺失、GPU 假 0、数据目录与安装目录冲突、NSIS 缺 WebView2Loader、原生脱敏泄露和诊断日志空写已不再是阻塞项。
