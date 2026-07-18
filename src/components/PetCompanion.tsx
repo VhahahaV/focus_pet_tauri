@@ -494,15 +494,24 @@ export const PetCompanionWindow = () => {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return undefined;
+    let disposed = false;
     let unlistenState: (() => void) | undefined;
     let unlistenPacks: (() => void) | undefined;
-    void listen<PetCompanionViewState>("focus-pet-companion-state", (event) => setState(event.payload)).then((dispose) => {
-      unlistenState = dispose;
-    });
-    void listen<PetPackRecord[]>("focus-pet-companion-packs", (event) => setPetPacks(event.payload)).then((dispose) => {
-      unlistenPacks = dispose;
+    void Promise.all([
+      listen<PetCompanionViewState>("focus-pet-companion-state", (event) => setState(event.payload)),
+      listen<PetPackRecord[]>("focus-pet-companion-packs", (event) => setPetPacks(event.payload)),
+    ]).then(async ([disposeState, disposePacks]) => {
+      if (disposed) {
+        disposeState();
+        disposePacks();
+        return;
+      }
+      unlistenState = disposeState;
+      unlistenPacks = disposePacks;
+      await getCurrentWindow().emitTo("main", "focus-pet-companion-ready", {});
     });
     return () => {
+      disposed = true;
       unlistenState?.();
       unlistenPacks?.();
     };

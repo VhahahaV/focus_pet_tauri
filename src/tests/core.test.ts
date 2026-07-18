@@ -9,7 +9,14 @@ import { buildDailySummary } from "../core/summary";
 import { defaultAppSettings, judgmentPresetSettings, matchingJudgmentPreset } from "../core/settings";
 import type { ActivitySnapshot, FocusStateSnapshot, StateDecision } from "../core/types";
 import { importedPetPackRecord, normalizePetPack, validatePetPack } from "../resources/petPack";
-import { advanceRuntime, emptyRuntime, inputMonitoringPermissionTitle, runtimeActions } from "../app/runtime";
+import {
+  advanceRuntime,
+  emptyRuntime,
+  inputMonitoringPermissionTitle,
+  notificationPermissionTitle,
+  permissionSnapshotForDisplay,
+  runtimeActions,
+} from "../app/runtime";
 import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
 import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWindows";
 import { cyclePlayableSourceAction, resolveDisplaySourceAction } from "../app/petCompanionLogic";
@@ -41,6 +48,20 @@ describe("Focus Pet migrated core", () => {
     expect(inputMonitoringPermissionTitle("frontmost-app-window-cg-event-tap · available")).toBe("已允许");
     expect(inputMonitoringPermissionTitle("needs-input-monitoring-permission")).toBe("待开启");
     expect(inputMonitoringPermissionTitle("检查中")).toBe("检查中");
+  });
+
+  it("normalizes Windows native permission adapter details for display", () => {
+    expect(notificationPermissionTitle("windows-notification-runtime-available")).toBe("已允许");
+    expect(notificationPermissionTitle("denied")).toBe("待开启");
+    expect(permissionSnapshotForDisplay({
+      refreshedAt: "2026-07-18T00:00:00.000Z",
+      inputMonitoring: "windows-low-level-hooks-available",
+      notifications: "windows-notification-runtime-available",
+    })).toEqual({
+      refreshedAt: "2026-07-18T00:00:00.000Z",
+      inputMonitoring: "已允许",
+      notifications: "已允许",
+    });
   });
 
   it("classifies work and entertainment with user rules taking priority", () => {

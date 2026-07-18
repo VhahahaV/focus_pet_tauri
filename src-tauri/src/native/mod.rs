@@ -68,7 +68,15 @@ pub fn open_system_settings(destination: &str) -> bool {
 }
 
 pub fn open_path(path: &Path) -> bool {
-    std::fs::create_dir_all(path).ok();
+    if !path.exists() {
+        if path.extension().is_some() {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        } else {
+            std::fs::create_dir_all(path).ok();
+        }
+    }
     open::that(path).is_ok()
 }
 
@@ -158,6 +166,7 @@ fn app_identity(sample: &RawActivitySample) -> &str {
     sample.bundle_id.as_deref().unwrap_or(&sample.app_name)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn run_text_command(program: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new(program)
         .args(args)

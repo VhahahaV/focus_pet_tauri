@@ -5,8 +5,8 @@ mod pet_pack;
 mod store;
 mod system_monitor;
 
-use native::{NativeActivitySample, PermissionSnapshot};
 use agent_events::AgentCompletionEvent;
+use native::{NativeActivitySample, PermissionSnapshot};
 use pet_pack::ImportedPetPack;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,9 @@ fn perform_menu_bar_action(app: tauri::AppHandle, action: String) -> bool {
 }
 
 #[tauri::command]
-fn sample_system_metrics(state: tauri::State<'_, SystemMonitorState>) -> Result<SystemMetricsSample, String> {
+fn sample_system_metrics(
+    state: tauri::State<'_, SystemMonitorState>,
+) -> Result<SystemMetricsSample, String> {
     state.sample()
 }
 
@@ -291,6 +293,20 @@ fn open_log_folder(app: tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
+fn data_storage_path(app: tauri::AppHandle) -> Result<String, String> {
+    FocusPetStore::new(&app)
+        .map(|store| store.root_dir().to_string_lossy().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_data_folder(app: tauri::AppHandle) -> bool {
+    FocusPetStore::new(&app)
+        .map(|store| native::open_path(store.root_dir()))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 fn current_log_file(app: tauri::AppHandle, open_file: bool) -> Result<String, String> {
     let path = FocusPetStore::new(&app)
         .map_err(|error| error.to_string())?
@@ -303,13 +319,17 @@ fn current_log_file(app: tauri::AppHandle, open_file: bool) -> Result<String, St
 }
 
 #[tauri::command]
-fn choose_and_import_pet_pack(
+async fn choose_and_import_pet_pack(
     app: tauri::AppHandle,
 ) -> Result<Option<Vec<ImportedPetPack>>, String> {
-    let Some(path) = pet_pack::choose_pet_pack_source() else {
-        return Ok(None);
-    };
-    import_pet_pack_from_path(app, path.to_string_lossy().to_string()).map(Some)
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = pet_pack::choose_pet_pack_source(&app) else {
+            return Ok(None);
+        };
+        import_pet_pack_from_path(app, path.to_string_lossy().to_string()).map(Some)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -381,6 +401,9 @@ fn is_running_from_mounted_volume_path(path: &Path) -> bool {
 }
 
 fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = home;
+
     #[cfg(target_os = "macos")]
     {
         let text = path.to_string_lossy();
@@ -465,6 +488,9 @@ fn sync_widget_windows(
             pet_window_height,
         )
     });
+    log::info!(
+        "sync pet window: visible={pet_companion_visible}, placement={pet_placement}, size={pet_size}, origin={pet_origin:?}"
+    );
     sync_widget_window(
         &app,
         "widget-pet-companion",
@@ -561,10 +587,11 @@ fn default_pet_origin(
         width: f64::from(work_area.size.width),
         height: f64::from(work_area.size.height),
     };
+    let scale_factor = monitor.scale_factor();
     Some(default_pet_origin_for_rects(
         placement,
-        width,
-        height,
+        width * scale_factor,
+        height * scale_factor,
         screen_rect,
         work_rect,
     ))
@@ -634,13 +661,17 @@ fn sync_widget_window(
 
     if visible {
         if let Some(window) = app.get_webview_window(label) {
-            window.show().map_err(|error| error.to_string())?;
             window.set_always_on_top(true).ok();
             window.set_visible_on_all_workspaces(true).ok();
             window.set_shadow(false).ok();
-            window.set_size(LogicalSize::new(width, height)).ok();
+            window
+                .set_size(LogicalSize::new(width, height))
+                .map_err(|error| error.to_string())?;
+            window.show().map_err(|error| error.to_string())?;
             if let Some((x, y)) = origin {
-                window.set_position(PhysicalPosition::new(x, y)).ok();
+                let position = PhysicalPosition::new(x.round() as i32, y.round() as i32);
+                set_widget_window_position(&window, position)?;
+                retry_widget_window_position(window, position);
             }
             return Ok(());
         }
@@ -658,12 +689,67 @@ fn sync_widget_window(
             .build()
             .map_err(|error| error.to_string())?;
         if let Some((x, y)) = origin {
-            window.set_position(PhysicalPosition::new(x, y)).ok();
+            let position = PhysicalPosition::new(x.round() as i32, y.round() as i32);
+            set_widget_window_position(&window, position)?;
+            // WebView2 can apply its initial cascade placement after `build` returns.
+            // Reapply the requested coordinate once the native window is ready.
+            retry_widget_window_position(window, position);
         }
     } else if let Some(window) = app.get_webview_window(label) {
         window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn set_widget_window_position(
+    window: &tauri::WebviewWindow,
+    position: tauri::PhysicalPosition<i32>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let applied = unsafe {
+            SetWindowPos(
+                hwnd.0,
+                std::ptr::null_mut(),
+                position.x,
+                position.y,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+            )
+        };
+        if applied == 0 {
+            return Err(format!(
+                "Win32 SetWindowPos failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    window
+        .set_position(position)
+        .map_err(|error| error.to_string())
+}
+
+fn retry_widget_window_position(
+    window: tauri::WebviewWindow,
+    position: tauri::PhysicalPosition<i32>,
+) {
+    std::thread::spawn(move || {
+        for delay_ms in [80, 240, 720] {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            if set_widget_window_position(&window, position).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -755,7 +841,7 @@ fn emit_menu_action(app: &tauri::AppHandle, action: &str) {
             action: action.to_string(),
         },
     )
-        .ok();
+    .ok();
 }
 
 fn handle_native_menu_action(app: &tauri::AppHandle, action: &str) {
@@ -834,9 +920,8 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
             }
         });
 
-    let status_icon = tauri::image::Image::from_bytes(include_bytes!(
-        "../../public/assets/StatusIcon.png"
-    ))?;
+    let status_icon =
+        tauri::image::Image::from_bytes(include_bytes!("../../public/assets/StatusIcon.png"))?;
     tray = tray.icon(status_icon);
 
     #[cfg(target_os = "macos")]
@@ -987,6 +1072,7 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -1037,6 +1123,8 @@ pub fn run() {
             installation_snapshot,
             open_system_settings,
             open_log_folder,
+            data_storage_path,
+            open_data_folder,
             current_log_file,
             choose_and_import_pet_pack,
             import_pet_pack_from_path,

@@ -10,6 +10,7 @@ import type {
   NativeActivitySample,
   NudgeEvent,
   NudgeReason,
+  PermissionSnapshot,
   PetIntentKind,
   PetIntentSource,
 } from "../core/types";
@@ -142,6 +143,28 @@ export const inputMonitoringPermissionTitle = (status: string): string => {
   if (normalized === "检查中") return "检查中";
   return "待开启";
 };
+
+export const notificationPermissionTitle = (status: string): string => {
+  const normalized = status.trim().toLowerCase();
+  if (
+    normalized === "已允许" ||
+    normalized === "granted" ||
+    normalized.includes("available") ||
+    normalized.includes("delivered") ||
+    normalized.includes("sent")
+  ) return "已允许";
+  if (normalized === "browser-preview") return "预览环境";
+  if (normalized === "检查中") return "检查中";
+  return "待开启";
+};
+
+export const permissionSnapshotForDisplay = (snapshot: PermissionSnapshot): PermissionSnapshot => ({
+  ...snapshot,
+  inputMonitoring: snapshot.inputMonitoring === "browser-preview"
+    ? "预览环境"
+    : inputMonitoringPermissionTitle(snapshot.inputMonitoring),
+  notifications: notificationPermissionTitle(snapshot.notifications),
+});
 
 const applyStability = (
   decision: ReturnType<typeof evaluateState>,

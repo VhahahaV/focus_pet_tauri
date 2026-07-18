@@ -1,4 +1,5 @@
 use serde::Serialize;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::Mutex;
 use sysinfo::{Components, Disks, System};
@@ -121,10 +122,12 @@ impl SystemMonitorState {
         let temperatures = Components::new_with_refreshed_list()
             .iter()
             .filter_map(|component| {
-                component.temperature().map(|celsius| SystemMonitorThermalSample {
-                    label: component.label().to_string(),
-                    celsius,
-                })
+                component
+                    .temperature()
+                    .map(|celsius| SystemMonitorThermalSample {
+                        label: component.label().to_string(),
+                        celsius,
+                    })
             })
             .collect::<Vec<_>>();
         let (gpu_name, gpu_usage) = apple_gpu_sample();
@@ -187,6 +190,7 @@ fn apple_gpu_sample() -> (Option<String>, Option<f32>) {
     (None, None)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_number_after(text: &str, marker: &str) -> Option<f32> {
     let remainder = text.split_once(marker)?.1.trim_start();
     let end = remainder
@@ -195,6 +199,7 @@ fn parse_number_after(text: &str, marker: &str) -> Option<f32> {
     remainder[..end].parse::<f32>().ok()
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_quoted_value(text: &str, marker: &str) -> Option<String> {
     let remainder = text.split_once(marker)?.1;
     let end = remainder.find('"')?;
@@ -210,7 +215,10 @@ mod tests {
     fn parses_apple_gpu_statistics() {
         let sample = r#""MetalPluginClassName" = "AGXG16GDevice"
 "PerformanceStatistics" = {"Device Utilization %"=29,"Renderer Utilization %"=28}"#;
-        assert_eq!(parse_number_after(sample, "\"Device Utilization %\"="), Some(29.0));
+        assert_eq!(
+            parse_number_after(sample, "\"Device Utilization %\"="),
+            Some(29.0)
+        );
         assert_eq!(
             parse_quoted_value(sample, "\"MetalPluginClassName\" = \""),
             Some("AGXG16GDevice".to_string())

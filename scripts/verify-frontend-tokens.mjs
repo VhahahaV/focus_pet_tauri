@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import * as csstree from "css-tree";
 
-const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const roots = [join(projectRoot, "src")];
 const tokenFiles = new Set([
   join(projectRoot, "src", "styles", "tokens.css"),

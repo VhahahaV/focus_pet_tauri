@@ -10,7 +10,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::native::run_text_command;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,69 +109,47 @@ pub fn pet_pack_assets(library_dir: &Path, id: &str) -> io::Result<Vec<PetSource
     Ok(source_action_assets(&manifest, &root))
 }
 
-pub fn choose_pet_pack_source() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"
-set sourceKind to button returned of (display dialog "选择 .zip、包含 pet.json 的文件夹，或直接选择 pet.json。" buttons {"取消", "文件", "文件夹"} default button "文件夹" cancel button "取消")
-if sourceKind is "文件夹" then
-  POSIX path of (choose folder with prompt "选择 Focus Pet 资源包文件夹")
-else
-  POSIX path of (choose file with prompt "选择 Focus Pet .zip 或 pet.json")
-end if
-"#;
-        return run_text_command("osascript", &["-e", script]).map(PathBuf::from);
-    }
+pub fn choose_pet_pack_source(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let folder_label = "选择文件夹".to_string();
+    let file_label = "选择文件".to_string();
+    let cancel_label = "取消".to_string();
+    let choice = app
+        .dialog()
+        .message("请选择包含 pet.json 的文件夹，或选择 .zip / pet.json 文件。")
+        .title("导入 Focus Pet 资源包")
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            folder_label.clone(),
+            file_label.clone(),
+            cancel_label,
+        ))
+        .blocking_show_with_result();
 
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$choice = [System.Windows.Forms.MessageBox]::Show("选择“是”导入文件夹，选择“否”导入 .zip 或 pet.json。", "导入 Focus Pet 资源包", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel)
-if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
-  $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-  $dialog.Description = "选择 Focus Pet 资源包文件夹"
-  $dialog.ShowNewFolderButton = $false
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $dialog.SelectedPath
-  }
-} elseif ($choice -eq [System.Windows.Forms.DialogResult]::No) {
-  $dialog = New-Object System.Windows.Forms.OpenFileDialog
-  $dialog.Title = "选择 Focus Pet .zip 或 pet.json"
-  $dialog.Filter = "Focus Pet packs (*.zip;pet.json)|*.zip;pet.json|All files (*.*)|*.*"
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $dialog.FileName
-  }
-}
-"#;
-        return run_text_command(
-            "powershell",
-            &[
-                "-NoProfile",
-                "-STA",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ],
-        )
-        .map(PathBuf::from);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        return run_text_command(
-            "sh",
-            &[
-                "-lc",
-                "if command -v zenity >/dev/null 2>&1; then choice=$(zenity --list --title='导入 Focus Pet 资源包' --column='类型' '文件夹' '文件'); case \"$choice\" in 文件夹) zenity --file-selection --directory --title='选择 Focus Pet 资源包文件夹' ;; 文件) zenity --file-selection --title='选择 Focus Pet .zip 或 pet.json' ;; esac; elif command -v kdialog >/dev/null 2>&1; then choice=$(kdialog --combobox '导入 Focus Pet 资源包' '文件夹' '文件'); case \"$choice\" in 文件夹) kdialog --getexistingdirectory . '选择 Focus Pet 资源包文件夹' ;; 文件) kdialog --getopenfilename . '*.zip *.json|Focus Pet packs' ;; esac; fi",
-            ],
-        )
-        .map(PathBuf::from);
-    }
-
-    #[allow(unreachable_code)]
-    None
+    let selected = match choice {
+        MessageDialogResult::Yes => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet 资源包文件夹")
+            .blocking_pick_folder(),
+        MessageDialogResult::No => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet .zip 或 pet.json")
+            .add_filter("Focus Pet 资源包", &["zip", "json"])
+            .blocking_pick_file(),
+        MessageDialogResult::Custom(label) if label == folder_label => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet 资源包文件夹")
+            .blocking_pick_folder(),
+        MessageDialogResult::Custom(label) if label == file_label => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet .zip 或 pet.json")
+            .add_filter("Focus Pet 资源包", &["zip", "json"])
+            .blocking_pick_file(),
+        _ => None,
+    };
+    selected.and_then(|path| path.into_path().ok())
 }
 
 fn record_from_root(
@@ -698,7 +676,8 @@ mod tests {
         assert!(imported.validation.is_valid);
         assert!(PathBuf::from(imported.path).join("pet.json").is_file());
         assert_eq!(imported.source_action_assets[0].id, "idle");
-        assert!(imported.source_action_assets[0].frame_urls[0].ends_with("idle/000.png"));
+        assert!(Path::new(&imported.source_action_assets[0].frame_urls[0])
+            .ends_with(Path::new("idle").join("000.png")));
 
         let _ = fs::remove_dir_all(root);
     }

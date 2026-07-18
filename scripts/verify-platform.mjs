@@ -10,7 +10,6 @@ const preflightOnly = process.argv.includes("--preflight-only");
 const commandExists = (program, args = ["--version"]) => {
   const result = spawnSync(program, args, {
     env: process.env,
-    shell: platform === "win32",
     stdio: "ignore",
   });
   return result.status === 0;
@@ -22,7 +21,6 @@ const commandAvailable = (program) => {
     : ["sh", ["-lc", `command -v ${program}`]];
   const result = spawnSync(lookup[0], lookup[1], {
     env: process.env,
-    shell: platform === "win32",
     stdio: "ignore",
   });
   return result.status === 0;
@@ -32,7 +30,6 @@ const commandOutput = (program, args = []) => {
   const result = spawnSync(program, args, {
     env: process.env,
     encoding: "utf8",
-    shell: platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
   return `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
@@ -174,7 +171,7 @@ for (const [program, args] of commands) {
   const result = spawnSync(program, args, {
     cwd: process.cwd(),
     env: process.env,
-    shell: process.platform === "win32",
+    shell: process.platform === "win32" && program === "npm",
     stdio: "inherit",
   });
   if (result.status !== 0) {

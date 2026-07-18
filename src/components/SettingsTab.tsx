@@ -500,6 +500,7 @@ const ReminderSettings = () => {
 const PermissionSettings = () => {
   const { bundle, actions } = useFocusPet();
   const snapshot = bundle.state.permissionSnapshot;
+  const isWindows = navigator.userAgent.includes("Windows");
   const [pendingAction, setPendingAction] = useState<string | undefined>(undefined);
   const runPermissionAction = async (key: string, action: () => Promise<void>) => {
     if (pendingAction) return;
@@ -514,11 +515,11 @@ const PermissionSettings = () => {
     {
       id: "inputMonitoring",
       title: "输入监控",
-      subtitle: "键盘与鼠标事件计数",
+      subtitle: isWindows ? "Windows 全局键盘与鼠标事件计数（无需额外授权）" : "键盘与鼠标事件计数",
       status: snapshot.inputMonitoring,
       Icon: Keyboard,
       destination: "inputMonitoring",
-      canRequest: true,
+      canRequest: !isWindows,
     },
     {
       id: "notifications",
@@ -531,8 +532,8 @@ const PermissionSettings = () => {
     },
     {
       id: "privacySecurity",
-      title: "隐私与安全",
-      subtitle: "macOS 隐私面板",
+      title: isWindows ? "Windows 隐私设置" : "隐私与安全",
+      subtitle: isWindows ? "Windows 系统隐私管理入口" : "macOS 隐私面板",
       status: "系统设置",
       Icon: Lock,
       destination: "privacySecurity",
@@ -616,6 +617,14 @@ const PrivacyDataSettings = () => {
           <small>{recordingEnabled ? "本地记录中" : "记录已暂停"}</small>
         </div>
         <em>{formatBytes(bundle.state.dataSizeBytes)}</em>
+      </div>
+      <div className="settings-command-grid">
+        <CommandButton onClick={() => void actions.openDataFolder()}>
+          <FolderOpen size={15} /> 打开数据目录
+        </CommandButton>
+        <CommandButton onClick={() => void actions.copyDataPath()}>
+          <ShieldCheck size={15} /> 复制数据路径
+        </CommandButton>
       </div>
       <div className="settings-command-grid">
         <CommandButton loading={pendingAction === "export-redacted"} loadingLabel="导出中" disabled={Boolean(pendingAction)} onClick={() => void runDataAction("export-redacted", async () => setLastExportURL(await actions.exportData(true)))}>

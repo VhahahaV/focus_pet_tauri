@@ -15,6 +15,9 @@ output/
 test-results/
 .playwright-cli/
 src-tauri/target/
+target-*/
+src-tauri/target-*/
+src-tauri/src-tauri/
 
 # Migrated local pet-pack archives kept for importer verification.
 !local-pet-packs/

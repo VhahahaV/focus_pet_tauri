@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = process.env.FOCUS_PET_SWIFT_ROOT
   ? resolve(process.env.FOCUS_PET_SWIFT_ROOT)
   : resolve(projectRoot, "..", "focus_pet");

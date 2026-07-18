@@ -22,6 +22,7 @@ import {
   nativeActivitySample,
   nativeDrainAgentEvents,
   nativeDataSize,
+  nativeDataStoragePath,
   nativeDeletePetPack,
   nativeDeliverNotification,
   nativeCurrentLogFile,
@@ -30,6 +31,7 @@ import {
   nativeInstallationSnapshot,
   nativeListPetPacks,
   nativeOpenLogFolder,
+  nativeOpenDataFolder,
   nativeOpenSystemSettings,
   nativePetPackAssets,
   nativePermissionSnapshot,
@@ -41,6 +43,7 @@ import {
   advanceRuntime,
   emptyRuntime,
   inputMonitoringPermissionTitle,
+  permissionSnapshotForDisplay,
   runtimeActions,
   runtimeFromSnapshot,
   runtimeSnapshot,
@@ -82,6 +85,8 @@ export interface FocusPetAppController {
     refreshPermissions: () => Promise<void>;
     sendTestNotification: () => Promise<void>;
     openLogFolder: () => Promise<void>;
+    openDataFolder: () => Promise<void>;
+    copyDataPath: () => Promise<void>;
     openCurrentLogFile: () => Promise<void>;
     copyLogPath: () => Promise<void>;
     writeDiagnosticsLogSnapshot: () => void;
@@ -150,6 +155,9 @@ const petPackNeedsSourceAssets = (record: PetPackRecord): boolean =>
 
 const ensureSelectedPetPack = (state: AppRuntimeState, records: PetPackRecord[]): AppRuntimeState => {
   if (records.length === 0) {
+    // A native pack scan can still be in flight (notably for large Windows packs).
+    // Preserve an existing selection and visibility until the scan result is known.
+    if (state.settings.pet.selectedPackID) return state;
     return runtimeActions.updateSettings(state, (settings) => ({
       ...settings,
       pet: { ...settings.pet, selectedPackID: "", hidden: true },
@@ -278,7 +286,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
             rememberWarning(`识别目录读取失败，已使用兜底规则启动：${error instanceof Error ? error.message : String(error)}`);
             return [] as ClassificationCatalogEntry[];
           }),
-          startupTimeout(nativeListPetPacks(), 2200, [] as PetPackRecord[], () => {
+          startupTimeout(nativeListPetPacks(), 8000, [] as PetPackRecord[], () => {
             rememberWarning("本地桌宠资源读取超时，已先隐藏桌宠启动。");
           }).catch((error) => {
             rememberWarning(`本地桌宠资源读取失败，已隐藏桌宠：${error instanceof Error ? error.message : String(error)}`);
@@ -302,7 +310,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
         const state = ensureSelectedPetPack(
           {
             ...initial.state,
-            permissionSnapshot: permissionSnapshot ?? mockPermissionSnapshot(),
+            permissionSnapshot: permissionSnapshotForDisplay(permissionSnapshot ?? mockPermissionSnapshot()),
             dataSizeBytes,
             statusMessage: warnings[0] ?? initial.state.statusMessage,
           },
@@ -400,7 +408,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
       ]);
       mutate((state) => ({
         ...state,
-        permissionSnapshot: permissionSnapshot ?? mockPermissionSnapshot(),
+        permissionSnapshot: permissionSnapshotForDisplay(permissionSnapshot ?? mockPermissionSnapshot()),
         dataSizeBytes,
         statusMessage,
       }));
@@ -573,6 +581,33 @@ export const useFocusPetApp = (): FocusPetAppController => {
 
   const desktopWidgetSettings = bundle.state.settings.desktopWidget;
   const petSettings = bundle.state.settings.pet;
+  const petCompanionStateRef = useRef(makePetCompanionViewState(bundle.state));
+  const petPacksRef = useRef(petPacks);
+  const petHiddenRef = useRef(petSettings.hidden);
+  petCompanionStateRef.current = makePetCompanionViewState(bundle.state);
+  petPacksRef.current = petPacks;
+  petHiddenRef.current = petSettings.hidden;
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return undefined;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("focus-pet-companion-ready", () => {
+      if (petHiddenRef.current) return;
+      void emitTo("widget-pet-companion", "focus-pet-companion-state", petCompanionStateRef.current);
+      void emitTo("widget-pet-companion", "focus-pet-companion-packs", petPacksRef.current);
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -591,7 +626,12 @@ export const useFocusPetApp = (): FocusPetAppController => {
               y: petSettings.customOriginY,
             }
           : undefined,
-      ).catch(() => undefined);
+      ).catch((error) => {
+        mutate((state) => ({
+          ...state,
+          statusMessage: `桌宠窗口同步失败：${error instanceof Error ? error.message : String(error)}`,
+        }));
+      });
     }, 220);
     return () => window.clearTimeout(timeoutID);
   }, [
@@ -605,6 +645,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
     petSettings.customOriginX,
     petSettings.customOriginY,
     petSettings.size,
+    mutate,
   ]);
 
   useEffect(() => {
@@ -781,6 +822,17 @@ export const useFocusPetApp = (): FocusPetAppController => {
       },
       async openLogFolder() {
         await nativeOpenLogFolder();
+      },
+      async openDataFolder() {
+        const opened = await nativeOpenDataFolder();
+        mutate((state) => ({ ...state, statusMessage: opened ? "已打开本机数据目录。" : "当前环境无法打开数据目录。" }));
+      },
+      async copyDataPath() {
+        const path = await nativeDataStoragePath();
+        if (path) {
+          await navigator.clipboard?.writeText(path).catch(() => undefined);
+        }
+        mutate((state) => ({ ...state, statusMessage: path ? `已复制数据目录：${path}` : "浏览器预览使用浏览器本地存储。" }));
       },
       async openCurrentLogFile() {
         const path = await nativeCurrentLogFile(true);
