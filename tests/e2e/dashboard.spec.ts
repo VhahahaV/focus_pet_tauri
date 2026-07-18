@@ -279,7 +279,14 @@ test("desktop widget views render without the main runtime shell", async ({ page
   await expect(page.getByText("当前状态")).toBeVisible();
   await expect(page.getByText("专注", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "打开桌宠面板" })).toContainText("面板");
-  await expect(page.getByRole("button", { name: "桌宠切换动作" })).toContainText("动作");
+  const cyclePetAction = page.getByRole("button", { name: "桌宠切换动作" });
+  await expect(cyclePetAction).toContainText("动作");
+  await cyclePetAction.click();
+  await expect(page.getByText("已换 睡觉")).toBeVisible();
+  await cyclePetAction.click();
+  await expect(page.getByText("已换 轻提醒")).toBeVisible();
+  await cyclePetAction.click();
+  await expect(page.getByText("已换 待机")).toBeVisible();
   await expect(page.getByRole("button", { name: "打开桌宠设置" })).toContainText("设置");
   const hoverPanelStyle = await page.locator(".pet-hover-panel").evaluate((panel) => {
     const style = getComputedStyle(panel);

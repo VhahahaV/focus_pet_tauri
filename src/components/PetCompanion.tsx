@@ -22,7 +22,12 @@ import {
 } from "../resources/petPack";
 import { useFocusPet } from "../app/AppContext";
 import type { NativeMenuAction } from "../app/nativeMenu";
-import { cyclePlayableSourceAction, resolveDisplaySourceAction, type RandomSourceActionState } from "../app/petCompanionLogic";
+import {
+  cyclePlayableSourceAction,
+  nextPetFrameIndex,
+  resolveDisplaySourceAction,
+  type RandomSourceActionState,
+} from "../app/petCompanionLogic";
 import { useDocumentTheme } from "../themes";
 import { usePetFrames } from "./usePetFrames";
 
@@ -159,11 +164,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   useEffect(() => {
     if (!settings.animationEnabled || frames.length <= 1) return undefined;
     const timer = window.setInterval(() => {
-      setFrameIndex((index) => {
-        const next = index + 1;
-        if (next < frames.length) return next;
-        return sourceAction?.loop === false ? index : 0;
-      });
+      setFrameIndex((index) => nextPetFrameIndex(index, frames.length, true, sourceAction?.loop !== false));
     }, frameDelay);
     return () => window.clearInterval(timer);
   }, [frameDelay, frames.length, settings.animationEnabled, sourceAction?.loop]);

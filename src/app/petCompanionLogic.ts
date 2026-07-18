@@ -17,6 +17,20 @@ export interface ResolvedPetSourceAction {
   randomState: RandomSourceActionState;
 }
 
+export const nextPetFrameIndex = (
+  currentIndex: number,
+  frameCount: number,
+  animationEnabled: boolean,
+  loop = true,
+): number => {
+  if (frameCount <= 0) return 0;
+  const current = Math.max(0, Math.min(Math.trunc(currentIndex), frameCount - 1));
+  if (!animationEnabled || frameCount === 1) return current;
+  const next = current + 1;
+  if (next < frameCount) return next;
+  return loop ? 0 : current;
+};
+
 const playableSourceActions = (record: PetPackRecord): PetSourceActionSpec[] => {
   const seen = new Set<string>();
   const actions: PetSourceActionSpec[] = [];

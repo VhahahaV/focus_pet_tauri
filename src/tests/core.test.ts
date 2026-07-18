@@ -19,7 +19,7 @@ import {
 } from "../app/runtime";
 import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
 import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWindows";
-import { cyclePlayableSourceAction, resolveDisplaySourceAction } from "../app/petCompanionLogic";
+import { cyclePlayableSourceAction, nextPetFrameIndex, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
 import { activitySampleForRuntime } from "../app/activitySampling";
 import { emptySnapshot, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
@@ -51,6 +51,15 @@ describe("Focus Pet migrated core", () => {
 
     const nativeSample = activitySampleForRuntime(undefined, false, now)!;
     expect(activitySampleForRuntime(nativeSample, true, now)).toBe(nativeSample);
+  });
+
+  it("advances looping and one-shot pet animations without overrunning frames", () => {
+    expect(nextPetFrameIndex(0, 3, true, true)).toBe(1);
+    expect(nextPetFrameIndex(2, 3, true, true)).toBe(0);
+    expect(nextPetFrameIndex(2, 3, true, false)).toBe(2);
+    expect(nextPetFrameIndex(1, 3, false, true)).toBe(1);
+    expect(nextPetFrameIndex(99, 3, true, false)).toBe(2);
+    expect(nextPetFrameIndex(0, 0, true, true)).toBe(0);
   });
 
   it("normalizes native input monitoring states to Swift permission titles", () => {
