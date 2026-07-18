@@ -43,6 +43,7 @@
 `src-tauri/src/native/windows.rs` 现直接使用 Win32 API：
 
 - `GetForegroundWindow`、`GetWindowTextW`、`GetWindowThreadProcessId` 获取前台程序。
+- `QueryFullProcessImageNameW` 因受限进程权限失败时，使用 ToolHelp 进程快照解析 exe 名称，避免分类和排行退化成 `Windows process <pid>`。
 - `GetLastInputInfo` 获取系统空闲时间。
 - `WH_KEYBOARD_LL` 与 `WH_MOUSE_LL` 在独立消息线程中统计键盘和指针事件。
 - `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` 记录同一个采样窗口内的多次进程切换。
@@ -173,7 +174,7 @@ Loader 校验：
 | Vitest | 3 个文件、39 个测试全部通过 |
 | Playwright | desktop/mobile 共 18 个测试全部通过 |
 | `cargo fmt --check` | 通过 |
-| Rust release / gnullvm | 42 个测试全部通过 |
+| Rust release / gnullvm | 43 个测试全部通过 |
 | 原生适配验证 | 输入、前台进程、idle、通知 helper、原生对话框全部通过 |
 | 打包 preflight | 通过，包含 VBScript |
 

@@ -10,8 +10,12 @@ use std::{
     time::Duration,
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HINSTANCE, LPARAM, LRESULT, WPARAM},
+    Foundation::{CloseHandle, HINSTANCE, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM},
     System::{
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        },
         LibraryLoader::GetModuleHandleW,
         StationsAndDesktops::{
             CloseDesktop, OpenInputDesktop, SwitchDesktop, DESKTOP_SWITCHDESKTOP,
@@ -178,6 +182,7 @@ fn foreground_window() -> Option<ForegroundWindow> {
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
             .map(str::to_string)
+            .or_else(|| process_name_from_snapshot(process_id))
             .unwrap_or_else(|| format!("Windows process {process_id}"));
 
         Some(ForegroundWindow {
@@ -185,6 +190,39 @@ fn foreground_window() -> Option<ForegroundWindow> {
             process_path,
             window_title,
         })
+    }
+}
+
+fn process_name_from_snapshot(process_id: u32) -> Option<String> {
+    // SAFETY: The ToolHelp snapshot handle is checked and closed in this call;
+    // PROCESSENTRY32W has the required size and owns its fixed UTF-16 buffer.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut available = Process32FirstW(snapshot, &mut entry) != 0;
+        let mut result = None;
+        while available {
+            if entry.th32ProcessID == process_id {
+                let length = entry
+                    .szExeFile
+                    .iter()
+                    .position(|value| *value == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                result = Path::new(&String::from_utf16_lossy(&entry.szExeFile[..length]))
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string);
+                break;
+            }
+            available = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        result
     }
 }
 
@@ -378,7 +416,7 @@ fn saturating_increment(counter: &AtomicU32) {
 mod tests {
     use super::{
         input_monitor_retry_due, locked_activity_sample, monitor_hooks_ready, permission_snapshot,
-        sample_activity, saturating_increment, INPUT_MONITOR_RETRY_MS,
+        process_name_from_snapshot, sample_activity, saturating_increment, INPUT_MONITOR_RETRY_MS,
     };
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -428,5 +466,12 @@ mod tests {
         let permissions = permission_snapshot();
         assert!(permissions.input_monitoring.starts_with("windows-"));
         assert!(permissions.notifications.contains("available"));
+    }
+
+    #[test]
+    fn toolhelp_snapshot_resolves_the_current_process_name() {
+        let name = process_name_from_snapshot(std::process::id()).expect("current process name");
+        assert!(!name.trim().is_empty());
+        assert!(!name.starts_with("Windows process"));
     }
 }
