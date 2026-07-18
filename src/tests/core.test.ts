@@ -570,7 +570,10 @@ describe("Focus Pet migrated core", () => {
       expect(next).toBeDefined();
       return next!;
     };
+    expect(nativeMenuTab("open-today")).toBe("today");
+    expect(nativeMenuTab("open-pet")).toBe("pet");
     expect(nativeMenuTab("open-settings")).toBe("settings");
+    expect(nativeMenuTab("toggle-pet")).toBeUndefined();
 
     const widgetsShown = applyRequiredMenuAction("toggle-widgets");
     expect(widgetsShown.settings.desktopWidget.currentStatusVisible).toBe(true);
@@ -586,6 +589,12 @@ describe("Focus Pet migrated core", () => {
     const remindersPaused = applyRequiredMenuAction("pause-reminders");
     expect(remindersPaused.settings.reminder.pauseUntil).toBeTruthy();
 
+    const remindersResumed = applyRequiredMenuAction("resume-reminders", remindersPaused);
+    expect(remindersResumed.settings.reminder.pauseUntil).toBeUndefined();
+
+    const focusing = runtimeActions.startFocusSession(runtime, "Tray action", 25);
+    const focusFinished = applyRequiredMenuAction("finish-focus", focusing);
+    expect(focusFinished.focusSessions.at(-1)?.status).toBe("completed");
   });
 
   it("persists desktop widget window positions for later native sync", () => {

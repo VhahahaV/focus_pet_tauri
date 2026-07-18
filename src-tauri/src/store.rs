@@ -14,6 +14,13 @@ const APP_SUPPORT_FOLDER: &str = "Focus Pet";
 #[cfg(target_os = "windows")]
 const WINDOWS_APP_SUPPORT_FOLDER: &str = "Focus Pet Data";
 const LEGACY_APP_SUPPORT_FOLDERS: &[&str] = &["FocusPetMVP", "FocusPetV0", "FocusPetLegacy"];
+const ACTIVITY_DATA_FILES: &[&str] = &[
+    "state-segments.json",
+    "app-usage.json",
+    "input-activity.json",
+    "focus-sessions.json",
+    "nudges.json",
+];
 
 pub struct FocusPetStore {
     root: PathBuf,
@@ -165,10 +172,14 @@ impl FocusPetStore {
     }
 
     pub fn delete_all(&self) -> io::Result<()> {
-        if self.root.exists() {
-            fs::remove_dir_all(&self.root)?;
+        self.prepare_store_for_access(true)?;
+        for file_name in ACTIVITY_DATA_FILES {
+            match fs::remove_file(self.root.join(file_name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
-        self.ensure_root()?;
         self.write_metadata()
     }
 
@@ -813,6 +824,48 @@ mod tests {
         let snapshot = store.load_snapshot().unwrap();
         assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
         assert!(!root.join("settings.json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_all_clears_activity_without_removing_settings_or_pet_packs() {
+        let root = temp_store_root("delete-activity-only");
+        let store = FocusPetStore::from_root(root.clone());
+        store
+            .save_snapshot(&json!({
+                "settings": { "focusTargetMinutes": 50 },
+                "classificationRules": [{ "pattern": "Editor" }],
+                "stateSegments": [{ "state": "focus" }],
+                "appUsage": [{ "appName": "Editor" }],
+                "inputActivity": [{ "keyboardCount": 3 }],
+                "focusSessions": [{ "taskName": "Write tests" }],
+                "nudges": [{ "reason": "distracted" }]
+            }))
+            .unwrap();
+        fs::create_dir_all(root.join("PetPacks/demo")).unwrap();
+        fs::write(root.join("PetPacks/demo/pet.json"), "{}").unwrap();
+        fs::create_dir_all(root.join("Logs")).unwrap();
+        fs::write(root.join("Logs/focus-pet.log"), "diagnostic").unwrap();
+        fs::write(root.join("focus-pet-export-1.json"), "{}").unwrap();
+
+        store.delete_all().unwrap();
+
+        let snapshot = store.load_snapshot().unwrap();
+        assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
+        assert_eq!(snapshot["classificationRules"][0]["pattern"], "Editor");
+        for key in [
+            "stateSegments",
+            "appUsage",
+            "inputActivity",
+            "focusSessions",
+            "nudges",
+        ] {
+            assert_eq!(snapshot[key], json!([]), "{key} was not cleared");
+        }
+        assert!(root.join("PetPacks/demo/pet.json").is_file());
+        assert!(root.join("Logs/focus-pet.log").is_file());
+        assert!(root.join("focus-pet-export-1.json").is_file());
+        assert!(root.join("schema.json").is_file());
         let _ = fs::remove_dir_all(root);
     }
 

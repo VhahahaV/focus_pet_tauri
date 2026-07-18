@@ -31,8 +31,26 @@ struct NativeMenuAction {
 
 #[tauri::command]
 fn perform_menu_bar_action(app: tauri::AppHandle, action: String) -> bool {
+    if !is_native_menu_action(&action) {
+        return false;
+    }
     handle_native_menu_action(&app, &action);
     true
+}
+
+fn is_native_menu_action(action: &str) -> bool {
+    matches!(
+        action,
+        TRAY_OPEN_TODAY
+            | TRAY_OPEN_PET
+            | TRAY_OPEN_SETTINGS
+            | TRAY_TOGGLE_WIDGETS
+            | TRAY_TOGGLE_PET
+            | TRAY_PAUSE_REMINDERS
+            | TRAY_RESUME_REMINDERS
+            | TRAY_FINISH_FOCUS
+            | TRAY_QUIT
+    )
 }
 
 #[tauri::command]
@@ -830,6 +848,8 @@ fn install_desktop_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .text(TRAY_TOGGLE_PET, "显示/隐藏桌宠")
         .separator()
         .text(TRAY_PAUSE_REMINDERS, "暂停提醒")
+        .text(TRAY_RESUME_REMINDERS, "恢复提醒")
+        .text(TRAY_FINISH_FOCUS, "结束当前专注")
         .separator()
         .text(TRAY_QUIT, "退出")
         .build()?;
@@ -854,6 +874,8 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .text(TRAY_TOGGLE_WIDGETS, "显示/隐藏桌面状态卡")
         .text(TRAY_TOGGLE_PET, "显示/隐藏桌宠")
         .text(TRAY_PAUSE_REMINDERS, "暂停提醒")
+        .text(TRAY_RESUME_REMINDERS, "恢复提醒")
+        .text(TRAY_FINISH_FOCUS, "结束当前专注")
         .separator()
         .text(TRAY_QUIT, "退出")
         .build()?;
@@ -900,7 +922,7 @@ fn install_tray(_app: &mut tauri::App) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_pet_origin_for_rects, installation_snapshot_for_path,
+        default_pet_origin_for_rects, installation_snapshot_for_path, is_native_menu_action,
         is_running_from_mounted_volume_path, Rect,
     };
     use std::path::Path;
@@ -911,6 +933,25 @@ mod tests {
         width: 1440.0,
         height: 900.0,
     };
+
+    #[test]
+    fn native_menu_rejects_unknown_actions() {
+        for action in [
+            "open-today",
+            "open-pet",
+            "open-settings",
+            "toggle-widgets",
+            "toggle-pet",
+            "pause-reminders",
+            "resume-reminders",
+            "finish-focus",
+            "quit",
+        ] {
+            assert!(is_native_menu_action(action), "missing {action}");
+        }
+        assert!(!is_native_menu_action("delete-all-data"));
+        assert!(!is_native_menu_action(""));
+    }
 
     #[test]
     fn dock_pet_origin_tracks_bottom_taskbar_work_area() {
