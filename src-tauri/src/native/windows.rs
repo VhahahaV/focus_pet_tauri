@@ -4,8 +4,8 @@ use std::{
     path::Path,
     ptr::{null, null_mut},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc, OnceLock,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        mpsc,
     },
     time::Duration,
 };
@@ -35,6 +35,9 @@ static POINTER_EVENTS: AtomicU32 = AtomicU32::new(0);
 static FOREGROUND_SWITCH_EVENTS: AtomicU32 = AtomicU32::new(0);
 static LAST_FOREGROUND_PROCESS: AtomicU32 = AtomicU32::new(0);
 static INPUT_HOOKS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static INPUT_MONITOR_RUNNING: AtomicBool = AtomicBool::new(false);
+static LAST_INPUT_MONITOR_START_MS: AtomicU64 = AtomicU64::new(0);
+const INPUT_MONITOR_RETRY_MS: u64 = 5_000;
 
 pub fn sample_activity() -> RawActivitySample {
     ensure_input_monitor();
@@ -183,22 +186,45 @@ fn screen_is_locked() -> bool {
 }
 
 fn ensure_input_monitor() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    STARTED.get_or_init(|| {
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let spawned = std::thread::Builder::new()
-            .name("focus-pet-windows-input-monitor".to_string())
-            .spawn(move || input_monitor_loop(ready_tx));
-        if spawned.is_ok() {
-            let active = ready_rx
-                .recv_timeout(Duration::from_secs(1))
-                .unwrap_or(false);
-            INPUT_HOOKS_ACTIVE.store(active, Ordering::Release);
-        }
-    });
+    if INPUT_HOOKS_ACTIVE.load(Ordering::Acquire) || INPUT_MONITOR_RUNNING.load(Ordering::Acquire) {
+        return;
+    }
+    let now = unsafe { GetTickCount64() };
+    let last_start = LAST_INPUT_MONITOR_START_MS.load(Ordering::Acquire);
+    if !input_monitor_retry_due(now, last_start)
+        || INPUT_MONITOR_RUNNING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return;
+    }
+    LAST_INPUT_MONITOR_START_MS.store(now, Ordering::Release);
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let spawned = std::thread::Builder::new()
+        .name("focus-pet-windows-input-monitor".to_string())
+        .spawn(move || input_monitor_loop(ready_tx));
+    if spawned.is_err() {
+        INPUT_MONITOR_RUNNING.store(false, Ordering::Release);
+        return;
+    }
+    let _ = ready_rx.recv_timeout(Duration::from_secs(1));
+}
+
+fn input_monitor_retry_due(now: u64, last_start: u64) -> bool {
+    last_start == 0 || now.saturating_sub(last_start) >= INPUT_MONITOR_RETRY_MS
+}
+
+struct InputMonitorRunningGuard;
+
+impl Drop for InputMonitorRunningGuard {
+    fn drop(&mut self) {
+        INPUT_HOOKS_ACTIVE.store(false, Ordering::Release);
+        INPUT_MONITOR_RUNNING.store(false, Ordering::Release);
+    }
 }
 
 fn input_monitor_loop(ready: mpsc::SyncSender<bool>) {
+    let _running_guard = InputMonitorRunningGuard;
     // SAFETY: Low-level hooks are installed on this dedicated thread, callbacks are
     // static functions, and the thread owns the Win32 message loop for their lifetime.
     unsafe {
@@ -310,7 +336,10 @@ fn saturating_increment(counter: &AtomicU32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{permission_snapshot, sample_activity, saturating_increment};
+    use super::{
+        input_monitor_retry_due, permission_snapshot, sample_activity, saturating_increment,
+        INPUT_MONITOR_RETRY_MS,
+    };
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
@@ -318,6 +347,13 @@ mod tests {
         let counter = AtomicU32::new(u32::MAX);
         saturating_increment(&counter);
         assert_eq!(counter.load(Ordering::Relaxed), u32::MAX);
+    }
+
+    #[test]
+    fn input_monitor_restart_uses_a_bounded_retry_interval() {
+        assert!(input_monitor_retry_due(100, 0));
+        assert!(!input_monitor_retry_due(INPUT_MONITOR_RETRY_MS - 1, 1));
+        assert!(input_monitor_retry_due(INPUT_MONITOR_RETRY_MS + 1, 1));
     }
 
     #[test]
