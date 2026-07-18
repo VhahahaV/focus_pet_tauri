@@ -677,6 +677,68 @@ fn clamped_origin(value: f64, lower: f64, upper: f64) -> f64 {
     }
 }
 
+fn rect_contains_origin(rect: Rect, origin: (f64, f64)) -> bool {
+    origin.0 >= rect.x
+        && origin.0 < rect.x + rect.width
+        && origin.1 >= rect.y
+        && origin.1 < rect.y + rect.height
+}
+
+fn clamp_origin_to_work_area(
+    origin: (f64, f64),
+    physical_width: f64,
+    physical_height: f64,
+    work: Rect,
+) -> (f64, f64) {
+    (
+        clamped_origin(origin.0, work.x, work.x + work.width - physical_width),
+        clamped_origin(origin.1, work.y, work.y + work.height - physical_height),
+    )
+}
+
+fn visible_widget_origin(
+    app: &tauri::AppHandle,
+    origin: (f64, f64),
+    logical_width: f64,
+    logical_height: f64,
+) -> (f64, f64) {
+    let monitors = app.available_monitors().unwrap_or_default();
+    let target = monitors
+        .iter()
+        .find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            rect_contains_origin(
+                Rect {
+                    x: f64::from(position.x),
+                    y: f64::from(position.y),
+                    width: f64::from(size.width),
+                    height: f64::from(size.height),
+                },
+                origin,
+            )
+        })
+        .cloned()
+        .or_else(|| app.primary_monitor().ok().flatten())
+        .or_else(|| monitors.first().cloned());
+    let Some(monitor) = target else {
+        return origin;
+    };
+    let work = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
+    clamp_origin_to_work_area(
+        origin,
+        logical_width * scale_factor,
+        logical_height * scale_factor,
+        Rect {
+            x: f64::from(work.position.x),
+            y: f64::from(work.position.y),
+            width: f64::from(work.size.width),
+            height: f64::from(work.size.height),
+        },
+    )
+}
+
 fn sync_widget_window(
     app: &tauri::AppHandle,
     label: &str,
@@ -689,6 +751,7 @@ fn sync_widget_window(
     use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
     if visible {
+        let origin = origin.map(|value| visible_widget_origin(app, value, width, height));
         if let Some(window) = app.get_webview_window(label) {
             window.set_always_on_top(true).ok();
             window.set_visible_on_all_workspaces(true).ok();
@@ -715,14 +778,22 @@ fn sync_widget_window(
             .always_on_top(true)
             .visible_on_all_workspaces(true)
             .skip_taskbar(true)
-            .visible(true);
+            .visible(origin.is_none());
         if let Some((x, y)) = origin {
             // Supplying the coordinate before WebView2 creates the native
             // window avoids its default cascade placement without resolving
-            // an HWND (which can block Tauri's Windows event loop).
+            // an HWND (which can block Tauri's Windows event loop). The builder
+            // uses logical pixels, so this is only an initial approximation;
+            // the physical position below is the cross-DPI source of truth.
             builder = builder.position(x, y);
         }
-        builder.build().map_err(|error| error.to_string())?;
+        let window = builder.build().map_err(|error| error.to_string())?;
+        if let Some((x, y)) = origin {
+            window
+                .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+                .map_err(|error| error.to_string())?;
+            window.show().map_err(|error| error.to_string())?;
+        }
     } else if let Some(window) = app.get_webview_window(label) {
         window.hide().map_err(|error| error.to_string())?;
     }
@@ -922,8 +993,8 @@ fn install_tray(_app: &mut tauri::App) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_pet_origin_for_rects, installation_snapshot_for_path, is_native_menu_action,
-        is_running_from_mounted_volume_path, Rect,
+        clamp_origin_to_work_area, default_pet_origin_for_rects, installation_snapshot_for_path,
+        is_native_menu_action, is_running_from_mounted_volume_path, rect_contains_origin, Rect,
     };
     use std::path::Path;
 
@@ -951,6 +1022,32 @@ mod tests {
         }
         assert!(!is_native_menu_action("delete-all-data"));
         assert!(!is_native_menu_action(""));
+    }
+
+    #[test]
+    fn persisted_widget_origins_are_kept_inside_physical_work_areas() {
+        let primary_work = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 860.0,
+        };
+        assert_eq!(
+            clamp_origin_to_work_area((1500.0, 900.0), 300.0, 200.0, primary_work),
+            (1140.0, 660.0)
+        );
+
+        let left_monitor_work = Rect {
+            x: -1920.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1040.0,
+        };
+        assert!(rect_contains_origin(left_monitor_work, (-1800.0, 120.0)));
+        assert_eq!(
+            clamp_origin_to_work_area((-1800.0, 120.0), 450.0, 300.0, left_monitor_work),
+            (-1800.0, 120.0)
+        );
     }
 
     #[test]

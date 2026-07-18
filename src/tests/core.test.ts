@@ -608,24 +608,27 @@ describe("Focus Pet migrated core", () => {
     const withRhythmOrigin = applyDesktopWidgetMoved(withStatusOrigin, "recentRhythm", { x: 460, y: 96 });
     expect(withRhythmOrigin.settings.desktopWidget.recentRhythmOrigin).toEqual({ x: 460, y: 96 });
 
+    const onLeftMonitor = applyDesktopWidgetMoved(withRhythmOrigin, "currentStatus", { x: -1200, y: 80 });
+    expect(onLeftMonitor.settings.desktopWidget.currentStatusOrigin).toEqual({ x: -1200, y: 80 });
+
     const syncState = widgetWindowSyncState({
-      ...withRhythmOrigin,
+      ...onLeftMonitor,
       settings: {
-        ...withRhythmOrigin.settings,
+        ...onLeftMonitor.settings,
         desktopWidget: {
-          ...withRhythmOrigin.settings.desktopWidget,
+          ...onLeftMonitor.settings.desktopWidget,
           currentStatusVisible: true,
           recentRhythmVisible: true,
         },
         pet: {
-          ...withRhythmOrigin.settings.pet,
+          ...onLeftMonitor.settings.pet,
           placement: "custom",
           customOriginX: 300,
           customOriginY: 200,
         },
       },
     });
-    expect(syncState.currentStatusOrigin).toEqual({ x: 120, y: 80 });
+    expect(syncState.currentStatusOrigin).toEqual({ x: -1200, y: 80 });
     expect(syncState.recentRhythmOrigin).toEqual({ x: 460, y: 96 });
     expect(syncState.movementMode).toBe("free");
     expect(syncState.petPlacement).toBe("custom");
