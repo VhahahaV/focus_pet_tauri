@@ -584,9 +584,31 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const petCompanionStateRef = useRef(makePetCompanionViewState(bundle.state));
   const petPacksRef = useRef(petPacks);
   const petHiddenRef = useRef(petSettings.hidden);
+  const widgetWindowSyncArgsRef = useRef<Parameters<typeof nativeSyncWidgetWindows>>([
+    desktopWidgetSettings.currentStatusVisible,
+    desktopWidgetSettings.recentRhythmVisible,
+    widgetOrigin(desktopWidgetSettings.currentStatusOrigin),
+    widgetOrigin(desktopWidgetSettings.recentRhythmOrigin),
+    !petSettings.hidden,
+    petSettings.size,
+    petSettings.placement,
+    undefined,
+  ]);
   petCompanionStateRef.current = makePetCompanionViewState(bundle.state);
   petPacksRef.current = petPacks;
   petHiddenRef.current = petSettings.hidden;
+  widgetWindowSyncArgsRef.current = [
+    desktopWidgetSettings.currentStatusVisible,
+    desktopWidgetSettings.recentRhythmVisible,
+    widgetOrigin(desktopWidgetSettings.currentStatusOrigin),
+    widgetOrigin(desktopWidgetSettings.recentRhythmOrigin),
+    !petSettings.hidden,
+    petSettings.size,
+    petSettings.placement,
+    petSettings.placement === "custom" && petSettings.customOriginX !== undefined && petSettings.customOriginY !== undefined
+      ? { x: petSettings.customOriginX, y: petSettings.customOriginY }
+      : undefined,
+  ];
 
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return undefined;
@@ -596,6 +618,9 @@ export const useFocusPetApp = (): FocusPetAppController => {
       if (petHiddenRef.current) return;
       void emitTo("widget-pet-companion", "focus-pet-companion-state", petCompanionStateRef.current);
       void emitTo("widget-pet-companion", "focus-pet-companion-packs", petPacksRef.current);
+      // WebView2 can apply a cascade position while the transparent companion
+      // is loading. Re-sync once the companion confirms that its DOM is ready.
+      void nativeSyncWidgetWindows(...widgetWindowSyncArgsRef.current);
     }).then((dispose) => {
       if (disposed) {
         dispose();
@@ -782,6 +807,9 @@ export const useFocusPetApp = (): FocusPetAppController => {
       },
       togglePetHidden() {
         mutate(runtimeActions.togglePetHidden);
+        // Persist visibility before creating or hiding the native window. This
+        // keeps the user's choice durable even if WebView2 delays background timers.
+        window.setTimeout(() => void flushPersist(), 0);
       },
       selectPetPack(packID) {
         mutate((state) => runtimeActions.setSelectedPetPack(state, packID));
@@ -920,6 +948,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
     }),
     [
       bundle.state,
+      flushPersist,
       installationNotice,
       mutate,
       persist,

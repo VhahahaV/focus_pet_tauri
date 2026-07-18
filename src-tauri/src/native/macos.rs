@@ -55,6 +55,7 @@ pub fn sample_activity() -> RawActivitySample {
             .to_string(),
             keyboard_count: tap_keyboard_count.max(fallback_keyboard_count),
             pointer_count: tap_pointer_count.max(fallback_pointer_count),
+            switch_count: 0,
             is_system_sleeping: false,
             is_screen_locked: true,
         };
@@ -162,6 +163,7 @@ end tell"#;
         input_monitoring_status: input_status.to_string(),
         keyboard_count,
         pointer_count,
+        switch_count: 0,
         is_system_sleeping: false,
         is_screen_locked: screen_locked,
     }

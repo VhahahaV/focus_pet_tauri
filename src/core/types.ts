@@ -519,8 +519,8 @@ export interface SystemMetricsSample {
   memoryUsedBytes: number;
   memoryUsage: number;
   disks: SystemMonitorDiskSample[];
-  gpuName?: string;
-  gpuUsage?: number;
+  gpuName?: string | null;
+  gpuUsage?: number | null;
   temperatures: SystemMonitorThermalSample[];
   fans: SystemMonitorFanSample[];
 }

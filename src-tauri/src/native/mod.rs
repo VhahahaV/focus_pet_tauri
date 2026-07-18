@@ -34,6 +34,7 @@ pub struct RawActivitySample {
     pub input_monitoring_status: String,
     pub keyboard_count: u32,
     pub pointer_count: u32,
+    pub switch_count: u32,
     pub is_system_sleeping: bool,
     pub is_screen_locked: bool,
 }
@@ -117,7 +118,7 @@ fn enrich_sample(raw: RawActivitySample) -> NativeActivitySample {
         input_monitoring_status: raw.input_monitoring_status,
         keyboard_count: raw.keyboard_count.max(keyboard_count),
         pointer_count: raw.pointer_count.max(pointer_count),
-        switch_count,
+        switch_count: raw.switch_count.max(switch_count),
         is_system_sleeping: raw.is_system_sleeping,
         is_screen_locked: raw.is_screen_locked,
     }
@@ -273,6 +274,7 @@ mod tests {
             input_monitoring_status: "test".to_string(),
             keyboard_count: 0,
             pointer_count: 0,
+            switch_count: 0,
             is_system_sleeping: false,
             is_screen_locked: false,
         }

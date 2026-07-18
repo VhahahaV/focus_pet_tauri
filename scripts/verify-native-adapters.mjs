@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import process from "node:process";
 
 const platform = process.platform;
@@ -68,10 +69,26 @@ if (platform === "darwin") {
     ]);
   }, { required: false });
 } else if (platform === "win32") {
-  addCheck("Windows PowerShell", () =>
+  addCheck("Windows notification PowerShell host", () =>
     run("powershell", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"]),
   );
-  addCheck("Windows foreground window via Win32", () =>
+  addCheck("Windows Rust adapter uses direct Win32 APIs", () => {
+    const source = readFileSync("src-tauri/src/native/windows.rs", "utf8");
+    const required = [
+      "GetForegroundWindow",
+      "GetLastInputInfo",
+      "SetWindowsHookExW",
+      "WH_KEYBOARD_LL",
+      "WH_MOUSE_LL",
+      "OpenInputDesktop",
+    ];
+    const missing = required.filter((symbol) => !source.includes(symbol));
+    return {
+      ok: missing.length === 0,
+      text: missing.length === 0 ? "foreground, idle, input-hook, and lock probes are wired" : `missing: ${missing.join(", ")}`,
+    };
+  });
+  addCheck("Windows foreground Win32 smoke (independent PowerShell host)", () =>
     run("powershell", [
       "-NoProfile",
       "-NonInteractive",
@@ -95,7 +112,7 @@ Write-Output $builder.ToString()
       `,
     ]),
   );
-  addCheck("Windows idle time via GetLastInputInfo", () =>
+  addCheck("Windows idle Win32 smoke (independent PowerShell host)", () =>
     run("powershell", [
       "-NoProfile",
       "-NonInteractive",
@@ -153,9 +170,15 @@ if (Get-Command New-BurntToastNotification -ErrorAction SilentlyContinue) {
       `,
     ], { timeout: 10000 });
   }, { required: false });
-  addCheck("Windows Forms picker runtime", () =>
-    run("powershell", ["-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.DialogResult]::OK | Out-String"]),
-  );
+  addCheck("Tauri native pet-pack dialog wiring", () => {
+    const cargo = readFileSync("src-tauri/Cargo.toml", "utf8");
+    const source = readFileSync("src-tauri/src/pet_pack.rs", "utf8");
+    const ok = cargo.includes("tauri-plugin-dialog")
+      && source.includes("DialogExt")
+      && source.includes("blocking_pick_folder")
+      && source.includes("blocking_pick_file");
+    return { ok, text: ok ? "folder, pet.json, and zip selection use tauri-plugin-dialog" : "native dialog wiring is incomplete" };
+  });
 } else if (platform === "linux") {
   addCheck("Linux session type", () => ({ ok: true, text: process.env.XDG_SESSION_TYPE || "unknown" }), { required: false });
   addCheck("Linux xdotool active window", () => {

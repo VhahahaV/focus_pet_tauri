@@ -27,6 +27,7 @@ pub fn sample_activity() -> RawActivitySample {
         input_monitoring_status: input_monitoring_status(),
         keyboard_count: 0,
         pointer_count: 0,
+        switch_count: 0,
         is_system_sleeping: false,
         is_screen_locked: false,
     }

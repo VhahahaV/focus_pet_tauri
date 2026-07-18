@@ -446,7 +446,7 @@ fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
 }
 
 #[tauri::command]
-fn sync_widget_windows(
+async fn sync_widget_windows(
     app: tauri::AppHandle,
     current_status_visible: bool,
     recent_rhythm_visible: bool,
@@ -670,12 +670,13 @@ fn sync_widget_window(
             window.show().map_err(|error| error.to_string())?;
             if let Some((x, y)) = origin {
                 let position = PhysicalPosition::new(x.round() as i32, y.round() as i32);
-                set_widget_window_position(&window, position)?;
-                retry_widget_window_position(window, position);
+                window
+                    .set_position(position)
+                    .map_err(|error| error.to_string())?;
             }
             return Ok(());
         }
-        let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
             .title("Focus Pet Widget")
             .inner_size(width, height)
             .resizable(false)
@@ -685,71 +686,18 @@ fn sync_widget_window(
             .always_on_top(true)
             .visible_on_all_workspaces(true)
             .skip_taskbar(true)
-            .visible(true)
-            .build()
-            .map_err(|error| error.to_string())?;
+            .visible(true);
         if let Some((x, y)) = origin {
-            let position = PhysicalPosition::new(x.round() as i32, y.round() as i32);
-            set_widget_window_position(&window, position)?;
-            // WebView2 can apply its initial cascade placement after `build` returns.
-            // Reapply the requested coordinate once the native window is ready.
-            retry_widget_window_position(window, position);
+            // Supplying the coordinate before WebView2 creates the native
+            // window avoids its default cascade placement without resolving
+            // an HWND (which can block Tauri's Windows event loop).
+            builder = builder.position(x, y);
         }
+        builder.build().map_err(|error| error.to_string())?;
     } else if let Some(window) = app.get_webview_window(label) {
         window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-fn set_widget_window_position(
-    window: &tauri::WebviewWindow,
-    position: tauri::PhysicalPosition<i32>,
-) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-        };
-
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-        let applied = unsafe {
-            SetWindowPos(
-                hwnd.0,
-                std::ptr::null_mut(),
-                position.x,
-                position.y,
-                0,
-                0,
-                SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-            )
-        };
-        if applied == 0 {
-            return Err(format!(
-                "Win32 SetWindowPos failed: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        return Ok(());
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    window
-        .set_position(position)
-        .map_err(|error| error.to_string())
-}
-
-fn retry_widget_window_position(
-    window: tauri::WebviewWindow,
-    position: tauri::PhysicalPosition<i32>,
-) {
-    std::thread::spawn(move || {
-        for delay_ms in [80, 240, 720] {
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-            if set_widget_window_position(&window, position).is_err() {
-                break;
-            }
-        }
-    });
 }
 
 fn show_main_window(app: &tauri::AppHandle) {

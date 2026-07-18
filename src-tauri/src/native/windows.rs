@@ -32,6 +32,8 @@ use windows_sys::Win32::{
 
 static KEYBOARD_EVENTS: AtomicU32 = AtomicU32::new(0);
 static POINTER_EVENTS: AtomicU32 = AtomicU32::new(0);
+static FOREGROUND_SWITCH_EVENTS: AtomicU32 = AtomicU32::new(0);
+static LAST_FOREGROUND_PROCESS: AtomicU32 = AtomicU32::new(0);
 static INPUT_HOOKS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub fn sample_activity() -> RawActivitySample {
@@ -63,6 +65,7 @@ pub fn sample_activity() -> RawActivitySample {
         },
         keyboard_count: KEYBOARD_EVENTS.swap(0, Ordering::AcqRel),
         pointer_count: POINTER_EVENTS.swap(0, Ordering::AcqRel),
+        switch_count: FOREGROUND_SWITCH_EVENTS.swap(0, Ordering::AcqRel),
         is_system_sleeping: false,
         is_screen_locked: screen_is_locked(),
     }
@@ -199,9 +202,26 @@ fn input_monitor_loop(ready: mpsc::SyncSender<bool>) {
     // SAFETY: Low-level hooks are installed on this dedicated thread, callbacks are
     // static functions, and the thread owns the Win32 message loop for their lifetime.
     unsafe {
+        use windows_sys::Win32::UI::{
+            Accessibility::{SetWinEventHook, UnhookWinEvent},
+            WindowsAndMessaging::{EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT},
+        };
+
         let module: HINSTANCE = GetModuleHandleW(null());
         let keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), module, 0);
         let pointer_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(pointer_hook_proc), module, 0);
+        if let Some(foreground) = current_foreground_process_id() {
+            LAST_FOREGROUND_PROCESS.store(foreground, Ordering::Release);
+        }
+        let foreground_hook = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            null_mut(),
+            Some(foreground_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
         let active = !keyboard_hook.is_null() && !pointer_hook.is_null();
         INPUT_HOOKS_ACTIVE.store(active, Ordering::Release);
         let _ = ready.send(active);
@@ -212,6 +232,9 @@ fn input_monitor_loop(ready: mpsc::SyncSender<bool>) {
             }
             if !pointer_hook.is_null() {
                 UnhookWindowsHookEx(pointer_hook);
+            }
+            if !foreground_hook.is_null() {
+                UnhookWinEvent(foreground_hook);
             }
             return;
         }
@@ -224,6 +247,44 @@ fn input_monitor_loop(ready: mpsc::SyncSender<bool>) {
         INPUT_HOOKS_ACTIVE.store(false, Ordering::Release);
         UnhookWindowsHookEx(keyboard_hook);
         UnhookWindowsHookEx(pointer_hook);
+        if !foreground_hook.is_null() {
+            UnhookWinEvent(foreground_hook);
+        }
+    }
+}
+
+fn current_foreground_process_id() -> Option<u32> {
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return None;
+        }
+        let mut process_id = 0_u32;
+        GetWindowThreadProcessId(window, &mut process_id);
+        (process_id != 0).then_some(process_id)
+    }
+}
+
+unsafe extern "system" fn foreground_event_proc(
+    _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    window: windows_sys::Win32::Foundation::HWND,
+    _object_id: i32,
+    _child_id: i32,
+    _event_thread: u32,
+    _event_time: u32,
+) {
+    if window.is_null() {
+        return;
+    }
+    let mut process_id = 0_u32;
+    unsafe { GetWindowThreadProcessId(window, &mut process_id) };
+    if process_id == 0 {
+        return;
+    }
+    let previous = LAST_FOREGROUND_PROCESS.swap(process_id, Ordering::AcqRel);
+    if previous != 0 && previous != process_id {
+        saturating_increment(&FOREGROUND_SWITCH_EVENTS);
     }
 }
 

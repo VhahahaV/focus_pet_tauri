@@ -41,14 +41,18 @@ File: `src-tauri/src/native/macos.rs`
 
 ## Windows
 
+The `x86_64-pc-windows-gnullvm` build links `WebView2Loader.dll` dynamically. The Windows-specific Tauri bundle configuration installs the vendored loader beside `focus-pet.exe`; omitting it produces a headless process with no WebView window after NSIS/MSI installation.
+
 File: `src-tauri/src/native/windows.rs`
 
-- Foreground window: PowerShell-hosted Win32 calls to `GetForegroundWindow`, `GetWindowText`, and `GetWindowThreadProcessId`.
-- App identity: `Get-Process` name and executable path.
-- Input idle seconds: PowerShell-hosted Win32 `GetLastInputInfo`.
-- Settings entry points: `ms-settings:privacy` and `ms-settings:notifications`.
+- Foreground window: direct Win32 calls to `GetForegroundWindow`, `GetWindowTextW`, and `GetWindowThreadProcessId`.
+- App identity: direct `OpenProcess` and `QueryFullProcessImageNameW`, with the executable stem used as the process name.
+- Input idle seconds: direct Win32 `GetLastInputInfo`, using wrapping 32-bit tick subtraction for systems running longer than 49.7 days.
+- Keyboard and pointer counts: `WH_KEYBOARD_LL` and `WH_MOUSE_LL` hooks owned by a dedicated Win32 message-loop thread, with an idle-delta fallback if hooks cannot start.
+- Screen lock: read-only `OpenInputDesktop` / `SwitchDesktop` availability probe.
+- Settings entry points: `ms-settings:privacy-general` and `ms-settings:notifications`.
 - Notifications: PowerShell notification path, using BurntToast when available and a tray balloon fallback otherwise. The permissions panel can send a test notification and reports the command result.
-- Pet-pack picker: Windows Forms folder browser.
+- Pet-pack picker: `tauri-plugin-dialog` native folder/file dialogs for folders, `pet.json`, and zip archives.
 
 ## Linux
 
@@ -157,6 +161,6 @@ The repository includes `.github/workflows/verify-platforms.yml` for CI coverage
 
 The CI workflow can prove automated build/test/bundle behavior plus non-interactive native adapter probes on all three OS families and stores bundle artifacts, but the native smoke checklist still needs human confirmation on a visible desktop session for permissions panes, notification display, foreground-window sampling, tray interaction, and widget/pet window movement.
 
-The macOS checks, release bundle build, and `.app` launch smoke test have been run in this workspace. Cross-target checks were attempted from macOS: Windows reached Tauri's Windows resource build step but needs a Windows resource compiler/MSVC environment (`llvm-rc` was not available in this workspace); Linux reached GTK/GLib build scripts but needs a Linux target sysroot and cross-aware `pkg-config`. Windows and Linux should therefore be checked on their own target OS with the same command set, plus a real runtime smoke test for foreground-window sampling, notification delivery, folder picker import, tray/menu actions, and widget window visibility.
+The macOS checks, release bundle build, and `.app` launch smoke test have been run in their original workspace. Windows release builds and direct Win32 adapter tests now pass on a real Windows x86_64 machine using the gnullvm/LLVM-MinGW toolchain; XiaoDaiLocal folder/zip import and the canonical `%LOCALAPPDATA%\\Focus Pet Data` data root have also been observed in the native app. The NSIS install/uninstall/reinstall smoke passes with user data preserved. Final Windows sign-off still requires tray, notification, long-running lock/input monitoring, complete pet-action, and elevated MSI smoke items in `docs/windows-compatibility-handoff-2026-07-18.md`. Linux still requires its own target OS and desktop session validation.
 
 Use `docs/target-machine-validation.md` as the evidence template for target-machine sign-off.

@@ -4,8 +4,13 @@ use std::process::Command;
 use std::sync::Mutex;
 use sysinfo::{Components, Disks, System};
 
+#[cfg(target_os = "windows")]
+use std::collections::HashMap;
+
 pub struct SystemMonitorState {
     system: Mutex<System>,
+    #[cfg(target_os = "windows")]
+    windows_gpu: Mutex<Option<WindowsGpuSampler>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -65,6 +70,8 @@ impl SystemMonitorState {
         system.refresh_memory();
         Self {
             system: Mutex::new(system),
+            #[cfg(target_os = "windows")]
+            windows_gpu: Mutex::new(WindowsGpuSampler::new()),
         }
     }
 
@@ -130,7 +137,7 @@ impl SystemMonitorState {
                     })
             })
             .collect::<Vec<_>>();
-        let (gpu_name, gpu_usage) = apple_gpu_sample();
+        let (gpu_name, gpu_usage) = self.gpu_sample();
 
         Ok(SystemMetricsSample {
             sampled_at: chrono::Utc::now().to_rfc3339(),
@@ -148,6 +155,24 @@ impl SystemMonitorState {
             // contract optional so supported platforms can add readings later.
             fans: Vec::new(),
         })
+    }
+
+    fn gpu_sample(&self) -> (Option<String>, Option<f32>) {
+        #[cfg(target_os = "windows")]
+        {
+            let usage = self
+                .windows_gpu
+                .lock()
+                .ok()
+                .and_then(|mut sampler| sampler.as_mut()?.sample());
+            return (
+                usage.map(|_| "Windows GPU (Performance Counters)".to_string()),
+                usage,
+            );
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        apple_gpu_sample()
     }
 }
 
@@ -185,9 +210,149 @@ fn apple_gpu_sample() -> (Option<String>, Option<f32>) {
     (name, usage)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn apple_gpu_sample() -> (Option<String>, Option<f32>) {
     (None, None)
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsGpuSampler {
+    query: usize,
+    counter: usize,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsGpuSampler {
+    fn new() -> Option<Self> {
+        use windows_sys::Win32::System::Performance::{
+            PdhAddEnglishCounterW, PdhCollectQueryData, PdhOpenQueryW,
+        };
+
+        let mut query = std::ptr::null_mut();
+        if unsafe { PdhOpenQueryW(std::ptr::null(), 0, &mut query) } != 0 || query.is_null() {
+            return None;
+        }
+        let path = "\\GPU Engine(*)\\Utilization Percentage"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut counter = std::ptr::null_mut();
+        if unsafe { PdhAddEnglishCounterW(query, path.as_ptr(), 0, &mut counter) } != 0
+            || counter.is_null()
+        {
+            unsafe { windows_sys::Win32::System::Performance::PdhCloseQuery(query) };
+            return None;
+        }
+        // Rate counters require a baseline collection before a formatted value
+        // can be produced by a later sample.
+        if unsafe { PdhCollectQueryData(query) } != 0 {
+            unsafe { windows_sys::Win32::System::Performance::PdhCloseQuery(query) };
+            return None;
+        }
+        Some(Self {
+            query: query as usize,
+            counter: counter as usize,
+        })
+    }
+
+    fn sample(&mut self) -> Option<f32> {
+        use windows_sys::Win32::System::Performance::{
+            PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
+            PDH_FMT_DOUBLE, PDH_MORE_DATA,
+        };
+
+        let query = self.query as _;
+        let counter = self.counter as _;
+        if unsafe { PdhCollectQueryData(query) } != 0 {
+            return None;
+        }
+        let mut buffer_bytes = 0_u32;
+        let mut item_count = 0_u32;
+        let status = unsafe {
+            PdhGetFormattedCounterArrayW(
+                counter,
+                PDH_FMT_DOUBLE,
+                &mut buffer_bytes,
+                &mut item_count,
+                std::ptr::null_mut(),
+            )
+        };
+        if status != PDH_MORE_DATA || buffer_bytes == 0 {
+            return None;
+        }
+        let word_size = std::mem::size_of::<usize>();
+        let mut buffer = vec![0_usize; (buffer_bytes as usize).div_ceil(word_size)];
+        let status = unsafe {
+            PdhGetFormattedCounterArrayW(
+                counter,
+                PDH_FMT_DOUBLE,
+                &mut buffer_bytes,
+                &mut item_count,
+                buffer.as_mut_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>(),
+            )
+        };
+        if status != 0 || item_count == 0 {
+            return None;
+        }
+        let items = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>(),
+                item_count as usize,
+            )
+        };
+        let mut engines = HashMap::<String, f64>::new();
+        for (index, item) in items.iter().enumerate() {
+            if item.FmtValue.CStatus != 0 {
+                continue;
+            }
+            let value = unsafe { item.FmtValue.Anonymous.doubleValue };
+            if !value.is_finite() || value < 0.0 {
+                continue;
+            }
+            let name = wide_string(item.szName);
+            let key = gpu_engine_key(name.as_deref()).unwrap_or_else(|| format!("item-{index}"));
+            *engines.entry(key).or_default() += value;
+        }
+        engines
+            .values()
+            .copied()
+            .reduce(f64::max)
+            .map(|usage| clamp_percent(usage as f32))
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsGpuSampler {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::System::Performance::PdhCloseQuery(self.query as _);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wide_string(pointer: *mut u16) -> Option<String> {
+    if pointer.is_null() {
+        return None;
+    }
+    let mut length = 0_usize;
+    unsafe {
+        while *pointer.add(length) != 0 && length < 32_768 {
+            length += 1;
+        }
+        (length > 0).then(|| String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length)))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn gpu_engine_key(name: Option<&str>) -> Option<String> {
+    let name = name?.to_ascii_lowercase();
+    let start = name.find("luid_")?;
+    let end = name[start..]
+        .find("_engtype_")
+        .map(|offset| start + offset)
+        .unwrap_or(name.len());
+    Some(name[start..end].to_string())
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -222,6 +387,17 @@ mod tests {
         assert_eq!(
             parse_quoted_value(sample, "\"MetalPluginClassName\" = \""),
             Some("AGXG16GDevice".to_string())
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn groups_windows_gpu_process_instances_by_physical_engine() {
+        assert_eq!(
+            super::gpu_engine_key(Some(
+                "pid_100_luid_0x00000000_0x0000AABB_phys_0_eng_3_engtype_3D"
+            )),
+            Some("luid_0x00000000_0x0000aabb_phys_0_eng_3".to_string())
         );
     }
 }

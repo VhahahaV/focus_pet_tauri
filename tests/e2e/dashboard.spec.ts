@@ -349,7 +349,7 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.getByText("刷新于")).toBeVisible();
   await expect(page.getByRole("button", { name: "请求" }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "测试", exact: true })).toBeVisible();
-  await expect(page.getByText("隐私与安全")).toBeVisible();
+  await expect(page.getByText(/^(隐私与安全|Windows 隐私设置)$/)).toBeVisible();
 
   await expect(page.getByText("本机数据")).toBeVisible();
   await expect(page.getByText("启用日志")).toBeVisible();

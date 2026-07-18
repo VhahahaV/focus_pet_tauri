@@ -11,6 +11,8 @@ use walkdir::WalkDir;
 const SCHEMA_VERSION: &str = "focuspet-mvp-1";
 const COMPATIBLE_SCHEMA_VERSIONS: &[&str] = &["focuspet-tauri-1"];
 const APP_SUPPORT_FOLDER: &str = "Focus Pet";
+#[cfg(target_os = "windows")]
+const WINDOWS_APP_SUPPORT_FOLDER: &str = "Focus Pet Data";
 const LEGACY_APP_SUPPORT_FOLDERS: &[&str] = &["FocusPetMVP", "FocusPetV0", "FocusPetLegacy"];
 
 pub struct FocusPetStore {
@@ -29,9 +31,19 @@ impl FocusPetStore {
                 .path()
                 .app_local_data_dir()
                 .unwrap_or_else(|_| fallback_data_dir());
-            let root = windows_local_app_data_dir()
-                .map(|directory| directory.join(APP_SUPPORT_FOLDER))
+            let stable_local_data = windows_local_app_data_dir();
+            let root = stable_local_data
+                .as_ref()
+                .map(|directory| directory.join(WINDOWS_APP_SUPPORT_FOLDER))
                 .unwrap_or_else(|| tauri_local_root.clone());
+            // NSIS current-user installs use `%LOCALAPPDATA%\Focus Pet` as the
+            // application directory. Keep user data outside that tree so an
+            // uninstall cannot remove history or imported pet packs. Older
+            // builds stored data there, so copy only known data entries and
+            // never migrate the executable/uninstaller alongside them.
+            if let Some(directory) = stable_local_data {
+                migrate_store_contents_if_needed(&directory.join(APP_SUPPORT_FOLDER), &root)?;
+            }
             let legacy_root = app_data_dir
                 .parent()
                 .map(|parent| parent.join(APP_SUPPORT_FOLDER))
@@ -472,7 +484,7 @@ fn fallback_data_dir() -> PathBuf {
         return windows_local_app_data_dir()
             .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
             .unwrap_or_else(|| home.join("AppData/Local"))
-            .join(APP_SUPPORT_FOLDER);
+            .join(WINDOWS_APP_SUPPORT_FOLDER);
     }
     #[cfg(target_os = "linux")]
     {
@@ -577,6 +589,41 @@ fn migrate_store_root_if_needed(source: &Path, destination: &Path) -> io::Result
     }
     if fs::rename(source, destination).is_err() {
         copy_dir_all(source, destination)?;
+    }
+    Ok(destination.join("schema.json").is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn migrate_store_contents_if_needed(source: &Path, destination: &Path) -> io::Result<bool> {
+    if source == destination
+        || destination.join("schema.json").exists()
+        || destination
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false)
+        || !source.join("schema.json").is_file()
+    {
+        return Ok(false);
+    }
+    fs::create_dir_all(destination)?;
+    for name in [
+        "schema.json",
+        "settings.json",
+        "classification-rules.json",
+        "state-segments.json",
+        "app-usage.json",
+        "input-activity.json",
+        "focus-sessions.json",
+        "nudges.json",
+        "PetPacks",
+        "Logs",
+    ] {
+        let source_entry = source.join(name);
+        if source_entry.is_dir() {
+            copy_dir_all(&source_entry, &destination.join(name))?;
+        } else if source_entry.is_file() {
+            fs::copy(&source_entry, destination.join(name))?;
+        }
     }
     Ok(destination.join("schema.json").is_file())
 }
@@ -722,6 +769,31 @@ mod tests {
         assert!(destination.join("schema.json").is_file());
         assert!(destination.join("PetPacks/demo/pet.json").is_file());
         assert!(!migrate_store_root_if_needed(&legacy, &destination).unwrap());
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_install_directory_migration_copies_only_user_data() {
+        let parent = temp_store_root("windows-install-dir-migration");
+        let old_install_dir = parent.join("Focus Pet");
+        let destination = parent.join("Focus Pet Data");
+        fs::create_dir_all(old_install_dir.join("PetPacks/demo")).unwrap();
+        fs::write(
+            old_install_dir.join("schema.json"),
+            format!(r#"{{"schemaVersion":"{}"}}"#, SCHEMA_VERSION),
+        )
+        .unwrap();
+        fs::write(old_install_dir.join("PetPacks/demo/pet.json"), "{}").unwrap();
+        fs::write(old_install_dir.join("focus-pet.exe"), "application").unwrap();
+        fs::write(old_install_dir.join("uninstall.exe"), "uninstaller").unwrap();
+
+        assert!(super::migrate_store_contents_if_needed(&old_install_dir, &destination).unwrap());
+        assert!(destination.join("schema.json").is_file());
+        assert!(destination.join("PetPacks/demo/pet.json").is_file());
+        assert!(!destination.join("focus-pet.exe").exists());
+        assert!(!destination.join("uninstall.exe").exists());
+        assert!(old_install_dir.join("schema.json").is_file());
         let _ = fs::remove_dir_all(parent);
     }
 

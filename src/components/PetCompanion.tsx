@@ -24,6 +24,7 @@ import { useFocusPet } from "../app/AppContext";
 import type { NativeMenuAction } from "../app/nativeMenu";
 import { cyclePlayableSourceAction, resolveDisplaySourceAction, type RandomSourceActionState } from "../app/petCompanionLogic";
 import { useDocumentTheme } from "../themes";
+import { usePetFrames } from "./usePetFrames";
 
 interface PetCompanionRendererProps {
   state: PetCompanionViewState;
@@ -88,7 +89,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   );
   const sourceAction = resolvedSourceAction.action;
   const assets = sourceActionAssetsForID(selectedPack, sourceAction?.id);
-  const frames = assets?.frameURLs.length ? assets.frameURLs : [selectedPack?.previewURL ?? fallbackPreviewURL];
+  const frames = usePetFrames(assets?.frameURLs ?? [], selectedPack?.previewURL ?? fallbackPreviewURL);
   const sourceFps = sourceAction?.fps ?? 8;
   const effectiveFps = isHovering
     ? Math.min(sourceFps, 8)
