@@ -26,6 +26,11 @@ pub struct FocusPetStore {
     root: PathBuf,
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_focus_pet_data_root() -> Option<PathBuf> {
+    windows_local_app_data_dir().map(|directory| directory.join(WINDOWS_APP_SUPPORT_FOLDER))
+}
+
 impl FocusPetStore {
     pub fn new(app: &AppHandle) -> io::Result<Self> {
         let app_data_dir = app

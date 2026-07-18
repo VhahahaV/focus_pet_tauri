@@ -113,6 +113,7 @@ Loader 校验：
 - 文件和文件夹选择改用 `tauri-plugin-dialog`，移除 PowerShell/Windows Forms 依赖。
 - Windows 设置跳转使用 `ms-settings:privacy-general` 和 `ms-settings:notifications`。
 - NSIS 的当前用户安装目录 `%LOCALAPPDATA%\Focus Pet` 现在会被正确识别为已安装，不再只认可 `%LOCALAPPDATA%\Programs`；路径判断带目录边界，不会把相似前缀误判为安装目录。
+- Agent 完成事件 inbox 已从分裂的 `%APPDATA%\Focus Pet\agent-events.jsonl` 统一到 `%LOCALAPPDATA%\Focus Pet Data\agent-events.jsonl`；读取端仍会排空旧 Roaming 路径中的遗留事件，并按发生时间合并，避免升级后漏通知。
 - Windows 全局输入计数不伪装成 macOS 式授权；UI 统一显示“已允许 / 待开启 / 预览环境 / 检查中”。
 - Node ESM 脚本使用 `fileURLToPath(import.meta.url)`，正确处理 Windows 盘符路径。
 - 验证脚本只在运行 npm 包装命令时使用 shell，不再让全部 Windows 子进程强制 `shell: true`。
@@ -171,7 +172,7 @@ Loader 校验：
 | Vitest | 3 个文件、39 个测试全部通过 |
 | Playwright | desktop/mobile 共 18 个测试全部通过 |
 | `cargo fmt --check` | 通过 |
-| Rust release / gnullvm | 40 个测试全部通过 |
+| Rust release / gnullvm | 41 个测试全部通过 |
 | 原生适配验证 | 输入、前台进程、idle、通知 helper、原生对话框全部通过 |
 | 打包 preflight | 通过，包含 VBScript |
 
