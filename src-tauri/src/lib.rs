@@ -278,7 +278,89 @@ fn export_app_icon(
     Ok(Some(output_path.to_string_lossy().to_string()))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn export_app_icon(
+    app: &tauri::AppHandle,
+    bundle_id: Option<&str>,
+    app_name: &str,
+) -> Result<Option<String>, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::os::windows::process::CommandExt;
+
+    let Some(source) = windows_icon_source(bundle_id) else {
+        return Ok(None);
+    };
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join("app-icons");
+    std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let safe_name = app_name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .take(32)
+        .collect::<String>();
+    let output_path = cache_dir.join(format!(
+        "{}-{:016x}.png",
+        if safe_name.is_empty() {
+            "app"
+        } else {
+            &safe_name
+        },
+        hasher.finish()
+    ));
+    if output_path.is_file() {
+        return Ok(Some(output_path.to_string_lossy().to_string()));
+    }
+
+    let script = r#"
+Add-Type -AssemblyName System.Drawing
+$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:FOCUS_PET_ICON_SOURCE)
+if ($null -eq $icon) { exit 2 }
+$bitmap = $icon.ToBitmap()
+try {
+  $bitmap.Save($env:FOCUS_PET_ICON_OUTPUT, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally {
+  $bitmap.Dispose()
+  $icon.Dispose()
+}
+"#;
+    let status = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("FOCUS_PET_ICON_SOURCE", &source)
+        .env("FOCUS_PET_ICON_OUTPUT", &output_path)
+        .creation_flags(0x0800_0000)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if !status.success() || !output_path.is_file() {
+        let _ = std::fs::remove_file(&output_path);
+        return Ok(None);
+    }
+    Ok(Some(output_path.to_string_lossy().to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_icon_source(bundle_id: Option<&str>) -> Option<PathBuf> {
+    bundle_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn export_app_icon(
     _app: &tauri::AppHandle,
     _bundle_id: Option<&str>,
@@ -1194,6 +1276,18 @@ mod tests {
             Path::new(r"C:\Program FilesEvil\Focus Pet\focus-pet.exe"),
             &roots,
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_icon_source_requires_an_existing_executable_path() {
+        let current = std::env::current_exe().expect("test executable path");
+        assert_eq!(
+            super::windows_icon_source(Some(current.to_string_lossy().as_ref())),
+            Some(current)
+        );
+        assert!(super::windows_icon_source(None).is_none());
+        assert!(super::windows_icon_source(Some(r"C:\missing\focus-pet.exe")).is_none());
     }
 }
 
