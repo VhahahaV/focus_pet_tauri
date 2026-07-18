@@ -352,6 +352,10 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.locator(".settings-number-control")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /刷新诊断/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /清空例外/ })).toBeVisible();
+  await expect(page.getByText(/采样链路/)).toBeVisible();
+  for (const signal of ["空闲时间", "本轮键盘", "本轮鼠标", "本轮切换"]) {
+    await expect(page.getByText(signal, { exact: true })).toBeVisible();
+  }
 
   await expect(page.getByText("刷新于")).toBeVisible();
   await expect(page.getByRole("button", { name: "请求" }).first()).toBeVisible();

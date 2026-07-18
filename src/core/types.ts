@@ -566,9 +566,15 @@ export interface InstallationSnapshot {
 
 export interface RecognitionDiagnosticSnapshot {
   sampledAt: string;
+  sampleQuality?: string;
   appName: string;
   bundleID?: string;
   windowTitle?: string;
+  idleSeconds: number;
+  keyboardCount: number;
+  pointerCount: number;
+  switchCount: number;
+  isScreenLocked: boolean;
   category: ActivityCategory;
   catalogEntryCount: number;
   defaultRuleCount: number;

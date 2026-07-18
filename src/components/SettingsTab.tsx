@@ -22,7 +22,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { categoryLabels } from "../core/labels";
-import { formatDate } from "../core/formatters";
+import { formatDate, formatDuration } from "../core/formatters";
 import { judgmentPresetSettings, matchingJudgmentPreset, type JudgmentSensitivityPreset } from "../core/settings";
 import { CommandButton } from "./common";
 import { SegmentedControl, Stepper, TogglePill } from "./ui";
@@ -103,6 +103,15 @@ const formatBytes = (bytes: number): string => {
   if (safe >= 1024 * 1024) return `${(safe / 1024 / 1024).toFixed(1)} MB`;
   if (safe >= 1024) return `${(safe / 1024).toFixed(1)} KB`;
   return `${Math.round(safe)} B`;
+};
+
+const sampleQualityTitle = (quality?: string): string => {
+  if (!quality) return "等待采样";
+  if (quality === "screen-locked") return "锁屏隔离";
+  if (quality.includes("low-level-input-hooks")) return "Win32 原生钩子";
+  if (quality.includes("fallback")) return "空闲状态回退";
+  if (quality === "browser-preview") return "浏览器预览";
+  return quality;
 };
 
 const SettingsSegmentedControl = <T extends string | number,>({
@@ -236,6 +245,10 @@ const RecognitionSettings = () => {
             <ShieldCheck size={13} />
             输入监控 {diagnostic.inputMonitoringStatus}
           </span>
+          <span className={diagnostic.sampleQuality?.includes("fallback") ? "warn" : "ok"}>
+            <Monitor size={13} />
+            采样链路 {sampleQualityTitle(diagnostic.sampleQuality)}
+          </span>
         </div>
         <div className="recognition-tile-grid">
           <div>
@@ -255,6 +268,22 @@ const RecognitionSettings = () => {
           <div>
             <small>用户例外</small>
             <strong>{diagnostic.userRuleCount} 条</strong>
+          </div>
+          <div>
+            <small>空闲时间</small>
+            <strong>{diagnostic.isScreenLocked ? "锁屏" : formatDuration(diagnostic.idleSeconds)}</strong>
+          </div>
+          <div>
+            <small>本轮键盘</small>
+            <strong>{diagnostic.keyboardCount} 次</strong>
+          </div>
+          <div>
+            <small>本轮鼠标</small>
+            <strong>{diagnostic.pointerCount} 次</strong>
+          </div>
+          <div>
+            <small>本轮切换</small>
+            <strong>{diagnostic.switchCount} 次</strong>
           </div>
         </div>
         {diagnostic.windowTitle ? <p className="recognition-window-title">{diagnostic.windowTitle}</p> : null}

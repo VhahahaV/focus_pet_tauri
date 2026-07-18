@@ -403,6 +403,14 @@ describe("Focus Pet migrated core", () => {
     expect(advanced.state.stateSegments).not.toBe(previousArrays.stateSegments);
     expect(advanced.state.appUsage).not.toBe(previousArrays.appUsage);
     expect(advanced.state.inputActivity).not.toBe(previousArrays.inputActivity);
+    expect(advanced.state.recognitionDiagnostic).toMatchObject({
+      sampleQuality: "test",
+      idleSeconds: 0,
+      keyboardCount: 2,
+      pointerCount: 1,
+      switchCount: 0,
+      isScreenLocked: false,
+    });
   });
 
   it("backfills long sampling gaps as system sleep time", () => {
