@@ -445,22 +445,13 @@ fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        let normalized = path.to_string_lossy().replace('/', "\\").to_lowercase();
         let mut roots = Vec::new();
         for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
             if let Some(value) = std::env::var_os(key) {
-                let root = PathBuf::from(value);
-                roots.push(if key == "LOCALAPPDATA" {
-                    root.join("Programs")
-                } else {
-                    root
-                });
+                roots.push(PathBuf::from(value));
             }
         }
-        return roots
-            .iter()
-            .map(|root| root.to_string_lossy().replace('/', "\\").to_lowercase())
-            .any(|root| normalized.starts_with(&root));
+        return is_windows_installed_path(path, &roots);
     }
 
     #[cfg(target_os = "linux")]
@@ -472,6 +463,23 @@ fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
 
     #[allow(unreachable_code)]
     false
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_installed_path(path: &Path, roots: &[PathBuf]) -> bool {
+    let normalized = normalize_windows_path(path);
+    roots.iter().any(|root| {
+        let root = normalize_windows_path(root);
+        normalized == root || normalized.starts_with(&format!("{root}\\"))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
 }
 
 #[tauri::command]
@@ -997,6 +1005,8 @@ mod tests {
         is_native_menu_action, is_running_from_mounted_volume_path, rect_contains_origin, Rect,
     };
     use std::path::Path;
+    #[cfg(target_os = "windows")]
+    use std::path::PathBuf;
 
     const SCREEN: Rect = Rect {
         x: 0.0,
@@ -1163,6 +1173,27 @@ mod tests {
                 .is_installed
             );
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn installation_snapshot_accepts_current_user_nsis_paths_with_boundaries() {
+        let roots = [
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Users\tester\AppData\Local"),
+        ];
+        assert!(super::is_windows_installed_path(
+            Path::new(r"C:\Users\tester\AppData\Local\Focus Pet\focus-pet.exe"),
+            &roots,
+        ));
+        assert!(super::is_windows_installed_path(
+            Path::new(r"C:\Program Files\Focus Pet\focus-pet.exe"),
+            &roots,
+        ));
+        assert!(!super::is_windows_installed_path(
+            Path::new(r"C:\Program FilesEvil\Focus Pet\focus-pet.exe"),
+            &roots,
+        ));
     }
 }
 

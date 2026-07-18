@@ -39,7 +39,8 @@ import {
   nativeSyncWidgetWindows,
   isTauriRuntime,
 } from "../store/native";
-import { makeMockActivitySample, mockPermissionSnapshot } from "./mockNative";
+import { mockPermissionSnapshot } from "./mockNative";
+import { activitySampleForRuntime } from "./activitySampling";
 import {
   advanceRuntime,
   emptyRuntime,
@@ -100,9 +101,9 @@ export interface FocusPetAppController {
   };
 }
 
-const sampleActivity = async (): Promise<NativeActivitySample> => {
+const sampleActivity = async (): Promise<NativeActivitySample | undefined> => {
   const native = await nativeActivitySample().catch(() => undefined);
-  return native ?? makeMockActivitySample();
+  return activitySampleForRuntime(native, isTauriRuntime());
 };
 
 const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
@@ -217,6 +218,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const lastPersistedAt = useRef(0);
   const lastRetentionPruneAt = useRef(Date.now());
   const tickInFlight = useRef<Promise<void> | undefined>(undefined);
+  const nativeSampleUnavailable = useRef(false);
   const lastNotificationID = useRef<string | undefined>(undefined);
   const hydratingPetPackIDs = useRef<Set<string>>(new Set());
   const hydratedPetPackIDs = useRef<Set<string>>(new Set());
@@ -360,10 +362,28 @@ export const useFocusPetApp = (): FocusPetAppController => {
     if (tickInFlight.current) return tickInFlight.current;
     const request = (async () => {
       const sample = await sampleActivity();
+      if (!sample) {
+        if (!nativeSampleUnavailable.current) {
+          nativeSampleUnavailable.current = true;
+          setBundle((current) => ({
+            ...current,
+            state: {
+              ...current.state,
+              statusMessage: "Windows 原生监控采样暂时不可用，本轮未写入模拟数据。",
+            },
+          }));
+        }
+        return;
+      }
+      const recoveredFromUnavailable = nativeSampleUnavailable.current;
+      nativeSampleUnavailable.current = false;
       setBundle((current) => {
         const next = advanceRuntime(current, sample, catalogRef.current);
         const shouldPrune = Date.now() - lastRetentionPruneAt.current >= retentionPruneIntervalMilliseconds;
-        const nextState = shouldPrune ? recomputeDerived(next.state) : next.state;
+        const sampledState = recoveredFromUnavailable
+          ? { ...next.state, statusMessage: "Windows 原生监控采样已恢复。" }
+          : next.state;
+        const nextState = shouldPrune ? recomputeDerived(sampledState) : sampledState;
         if (shouldPrune) lastRetentionPruneAt.current = Date.now();
         persist(runtimeSnapshot(nextState), "sample");
         return { ...next, state: nextState };
@@ -378,6 +398,13 @@ export const useFocusPetApp = (): FocusPetAppController => {
 
   const refreshRecognitionDiagnostics = useCallback(async () => {
     const sample = await sampleActivity();
+    if (!sample) {
+      mutate((state) => ({
+        ...state,
+        statusMessage: "Windows 原生监控采样不可用，未生成模拟诊断。",
+      }));
+      return;
+    }
     mutate((state) => {
       const classifier = new ActivityClassifier(state.classificationRules, catalogRef.current);
       const category = classifier.classify(sample.appName, sample.bundleID, sample.windowTitle);

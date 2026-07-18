@@ -21,6 +21,7 @@ import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
 import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWindows";
 import { cyclePlayableSourceAction, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
+import { activitySampleForRuntime } from "../app/activitySampling";
 import { emptySnapshot, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
@@ -43,6 +44,15 @@ const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapsh
 });
 
 describe("Focus Pet migrated core", () => {
+  it("never substitutes browser preview input for a failed native sample", () => {
+    const now = new Date("2026-07-18T10:00:00.000Z");
+    expect(activitySampleForRuntime(undefined, true, now)).toBeUndefined();
+    expect(activitySampleForRuntime(undefined, false, now)?.inputMonitoringStatus).toBe("browser-preview");
+
+    const nativeSample = activitySampleForRuntime(undefined, false, now)!;
+    expect(activitySampleForRuntime(nativeSample, true, now)).toBe(nativeSample);
+  });
+
   it("normalizes native input monitoring states to Swift permission titles", () => {
     expect(inputMonitoringPermissionTitle("available")).toBe("已允许");
     expect(inputMonitoringPermissionTitle("frontmost-app-window-cg-event-tap · available")).toBe("已允许");

@@ -41,6 +41,15 @@ const INPUT_MONITOR_RETRY_MS: u64 = 5_000;
 
 pub fn sample_activity() -> RawActivitySample {
     ensure_input_monitor();
+    let screen_locked = screen_is_locked();
+    if screen_locked {
+        // Discard counters collected around the secure-desktop transition so
+        // they are not replayed into the first unlocked activity bucket.
+        KEYBOARD_EVENTS.store(0, Ordering::Release);
+        POINTER_EVENTS.store(0, Ordering::Release);
+        FOREGROUND_SWITCH_EVENTS.store(0, Ordering::Release);
+        return locked_activity_sample(now_iso(), idle_seconds());
+    }
     let hooks_active = INPUT_HOOKS_ACTIVE.load(Ordering::Acquire);
     let foreground = foreground_window();
     RawActivitySample {
@@ -70,7 +79,30 @@ pub fn sample_activity() -> RawActivitySample {
         pointer_count: POINTER_EVENTS.swap(0, Ordering::AcqRel),
         switch_count: FOREGROUND_SWITCH_EVENTS.swap(0, Ordering::AcqRel),
         is_system_sleeping: false,
-        is_screen_locked: screen_is_locked(),
+        is_screen_locked: false,
+    }
+}
+
+fn locked_activity_sample(timestamp: String, idle_seconds: f64) -> RawActivitySample {
+    RawActivitySample {
+        timestamp,
+        platform: "windows".to_string(),
+        sample_quality: "screen-locked".to_string(),
+        app_name: "Locked Screen".to_string(),
+        bundle_id: None,
+        window_title: None,
+        idle_seconds,
+        input_monitoring_status: if INPUT_HOOKS_ACTIVE.load(Ordering::Acquire) {
+            "windows-low-level-hooks-available"
+        } else {
+            "windows-idle-fallback"
+        }
+        .to_string(),
+        keyboard_count: 0,
+        pointer_count: 0,
+        switch_count: 0,
+        is_system_sleeping: false,
+        is_screen_locked: true,
     }
 }
 
@@ -248,7 +280,11 @@ fn input_monitor_loop(ready: mpsc::SyncSender<bool>) {
             0,
             WINEVENT_OUTOFCONTEXT,
         );
-        let active = !keyboard_hook.is_null() && !pointer_hook.is_null();
+        let active = monitor_hooks_ready(
+            !keyboard_hook.is_null(),
+            !pointer_hook.is_null(),
+            !foreground_hook.is_null(),
+        );
         INPUT_HOOKS_ACTIVE.store(active, Ordering::Release);
         let _ = ready.send(active);
 
@@ -277,6 +313,10 @@ fn input_monitor_loop(ready: mpsc::SyncSender<bool>) {
             UnhookWinEvent(foreground_hook);
         }
     }
+}
+
+fn monitor_hooks_ready(keyboard: bool, pointer: bool, foreground: bool) -> bool {
+    keyboard && pointer && foreground
 }
 
 fn current_foreground_process_id() -> Option<u32> {
@@ -337,8 +377,8 @@ fn saturating_increment(counter: &AtomicU32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        input_monitor_retry_due, permission_snapshot, sample_activity, saturating_increment,
-        INPUT_MONITOR_RETRY_MS,
+        input_monitor_retry_due, locked_activity_sample, monitor_hooks_ready, permission_snapshot,
+        sample_activity, saturating_increment, INPUT_MONITOR_RETRY_MS,
     };
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -354,6 +394,27 @@ mod tests {
         assert!(input_monitor_retry_due(100, 0));
         assert!(!input_monitor_retry_due(INPUT_MONITOR_RETRY_MS - 1, 1));
         assert!(input_monitor_retry_due(INPUT_MONITOR_RETRY_MS + 1, 1));
+    }
+
+    #[test]
+    fn monitor_is_healthy_only_when_all_signal_hooks_are_installed() {
+        assert!(monitor_hooks_ready(true, true, true));
+        assert!(!monitor_hooks_ready(false, true, true));
+        assert!(!monitor_hooks_ready(true, false, true));
+        assert!(!monitor_hooks_ready(true, true, false));
+    }
+
+    #[test]
+    fn locked_samples_do_not_expose_foreground_or_input_details() {
+        let sample = locked_activity_sample("2026-07-18T00:00:00.000Z".to_string(), 12.5);
+        assert_eq!(sample.app_name, "Locked Screen");
+        assert_eq!(sample.sample_quality, "screen-locked");
+        assert!(sample.bundle_id.is_none());
+        assert!(sample.window_title.is_none());
+        assert_eq!(sample.keyboard_count, 0);
+        assert_eq!(sample.pointer_count, 0);
+        assert_eq!(sample.switch_count, 0);
+        assert!(sample.is_screen_locked);
     }
 
     #[test]

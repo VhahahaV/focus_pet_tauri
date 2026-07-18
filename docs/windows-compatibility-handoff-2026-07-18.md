@@ -57,6 +57,9 @@
 - `app-usage.json`、`state-segments.json`、`input-activity.json` 在桌宠显示期间持续更新。
 - 移除只能启动一次的 `OnceLock`：钩子安装失败或消息循环退出后，会在 5 秒退避后重新创建监控线程；线程异常退出时由守卫复位运行状态。
 - idle 输入补偿只在采样明确标记为 fallback 时启用，低级钩子可用时不再伪造键盘/鼠标双计数。
+- 键盘、鼠标和前台切换三类钩子现在必须全部安装成功才标记为“完整可用”；任一钩子失败都会释放本轮钩子并进入 5 秒自愈重试，避免前台切换钩子失效时仍假报健康。
+- Windows 安全桌面单独输出 `Locked Screen` 采样，清除 bundle ID、窗口标题和输入/切换计数，避免泄露锁屏前窗口或把锁屏过渡计数延迟写到解锁后的活动桶。
+- Tauri 原生采样失败时不再把浏览器预览的模拟键盘、鼠标、切换和应用信号写入真实历史；该轮会跳过并显示故障状态，原生采样恢复后再继续记录。浏览器预览环境仍保留模拟数据。
 - 最新安装版复验显示键盘 258 次、鼠标 163 次、切换 31 次，计数和 GPU 采样持续更新。
 
 ### 3. Windows GPU 采样
@@ -109,6 +112,7 @@ Loader 校验：
 
 - 文件和文件夹选择改用 `tauri-plugin-dialog`，移除 PowerShell/Windows Forms 依赖。
 - Windows 设置跳转使用 `ms-settings:privacy-general` 和 `ms-settings:notifications`。
+- NSIS 的当前用户安装目录 `%LOCALAPPDATA%\Focus Pet` 现在会被正确识别为已安装，不再只认可 `%LOCALAPPDATA%\Programs`；路径判断带目录边界，不会把相似前缀误判为安装目录。
 - Windows 全局输入计数不伪装成 macOS 式授权；UI 统一显示“已允许 / 待开启 / 预览环境 / 检查中”。
 - Node ESM 脚本使用 `fileURLToPath(import.meta.url)`，正确处理 Windows 盘符路径。
 - 验证脚本只在运行 npm 包装命令时使用 shell，不再让全部 Windows 子进程强制 `shell: true`。
@@ -164,10 +168,10 @@ Loader 校验：
 | `git diff --check` | 通过，仅有 Git 的 LF/CRLF 提示 |
 | TypeScript build | 通过 |
 | Oxlint | 通过，0 条错误 |
-| Vitest | 3 个文件、38 个测试全部通过 |
+| Vitest | 3 个文件、39 个测试全部通过 |
 | Playwright | desktop/mobile 共 18 个测试全部通过 |
 | `cargo fmt --check` | 通过 |
-| Rust release / gnullvm | 37 个测试全部通过 |
+| Rust release / gnullvm | 40 个测试全部通过 |
 | 原生适配验证 | 输入、前台进程、idle、通知 helper、原生对话框全部通过 |
 | 打包 preflight | 通过，包含 VBScript |
 
@@ -209,7 +213,7 @@ Loader 校验：
 1. 托盘动作代码链和自动化测试已经通过；仍需在没有系统通知中心遮罩的会话中逐项物理点击托盘菜单，复验重新打开、页面跳转、桌宠/小组件开关、暂停/恢复提醒、结束专注和退出。
 2. 在关闭 Windows 勿扰模式的测试机验证通知横幅和通知中心记录，并验证通知设置跳转；不要自动修改系统隐私策略。
 3. 小组件的物理/逻辑 DPI 换算、负坐标副屏和失效坐标回屏已由自动化覆盖；仍需真实拖动、固定并跨重启目视复验。
-4. 长时间监控：空闲恢复、锁屏/解锁与 32 位 tick 回绕附近行为；钩子线程异常恢复和 5 秒重试已由自动化覆盖。
+4. 长时间监控：空闲恢复、锁屏/解锁与 32 位 tick 回绕附近行为；锁屏字段隔离、钩子完整健康判定、线程异常恢复和 5 秒重试已由自动化覆盖，仍需真实锁屏/解锁长程复验。
 5. 在管理员终端或干净 Windows VM 安装 MSI，并复验 loader、启动、卸载和数据保留。
 
 ### P1：桌宠完整验收
