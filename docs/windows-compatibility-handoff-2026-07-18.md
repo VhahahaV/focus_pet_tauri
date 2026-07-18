@@ -121,7 +121,7 @@ Loader 校验：
 - 验证脚本只在运行 npm 包装命令时使用 shell，不再让全部 Windows 子进程强制 `shell: true`。
 - 修复 `GetLastInputInfo` 32 位 tick 回绕验证。
 - 验证并保留 VBScript/WiX 打包前置条件。
-- Windows 通知 fallback 会保持 NotifyIcon 到完整显示时长，通知命令改到阻塞线程执行，避免 4 秒 PowerShell fallback 卡住 Tauri IPC。
+- Windows 通知 fallback 会保持 NotifyIcon 到完整显示时长，通知命令改到阻塞线程执行，避免 4 秒 PowerShell fallback 卡住 Tauri IPC。标题和正文只通过子进程环境变量传递，不再拼接进 PowerShell 脚本；换行、Unicode 和类似 here-string 终止符的内容不会改变脚本结构，且 PowerShell 使用无窗口启动标志，避免通知时闪出控制台。
 - UI 明确提示 Windows 勿扰模式可能抑制系统横幅。本机实测通知命令成功返回，但通知中心显示“勿扰模式已开启”，因此当前环境没有显示 Focus Pet 横幅；应用没有擅自关闭系统勿扰设置。
 
 ### 7. 脱敏导出与诊断日志
@@ -177,7 +177,7 @@ Loader 校验：
 | Vitest | 3 个文件、40 个测试全部通过 |
 | Playwright | desktop/mobile 共 18 个测试全部通过 |
 | `cargo fmt --check` | 通过 |
-| Rust release / gnullvm | 43 个测试全部通过 |
+| Rust release / gnullvm | 44 个测试全部通过；新增通知文本环境变量隔离回归 |
 | 原生适配验证 | 输入、前台进程、idle、通知 helper、原生对话框全部通过 |
 | 打包 preflight | 通过，包含 VBScript |
 

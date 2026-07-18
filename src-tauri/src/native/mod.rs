@@ -188,6 +188,7 @@ pub fn run_text_command(program: &str, args: &[&str]) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub fn run_command_success(program: &str, args: &[&str]) -> bool {
     std::process::Command::new(program)
         .args(args)
