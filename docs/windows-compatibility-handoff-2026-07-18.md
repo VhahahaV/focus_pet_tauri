@@ -182,17 +182,17 @@ Loader 校验：
 ### NSIS
 
 - 路径：`src-tauri/target-gnullvm/release/bundle/nsis/Focus Pet_0.1.0_x64-setup.exe`
-- 大小：7,483,012 字节
-- 时间：2026-07-18 19:53:08
-- SHA-256：`D98B27B35CD2D671E6AF3BD2135ED976B41580AEB8DCF6EE9F41902E7BEE4AA8`
+- 大小：7,499,062 字节
+- 时间：2026-07-18 20:02:38
+- SHA-256：`A8446F2B8B3D87E875E0282E459E3126BE7362A51B714871DA9939900CBDAA06`
 - 状态：安装、启动、桌宠、实时监控、卸载数据保留、重新安装均已通过。
 
 ### MSI
 
 - 路径：`src-tauri/target-gnullvm/release/bundle/msi/Focus Pet_0.1.0_x64_en-US.msi`
-- 大小：8,908,800 字节
-- 时间：2026-07-18 19:52:55
-- SHA-256：`683E0F10220F48517B6677D50A45F67218583BD657C4E6BA0DD39E2F52D6DE98`
+- 大小：8,933,376 字节
+- 时间：2026-07-18 20:02:25
+- SHA-256：`AB5722DC5C7BCF7848CC4BC488361D775C706FDB4C076FC4D0988513C7A876C0`
 - 状态：构建通过。当前 MSI 为按机器安装，本机无管理员提权权限；静默安装返回 1603，日志中的精确原因是错误 1925（权限不足）。需要在管理员终端或干净 VM 中完成最终安装回归。
 
 ## 真实 UI 已验证范围
@@ -206,6 +206,7 @@ Loader 校验：
 - 最新 NSIS 静默安装返回 0，安装前后 schema、XiaoDai 清单和诊断日志 SHA-256 完全一致；安装后主窗口复验显示 GPU 从 4% 更新到 25%，键盘 253 次、鼠标 151 次、切换 33 次，专注持续时间继续增长。
 - 监控可靠性修复后的安装版再次静默安装返回 0，schema 与 XiaoDai 清单哈希不变；主界面显示“Focus Pet 0.1.0 已就绪”，确认 `%LOCALAPPDATA%\Focus Pet` 被识别为已安装。等待两个采样周期后活动文件持续更新，全部本地 JSON 中 `browser-preview` 命中数为 0；界面显示 GPU 4%、键盘 273 次、鼠标 151 次、切换 34 次。
 - Agent inbox 修复后的安装版静默安装返回 0；应用停止时执行正式 `focus-pet.exe --agent-notify codex <payload>` 返回 0，只在 Local 数据根创建包含指定测试 ID 的 inbox，Roaming 路径未创建；启动应用 4 秒后 inbox 已被轮询排空。
+- 应用图标修复后的安装版静默安装返回 0；Today 排行自然触发后在 `%LOCALAPPDATA%\com.focuspet.FocusPet\app-icons` 生成 6 个 PNG 缓存，Explorer 与 Focus Pet 图标已实际打开确认有效，Computer Use 截图也显示 ShellExperienceHost 和最常用应用已从字母占位切换为原生图标。
 - 数据目录、日志目录、完整导出、脱敏导出和 JSON Lines 诊断日志已在安装版验证。
 - Windows 通知测试命令完成，但当前系统“勿扰模式”开启；通知中心没有记录 Focus Pet 横幅，此项需在关闭勿扰模式的测试机复验。
 - 当前 Windows 通知/日历遮罩占据右下角并拒绝 Computer Use 激活其他窗口；最新安装版桌宠窗口已存在于 `(2206, 956)`、大小 `330 x 480`，但这一轮的宠物画面被系统遮罩覆盖，因此没有把本次构建的桌宠目视渲染误记为通过。此前同一资源与渲染链路已在无遮罩状态真实看到 XiaoDai 动画。
