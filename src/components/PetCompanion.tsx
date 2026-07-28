@@ -98,7 +98,9 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   const frameDelay = animationFrameDelay(effectiveFps);
   const animationKey = `${selectedPack?.id ?? "fallback"}:${sourceAction?.id ?? "preview"}:${state.currentPetIntent.id}`;
   const [frameIndex, setFrameIndex] = useState(0);
-  const visibleBubble = manualBubble ?? (windowMode ? undefined : state.latestPetBubble);
+  // Codex status is a continuous external-runtime signal, so it remains visible
+  // in the transparent desktop-pet window. Manual interactions still win.
+  const visibleBubble = manualBubble ?? state.codexBubble ?? (windowMode ? undefined : state.latestPetBubble);
   const hoverItems = useMemo(
     () => [
       { title: "专注", value: formatCompactDuration(state.summary.focusSeconds), Icon: Target },

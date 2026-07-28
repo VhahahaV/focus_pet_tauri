@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { AgentCompletionEvent, InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, PermissionSnapshot, SystemMetricsSample } from "../core/types";
+import type { CodexEventEnvelope, CodexHookConfigurationResult, CodexIntegrationStatus, CodexSessionSnapshot, CodexSyncPreferences, SshConnectionStatus, SshHostCandidate, SshHostDiagnostic, SshProvisionResult, SshUninstallResult } from "../core/codexSessions";
 import type { PetPackRecord, PetSourceActionAssets } from "../resources/petPack";
 import { importedPetPackRecord } from "../resources/petPack";
 
@@ -58,6 +59,96 @@ export const nativeDrainAgentEvents = async (): Promise<AgentCompletionEvent[]> 
 export const nativeAgentEventInboxPath = async (): Promise<string | undefined> => {
   if (!isTauriRuntime()) return undefined;
   return invoke<string>("agent_event_inbox_path");
+};
+
+export const nativeDrainCodexSessionEvents = async (): Promise<CodexEventEnvelope[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<CodexEventEnvelope[]>("drain_codex_session_events");
+};
+
+export const nativeCodexSessionSnapshot = async (): Promise<CodexSessionSnapshot[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<CodexSessionSnapshot[]>("codex_session_snapshot");
+};
+
+export const nativeCodexIntegrationStatus = async (): Promise<CodexIntegrationStatus | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<CodexIntegrationStatus>("codex_integration_status");
+};
+
+export const nativeSetCodexSyncPreferences = async (preferences: CodexSyncPreferences): Promise<CodexSyncPreferences> => {
+  if (!isTauriRuntime()) return preferences;
+  return invoke<CodexSyncPreferences>("set_codex_sync_preferences", { preferences });
+};
+
+export const nativeStartCodexManagedDaemon = async (): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("start_codex_managed_daemon");
+};
+
+export const nativePollCodexManagedStatus = async (): Promise<CodexEventEnvelope[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<CodexEventEnvelope[]>("poll_codex_managed_status");
+};
+
+export const nativeInstallCodexHooks = async (): Promise<CodexHookConfigurationResult> => {
+  if (!isTauriRuntime()) throw new Error("Codex Hook 仅能在 Focus Pet 桌面应用中安装。");
+  return invoke<CodexHookConfigurationResult>("install_codex_hooks");
+};
+
+export const nativeUninstallCodexHooks = async (): Promise<CodexHookConfigurationResult> => {
+  if (!isTauriRuntime()) throw new Error("Codex Hook 仅能在 Focus Pet 桌面应用中移除。");
+  return invoke<CodexHookConfigurationResult>("uninstall_codex_hooks");
+};
+
+export const nativeDiscoverCodexSshHosts = async (): Promise<SshHostCandidate[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<SshHostCandidate[]>("discover_codex_ssh_hosts");
+};
+
+export const nativeSaveCodexSshHost = async (host: SshHostCandidate): Promise<SshHostCandidate> => {
+  if (!isTauriRuntime()) return host;
+  return invoke<SshHostCandidate>("save_codex_ssh_host", {
+    alias: host.alias,
+    hostname: host.hostname,
+    user: host.user,
+    port: host.port,
+  });
+};
+
+export const nativeForgetCodexSshHost = async (alias: string): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("forget_codex_ssh_host", { alias });
+};
+
+export const nativeDiagnoseCodexSshHost = async (alias: string): Promise<SshHostDiagnostic> => {
+  if (!isTauriRuntime()) throw new Error("SSH 主机仅能在 Focus Pet 桌面应用中连接。");
+  return invoke<SshHostDiagnostic>("diagnose_codex_ssh_host", { alias });
+};
+
+export const nativeProvisionCodexSshHost = async (alias: string): Promise<SshProvisionResult> => {
+  if (!isTauriRuntime()) throw new Error("SSH 主机仅能在 Focus Pet 桌面应用中启用官方 App Server 接入。");
+  return invoke<SshProvisionResult>("provision_codex_ssh_host", { alias });
+};
+
+export const nativeUninstallCodexSshHost = async (alias: string): Promise<SshUninstallResult> => {
+  if (!isTauriRuntime()) throw new Error("SSH 主机仅能在 Focus Pet 桌面应用中移除。");
+  return invoke<SshUninstallResult>("uninstall_codex_ssh_host", { alias });
+};
+
+export const nativeConnectCodexSshHost = async (alias: string): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("connect_codex_ssh_host", { alias });
+};
+
+export const nativeDrainCodexSshEvents = async (): Promise<CodexEventEnvelope[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<CodexEventEnvelope[]>("drain_codex_ssh_events");
+};
+
+export const nativeCodexSshConnectionStatus = async (): Promise<SshConnectionStatus[]> => {
+  if (!isTauriRuntime()) return [];
+  return invoke<SshConnectionStatus[]>("codex_ssh_connection_status");
 };
 
 export const nativePermissionSnapshot = async (): Promise<PermissionSnapshot | undefined> => {

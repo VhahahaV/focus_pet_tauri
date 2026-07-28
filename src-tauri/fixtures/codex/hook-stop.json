@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "fixture-session",
+  "turn_id": "fixture-turn",
+  "last_assistant_message": "Fixture assistant final answer.",
+  "cwd": "/work/fixture-project"
+}

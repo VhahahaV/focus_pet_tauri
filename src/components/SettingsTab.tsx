@@ -3,14 +3,18 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  CircleAlert,
+  CircleCheck,
   Database,
   FileText,
   FolderOpen,
+  Globe2,
   Info,
   Keyboard,
   LoaderCircle,
   Lock,
   Monitor,
+  MessageSquareText,
   Palette,
   RefreshCw,
   RotateCcw,
@@ -377,8 +381,24 @@ const DesktopWidgetSettings = () => {
 };
 
 const ReminderSettings = () => {
-  const { bundle, actions } = useFocusPet();
+  const { bundle, actions, codexIntegration, codexSessions, codexManagedStatusEnabled, codexSshHosts, codexSshConnections, codexSshDiagnostics } = useFocusPet();
   const reminder = bundle.state.settings.reminder;
+  const codexConfigured = codexIntegration?.mode === "configured";
+  const codexReady = codexManagedStatusEnabled || codexConfigured;
+  const codexContentMode = codexIntegration?.contentMode === "statusOnly" ? "statusOnly" : "assistantVisible";
+  const managedDaemonStatus = codexIntegration?.managedDaemonStatus ?? "unknown";
+  const [sshHostForm, setSshHostForm] = useState({ alias: "", hostname: "", user: "", port: "22" });
+  const saveSshHost = () => {
+    const port = Number(sshHostForm.port);
+    if (!sshHostForm.alias.trim() || !sshHostForm.hostname.trim() || !Number.isInteger(port) || port < 1 || port > 65535) return;
+    void actions.saveCodexSshHost({
+      alias: sshHostForm.alias.trim(),
+      hostname: sshHostForm.hostname.trim(),
+      user: sshHostForm.user.trim() || undefined,
+      port,
+      source: "focusPet",
+    }).then(() => setSshHostForm({ alias: "", hostname: "", user: "", port: "22" })).catch(() => undefined);
+  };
   return (
     <div className="settings-module-stack">
       <SettingsSubsection title="提醒通道" Icon={Bell} status="focus">
@@ -455,17 +475,133 @@ const ReminderSettings = () => {
       </SettingsSubsection>
 
       <SettingsSubsection title="智能体任务" Icon={Bot} status="pet">
-        <div className="reminder-explanation-grid">
-          <article>
-            <strong>Codex / Claude Code 完成通知</strong>
-            <span>通过本机 Hook 接收任务完成事件，桌宠会展示任务摘要；事件读取后立即从收件箱清除，不上传会话内容。</span>
-          </article>
-        </div>
+        <section className="codex-sync-panel" aria-label="Codex 会话同步配置">
+          <header>
+            <span className="codex-sync-icon"><Bot size={18} /></span>
+            <span>
+              <strong>Codex 会话同步</strong>
+              <small>{codexManagedStatusEnabled ? `官方 App Server 已接入 · 正在管理 ${codexSessions.length} 个会话` : codexConfigured ? `Hook 兼容模式 · 正在管理 ${codexSessions.length} 个会话` : "尚未接入 · 先启用官方 App Server"}</small>
+            </span>
+            <em className={codexReady ? "is-ready" : "is-pending"}>{codexReady ? <><CircleCheck size={13} /> 已接入</> : <><CircleAlert size={13} /> 待配置</>}</em>
+          </header>
+          <div className="codex-sync-steps" aria-label="Codex 接入进度">
+            <span className={codexManagedStatusEnabled ? "done" : "current"}><b>1</b> App Server</span>
+            <span className={codexReady ? "current" : ""}><b>2</b> 内容等级</span>
+            <span className={codexConfigured ? "done" : ""}><b>3</b> Hook 兼容</span>
+          </div>
+          <p>{codexManagedStatusEnabled
+            ? "Focus Pet 通过官方 App Server 只读观察会话状态，并只在完成后读取最终 assistant 输出；不会发送 prompt、审批或工具指令。"
+            : codexConfigured
+              ? "Hook 兼容模式已启用；它可提供 lifecycle 与最终消息，但无法保证等待审批/输入等精确状态。"
+              : "先启用精确状态以连接官方 App Server；若当前 Codex 不支持，再安装 Hook 作为兼容降级。"}</p>
+          <div className={`codex-daemon-prerequisite status-${managedDaemonStatus === "unavailable" ? "warning" : managedDaemonStatus === "running" || managedDaemonStatus === "ephemeralAvailable" ? "success" : "neutral"}`}>
+            <Info size={14} />
+            <span>{codexIntegration?.managedDaemonMessage ?? "正在读取本机 App Server 前置条件。"}</span>
+          </div>
+          <SettingsSegmentedControl
+            label="可展示内容"
+            value={codexContentMode}
+            options={[
+              { value: "statusOnly", title: "仅状态" },
+              { value: "assistantVisible", title: "Assistant 摘要" },
+            ]}
+            onChange={(contentMode) => void actions.updateCodexSyncPreferences({ contentMode }).catch(() => undefined)}
+          />
+          <div className="codex-sync-privacy-note">
+            <MessageSquareText size={14} />
+            <span>{codexContentMode === "statusOnly" ? "仅保存会话和运行状态；assistant 文本会立即从当前面板清除。" : "仅展示 assistant 的可见输出；用户 prompt、推理、工具参数与终端输出不会同步。"}</span>
+          </div>
+        </section>
         <div className="settings-command-row">
+          <CommandButton onClick={() => void actions.refreshCodexIntegration()}>
+            <RefreshCw size={15} /> 刷新 Codex 状态
+          </CommandButton>
+          <CommandButton disabled={codexManagedStatusEnabled || managedDaemonStatus === "unavailable"} onClick={() => void actions.enableCodexManagedStatus().catch(() => undefined)}>
+            <Bot size={15} /> {codexManagedStatusEnabled ? "精确状态已启用" : managedDaemonStatus === "running" ? "连接精确状态" : managedDaemonStatus === "ephemeralAvailable" ? "启动精确状态" : "启用持久精确状态"}
+          </CommandButton>
+          {managedDaemonStatus === "ephemeralAvailable" ? (
+            <CommandButton onClick={() => void actions.copyCodexStandaloneInstallCommand().catch(() => undefined)}>
+              <FileText size={15} /> 复制持久 daemon 安装命令
+            </CommandButton>
+          ) : null}
+          <CommandButton onClick={() => void actions.installCodexHooks().catch(() => undefined)}>
+            <ShieldCheck size={15} /> 安装 Codex Hook
+          </CommandButton>
+          <CommandButton onClick={() => void actions.uninstallCodexHooks().catch(() => undefined)}>
+            <Trash2 size={15} /> 移除 Codex Hook
+          </CommandButton>
+          {!codexConfigured ? (
+            <CommandButton onClick={() => void actions.copyCodexHookCommand().catch(() => undefined)}>
+              <FileText size={15} /> 复制 Hook 命令
+            </CommandButton>
+          ) : null}
           <CommandButton onClick={actions.testAgentCompletion}>
             <Bot size={15} /> 测试桌宠通知
           </CommandButton>
         </div>
+        {codexIntegration ? (
+          <div className="settings-inline-action">
+            <span>{codexIntegration.hasInlineHooks ? "检测到 config.toml 内联 Hook；请不要同时创建 hooks.json。" : `Hook 文件：${codexIntegration.hooksPath}`}</span>
+          </div>
+        ) : null}
+        <div className="settings-inline-action">
+          <span><Globe2 size={15} /> {codexSshHosts.length ? `已发现 ${codexSshHosts.length} 个 SSH Host` : "尚未发现 SSH Host；仅显示 ~/.ssh/config 中的具体 Host alias。"}</span>
+          <CommandButton onClick={() => void actions.discoverCodexSshHosts().catch(() => undefined)}>
+            <RefreshCw size={15} /> 发现 SSH Host
+          </CommandButton>
+        </div>
+        <div className="codex-ssh-add-form" aria-label="添加 SSH 主机">
+          <span>直连 SSH 主机（仅保存到 Focus Pet，不修改 ~/.ssh/config）</span>
+          <input aria-label="SSH 主机别名" placeholder="别名，例如 research-codex" value={sshHostForm.alias} onChange={(event) => setSshHostForm((current) => ({ ...current, alias: event.target.value }))} />
+          <input aria-label="SSH 主机地址" placeholder="主机地址或 IP" value={sshHostForm.hostname} onChange={(event) => setSshHostForm((current) => ({ ...current, hostname: event.target.value }))} />
+          <input aria-label="SSH 用户" placeholder="用户" value={sshHostForm.user} onChange={(event) => setSshHostForm((current) => ({ ...current, user: event.target.value }))} />
+          <input aria-label="SSH 端口" inputMode="numeric" placeholder="端口" value={sshHostForm.port} onChange={(event) => setSshHostForm((current) => ({ ...current, port: event.target.value }))} />
+          <CommandButton onClick={saveSshHost} disabled={!sshHostForm.alias.trim() || !sshHostForm.hostname.trim()}>
+            <Globe2 size={15} /> 保存主机
+          </CommandButton>
+        </div>
+        {codexSshHosts.length ? (
+          <div className="codex-ssh-host-list">
+            {codexSshHosts.map((host) => (
+              <div className="codex-ssh-host-row" key={host.alias}>
+                <span className="codex-ssh-host-icon"><Globe2 size={15} /></span>
+                <span>
+                  <strong>{host.alias}</strong>
+                  <small>{host.user ? `${host.user}@` : ""}{host.hostname}{host.port ? `:${host.port}` : ""} · {host.source === "focusPet" ? "Focus Pet 直连配置" : "~/.ssh/config"}</small>
+                </span>
+                {(() => {
+                  const status = codexSshConnections.find((connection) => connection.alias === host.alias)?.status;
+                  return <em className={status === "connected" ? "online" : status === "connecting" ? "connecting" : "offline"}>{status === "connected" ? "已连接" : status === "connecting" ? "连接中" : status === "disconnected" ? "已断开" : "未接入"}</em>;
+                })()}
+                {codexSshDiagnostics[host.alias] ? (
+                  <span className="codex-ssh-row-actions">
+                    <CommandButton onClick={() => void actions.provisionCodexSshHost(host.alias).catch(() => undefined)}>
+                      <ShieldCheck size={15} /> 启用接入
+                    </CommandButton>
+                    <CommandButton onClick={() => void actions.uninstallCodexSshHost(host.alias).catch(() => undefined)}>
+                      <Trash2 size={15} /> 断开
+                    </CommandButton>
+                    {host.source === "focusPet" ? (
+                      <CommandButton onClick={() => void actions.forgetCodexSshHost(host.alias).catch(() => undefined)}>
+                        <Trash2 size={15} /> 移除主机
+                      </CommandButton>
+                    ) : null}
+                  </span>
+                ) : (
+                  <CommandButton onClick={() => void actions.diagnoseCodexSshHost(host.alias).catch(() => undefined)}>
+                    <RefreshCw size={15} /> 检查
+                  </CommandButton>
+                )}
+                {codexSshDiagnostics[host.alias] ? (
+                  <div className="codex-ssh-diagnostic">
+                    <span>{codexSshDiagnostics[host.alias].operatingSystem} · {codexSshDiagnostics[host.alias].architecture} · {codexSshDiagnostics[host.alias].codexVersion} · {codexSshDiagnostics[host.alias].daemonStatus === "ready" ? codexSshDiagnostics[host.alias].transport === "directUnixSocket" ? "直连 Socket 已验证" : "只读 proxy 已验证" : codexSshDiagnostics[host.alias].daemonStatus === "proxyUnresponsive" ? "daemon 已运行，但接入未响应" : codexSshDiagnostics[host.alias].daemonStatus === "running" ? "daemon 运行中，待验证" : "daemon 待启用"}</span>
+                    <small>{codexSshDiagnostics[host.alias].daemonStatus === "proxyUnresponsive" ? "为保护已有 Codex 会话，Focus Pet 未执行 bootstrap、重启或连接劫持；标准 proxy 与直连 Socket 都未完成只读握手。" : `Codex：${codexSshDiagnostics[host.alias].codexPath} · ${codexSshDiagnostics[host.alias].transport === "directUnixSocket" ? "标准 proxy 无响应，已安全回退到 SSH 内的 Unix Socket 字节通道。" : "接入仅启用官方 App Server，不上传 Focus Pet agent。"}`}</small>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </SettingsSubsection>
 
       <SettingsSubsection title="暂停" Icon={RotateCcw} status="warning">
@@ -500,6 +636,7 @@ const ReminderSettings = () => {
 const PermissionSettings = () => {
   const { bundle, actions } = useFocusPet();
   const snapshot = bundle.state.permissionSnapshot;
+  const systemNotificationsEnabled = bundle.state.settings.reminder.enableSystemNotifications;
   const [pendingAction, setPendingAction] = useState<string | undefined>(undefined);
   const runPermissionAction = async (key: string, action: () => Promise<void>) => {
     if (pendingAction) return;
@@ -523,20 +660,11 @@ const PermissionSettings = () => {
     {
       id: "notifications",
       title: "通知",
-      subtitle: "系统提醒横幅",
+      subtitle: "系统提醒横幅 · 可在此开启或关闭 Focus Pet 通知",
       status: snapshot.notifications,
       Icon: Bell,
       destination: "notifications",
       canRequest: true,
-    },
-    {
-      id: "privacySecurity",
-      title: "隐私与安全",
-      subtitle: "macOS 隐私面板",
-      status: "系统设置",
-      Icon: Lock,
-      destination: "privacySecurity",
-      canRequest: false,
     },
   ];
   return (

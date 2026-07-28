@@ -28,6 +28,8 @@ open = "5"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sysinfo = { version = "0.33.1", default-features = false, features = ["system", "disk", "component"] }
+base64 = "0.22"
+getrandom = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

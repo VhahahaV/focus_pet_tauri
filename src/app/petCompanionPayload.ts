@@ -14,9 +14,10 @@ export interface PetCompanionViewState {
   summary: Pick<DailySummary, "focusSeconds" | "distractedSeconds">;
   todayWorkload: Pick<InputWorkloadSummary, "estimatedTypedCharacters" | "pointerActionCount">;
   latestPetBubble?: string;
+  codexBubble?: string;
 }
 
-export const makePetCompanionViewState = (state: AppRuntimeState): PetCompanionViewState => ({
+export const makePetCompanionViewState = (state: AppRuntimeState, codexBubble?: string): PetCompanionViewState => ({
   theme: state.settings.appearance.theme,
   petSettings: state.settings.pet,
   currentPetIntent: state.currentPetIntent,
@@ -29,4 +30,5 @@ export const makePetCompanionViewState = (state: AppRuntimeState): PetCompanionV
     pointerActionCount: state.todayWorkload.pointerActionCount,
   },
   latestPetBubble: state.latestPetBubble,
+  codexBubble,
 });

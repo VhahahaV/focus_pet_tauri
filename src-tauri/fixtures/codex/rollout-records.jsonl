@@ -1,0 +1,3 @@
+{"timestamp":"2026-07-28T00:00:00Z","type":"response_item","payload":{"id":"fixture-message","type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixture assistant output."}]}}
+{"timestamp":"2026-07-28T00:00:01Z","type":"response_item","payload":{"id":"fixture-reasoning","type":"reasoning","summary":[{"type":"summary_text","text":"must not surface"}]}}
+{"timestamp":"2026-07-28T00:00:02Z","type":"response_item","payload":{"id":"fixture-tool","type":"function_call","name":"shell","arguments":"must not surface"}}

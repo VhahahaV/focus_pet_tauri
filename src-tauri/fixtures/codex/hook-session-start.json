@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "fixture-session",
+  "transcript_path": "/tmp/fixture-session.jsonl",
+  "cwd": "/work/fixture-project",
+  "model": "gpt-5"
+}

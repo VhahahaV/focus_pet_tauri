@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, Clock3, Keyboard, MousePointer2, Percent, SquareStack, Zap } from "lucide-react";
+import { BarChart3, Bot, CalendarDays, Clock3, Globe2, Keyboard, MousePointer2, Percent, SquareStack, Zap } from "lucide-react";
 import { useMemo, useState, type CSSProperties, type PointerEvent } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { focusStateLabels } from "../core/labels";
@@ -9,6 +9,7 @@ import { secondsBetween } from "../core/utils";
 import { Heatmap, HourlyBars, type HeatmapCell } from "./charts";
 import { HoverCard, SegmentedControl, TogglePill } from "./ui";
 import { AppIcon } from "./AppIcon";
+import { codexStatusLabel } from "../core/codexSessions";
 
 const historyRanges = [3, 7, 15, 30, 60] as const;
 type HistoryRange = (typeof historyRanges)[number];
@@ -217,7 +218,7 @@ const HeatmapLegend = () => (
 );
 
 export const SessionsTab = () => {
-  const { bundle } = useFocusPet();
+  const { bundle, codexSessions } = useFocusPet();
   const state = bundle.state;
   const [historyRangeDays, setHistoryRangeDays] = useState<HistoryRange>(7);
   const [skipsWeekends, setSkipsWeekends] = useState(false);
@@ -291,6 +292,28 @@ export const SessionsTab = () => {
 
   return (
     <div className="swift-sessions-page">
+      <section className="history-card activity-history-card">
+        <div className="history-card-header activity-header">
+          <h2><Bot size={18} strokeWidth={2.5} /> Codex 会话 <span>{`${codexSessions.length} 个`}</span></h2>
+        </div>
+        {codexSessions.length === 0 ? (
+          <div className="activity-empty-state"><strong>暂无已接入的 Codex 会话</strong><span>在设置中安装本机 Hook，或接入一个 SSH Host。</span></div>
+        ) : (
+          <div className="activity-app-list">
+            {codexSessions.slice(0, 8).map((session) => (
+              <div className="activity-app-row" key={`${session.hostId}:${session.sessionId}`}>
+                {session.hostKind === "ssh" ? <Globe2 className="activity-app-icon" size={18} /> : <Bot className="activity-app-icon" size={18} />}
+                <div>
+                  <strong>{session.title}</strong>
+                  <i style={{ "--meter-width": `${session.runtime === "active" ? 88 : 34}%` } as CSSProperties} />
+                  <small>{session.latestVisibleMessage?.text ?? session.cwd ?? "尚无可展示的 assistant 回复"}</small>
+                </div>
+                <small>{codexStatusLabel(session)}</small>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <section className="history-card attention-history-card">
         <div className="history-card-header">
           <h2>

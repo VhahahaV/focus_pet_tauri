@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "id": "fixture-active",
+      "cwd": "/work/fixture-project",
+      "name": "Fixture task",
+      "status": { "type": "active", "activeFlags": ["waitingOnApproval"] }
+    },
+    {
+      "id": "fixture-history-only",
+      "cwd": "/work/old-project",
+      "status": { "type": "notLoaded", "activeFlags": [] }
+    }
+  ]
+}

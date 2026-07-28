@@ -15,6 +15,7 @@ import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWin
 import { cyclePlayableSourceAction, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
 import { pruneSnapshotForRetention } from "../store/localStore";
+import { codexBubble, reduceCodexEvents } from "../core/codexSessions";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -803,5 +804,66 @@ describe("Focus Pet migrated core", () => {
     expect(state.currentPetIntent.kind).toBe("taskCompleted");
     expect(state.currentPetIntent.source).toBe("agent");
     expect(state.latestPetBubble).toBe("Codex 已完成：主题验收");
+  });
+
+  it("reduces Codex lifecycle and visible assistant output without rendering user prompts", () => {
+    const sessions = reduceCodexEvents([], [
+      {
+        schemaVersion: 1,
+        eventId: "start",
+        sequence: 1,
+        hostId: "local",
+        sessionId: "session-1",
+        occurredAt: "2026-07-28T12:00:00.000Z",
+        receivedAt: "2026-07-28T12:00:00.000Z",
+        kind: "session.started",
+        source: "hook",
+        confidence: "exact",
+        payload: { cwd: "/work/focus-pet" },
+      },
+      {
+        schemaVersion: 1,
+        eventId: "turn",
+        sequence: 2,
+        hostId: "local",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        occurredAt: "2026-07-28T12:00:01.000Z",
+        receivedAt: "2026-07-28T12:00:01.000Z",
+        kind: "turn.started",
+        source: "hook",
+        confidence: "exact",
+        payload: {},
+      },
+      {
+        schemaVersion: 1,
+        eventId: "message",
+        sequence: 3,
+        hostId: "local",
+        sessionId: "session-1",
+        occurredAt: "2026-07-28T12:00:02.000Z",
+        receivedAt: "2026-07-28T12:00:02.000Z",
+        kind: "message.updated",
+        source: "rollout",
+        confidence: "exact",
+        payload: { role: "assistant", text: "正在整理会话同步。", isFinal: false },
+      },
+      {
+        schemaVersion: 1,
+        eventId: "ignored-user-message",
+        sequence: 4,
+        hostId: "local",
+        sessionId: "session-1",
+        occurredAt: "2026-07-28T12:00:03.000Z",
+        receivedAt: "2026-07-28T12:00:03.000Z",
+        kind: "message.updated",
+        source: "rollout",
+        confidence: "exact",
+        payload: { role: "user", text: "不应展示", isFinal: false },
+      },
+    ]);
+    expect(sessions[0].runtime).toBe("active");
+    expect(sessions[0].latestVisibleMessage?.text).toBe("正在整理会话同步。");
+    expect(codexBubble(sessions)).toContain("正在整理会话同步。");
   });
 });

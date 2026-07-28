@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "fixture-session",
+  "turn_id": "fixture-turn",
+  "prompt": "fixture-only prompt that must never persist",
+  "cwd": "/work/fixture-project"
+}

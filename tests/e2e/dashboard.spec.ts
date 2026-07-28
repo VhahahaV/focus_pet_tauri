@@ -330,7 +330,10 @@ test("settings expose all modules without a secondary navigation rail", async ({
 
   await expect(page.getByText("回归提醒")).toBeVisible();
   await expect(page.getByRole("heading", { name: "智能体任务" })).toBeVisible();
-  await expect(page.getByText("Codex / Claude Code 完成通知")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Codex 会话同步配置" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "可展示内容" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "仅状态" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Assistant 摘要" })).toBeVisible();
   await expect(page.getByRole("button", { name: "测试桌宠通知" })).toBeVisible();
   await expect(page.getByText("温和走神阈值")).toBeVisible();
   await expect(page.locator(".settings-module-reminders .settings-number-stepper")).toHaveCount(4);

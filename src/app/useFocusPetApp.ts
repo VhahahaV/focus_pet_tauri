@@ -16,10 +16,28 @@ import { buildDailySummary } from "../core/summary";
 import { inputWorkloadSummary, makeInputTimelineSnapshot } from "../core/timeline";
 import { dayBounds } from "../core/utils";
 import { makePetIntent } from "../core/pet";
+import { codexBubble, reduceCodexEvents, type CodexIntegrationStatus, type CodexSessionSnapshot, type CodexSyncPreferences, type SshConnectionStatus, type SshHostCandidate, type SshHostDiagnostic } from "../core/codexSessions";
 import type { PetPackRecord } from "../resources/petPack";
 import { deleteAllData, emptySnapshot, exportSnapshot, loadSnapshot, pruneSnapshotForRetention, saveSnapshot } from "../store/localStore";
 import {
   nativeActivitySample,
+  nativeConnectCodexSshHost,
+  nativeCodexSshConnectionStatus,
+  nativeCodexIntegrationStatus,
+  nativeSetCodexSyncPreferences,
+  nativeCodexSessionSnapshot,
+  nativeDrainCodexSessionEvents,
+  nativeDrainCodexSshEvents,
+  nativeDiscoverCodexSshHosts,
+  nativeForgetCodexSshHost,
+  nativeDiagnoseCodexSshHost,
+  nativeInstallCodexHooks,
+  nativePollCodexManagedStatus,
+  nativeProvisionCodexSshHost,
+  nativeSaveCodexSshHost,
+  nativeStartCodexManagedDaemon,
+  nativeUninstallCodexSshHost,
+  nativeUninstallCodexHooks,
   nativeDrainAgentEvents,
   nativeDataSize,
   nativeDeletePetPack,
@@ -60,6 +78,12 @@ export interface FocusPetAppController {
   selectedTab: DashboardTab;
   setSelectedTab: (tab: DashboardTab) => void;
   activeFocus: ReturnType<typeof activeFocusSession>;
+  codexSessions: CodexSessionSnapshot[];
+  codexIntegration?: CodexIntegrationStatus;
+  codexManagedStatusEnabled: boolean;
+  codexSshHosts: SshHostCandidate[];
+  codexSshConnections: SshConnectionStatus[];
+  codexSshDiagnostics: Record<string, SshHostDiagnostic>;
   installationNotice?: InstallationSnapshot;
   actions: {
     tick: () => Promise<void>;
@@ -91,6 +115,19 @@ export interface FocusPetAppController {
     deletePetPack: (packID: string) => Promise<void>;
     showPetStatusBubble: () => void;
     testAgentCompletion: () => void;
+    refreshCodexIntegration: () => Promise<void>;
+    enableCodexManagedStatus: () => Promise<void>;
+    installCodexHooks: () => Promise<void>;
+    uninstallCodexHooks: () => Promise<void>;
+    copyCodexHookCommand: () => Promise<void>;
+    copyCodexStandaloneInstallCommand: () => Promise<void>;
+    updateCodexSyncPreferences: (preferences: CodexSyncPreferences) => Promise<void>;
+    discoverCodexSshHosts: () => Promise<void>;
+    saveCodexSshHost: (host: SshHostCandidate) => Promise<void>;
+    forgetCodexSshHost: (alias: string) => Promise<void>;
+    diagnoseCodexSshHost: (alias: string) => Promise<void>;
+    provisionCodexSshHost: (alias: string) => Promise<void>;
+    uninstallCodexSshHost: (alias: string) => Promise<void>;
   };
 }
 
@@ -200,6 +237,12 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const [petPacks, setPetPacks] = useState<PetPackRecord[]>([]);
   const [selectedTab, setSelectedTab] = useState<DashboardTab>("today");
   const [installationNotice, setInstallationNotice] = useState<InstallationSnapshot | undefined>();
+  const [codexSessions, setCodexSessions] = useState<CodexSessionSnapshot[]>([]);
+  const [codexIntegration, setCodexIntegration] = useState<CodexIntegrationStatus | undefined>();
+  const [codexManagedStatusEnabled, setCodexManagedStatusEnabled] = useState(false);
+  const [codexSshHosts, setCodexSshHosts] = useState<SshHostCandidate[]>([]);
+  const [codexSshConnections, setCodexSshConnections] = useState<SshConnectionStatus[]>([]);
+  const [codexSshDiagnostics, setCodexSshDiagnostics] = useState<Record<string, SshHostDiagnostic>>({});
   const [ready, setReady] = useState(false);
   const catalogRef = useRef<ClassificationCatalogEntry[]>([]);
   const saveTimer = useRef<number | undefined>(undefined);
@@ -524,6 +567,100 @@ export const useFocusPetApp = (): FocusPetAppController => {
 
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return undefined;
+    let disposed = false;
+    let polling = false;
+    const refreshCodex = async (hydrate = false) => {
+      if (disposed || polling) return;
+      polling = true;
+      try {
+        if (hydrate) {
+          const [snapshot, status] = await Promise.all([
+            nativeCodexSessionSnapshot(),
+            nativeCodexIntegrationStatus(),
+          ]);
+          if (disposed) return;
+          setCodexSessions(snapshot);
+          setCodexIntegration(status);
+          return;
+        }
+        const events = await nativeDrainCodexSessionEvents();
+        if (disposed || events.length === 0) return;
+        setCodexSessions((current) => reduceCodexEvents(current, events));
+      } catch {
+        // Codex integration is optional. A missing CLI or a malformed third-party
+        // hook must never disturb the primary focus-tracking loop.
+      } finally {
+        polling = false;
+      }
+    };
+    void refreshCodex(true);
+    let unlisten: (() => void) | undefined;
+    void listen<import("../core/codexSessions").CodexEventEnvelope[]>("codex-session-events", (event) => {
+      if (!disposed && event.payload.length > 0) {
+        setCodexSessions((current) => reduceCodexEvents(current, event.payload));
+      }
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+    const interval = window.setInterval(() => void refreshCodex(), 500);
+    return () => {
+      disposed = true;
+      unlisten?.();
+      window.clearInterval(interval);
+    };
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime() || !codexManagedStatusEnabled) return undefined;
+    let disposed = false;
+    let polling = false;
+    const pollManagedStatus = async () => {
+      if (disposed || polling) return;
+      polling = true;
+      try {
+        const events = await nativePollCodexManagedStatus();
+        if (!disposed && events.length > 0) setCodexSessions((current) => reduceCodexEvents(current, events));
+      } catch {
+        // Hook/transcript tracking remains available when the experimental App
+        // Server proxy disappears or has a schema incompatibility.
+        if (!disposed) setCodexManagedStatusEnabled(false);
+      } finally {
+        polling = false;
+      }
+    };
+    void pollManagedStatus();
+    const interval = window.setInterval(() => void pollManagedStatus(), 2000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [codexManagedStatusEnabled, ready]);
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return undefined;
+    let disposed = false;
+    const pollSshEvents = async () => {
+      try {
+        const [events, connections] = await Promise.all([nativeDrainCodexSshEvents(), nativeCodexSshConnectionStatus()]);
+        if (!disposed) setCodexSshConnections(connections);
+        if (!disposed && events.length > 0) setCodexSessions((current) => reduceCodexEvents(current, events));
+      } catch {
+        // SSH reconnects happen in the native manager and do not alter local
+        // Codex lifecycle state when a remote host becomes unavailable.
+      }
+    };
+    void nativeDiscoverCodexSshHosts().then((hosts) => {
+      if (!disposed) setCodexSshHosts(hosts);
+    }).catch(() => undefined);
+    const interval = window.setInterval(() => void pollSshEvents(), 500);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return undefined;
     let unlisten: (() => void) | undefined;
     void listen<{ label: DesktopWidgetMoveLabel; x: number; y: number }>("focus-pet-widget-moved", (event) => {
       mutate((state) => {
@@ -617,6 +754,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   }, [ready, tick]);
 
   const activeFocus = activeFocusSession(bundle.state.focusSessions);
+  const codexBubbleText = useMemo(() => codexBubble(codexSessions), [codexSessions]);
 
   const widgetTimelines = useMemo(() => {
     const needsCurrent = desktopWidgetSettings.currentStatusVisible;
@@ -689,13 +827,15 @@ export const useFocusPetApp = (): FocusPetAppController => {
       void emitTo(
         "widget-pet-companion",
         "focus-pet-companion-state",
-        makePetCompanionViewState(bundle.state),
+        makePetCompanionViewState(bundle.state, codexBubbleText),
       );
     }
     void emitTo("widget-menu-bar", "focus-pet-menu-bar-state", menuBarPayload);
   }, [
     activeFocus,
     bundle,
+    codexBubbleText,
+    codexSessions,
     desktopWidgetSettings.currentStatusVisible,
     desktopWidgetSettings.recentRhythmVisible,
     petPacks.length,
@@ -865,6 +1005,139 @@ export const useFocusPetApp = (): FocusPetAppController => {
         mutate((state) => runtimeActions.transientPetIntent(state, "taskCompleted", message, "agent", 12_000));
         void nativeDeliverNotification("任务已完成", message).catch(() => false);
       },
+      async refreshCodexIntegration() {
+        const [snapshot, status] = await Promise.all([
+          nativeCodexSessionSnapshot(),
+          nativeCodexIntegrationStatus(),
+        ]);
+        setCodexSessions(snapshot);
+        setCodexIntegration(status);
+      },
+      async enableCodexManagedStatus() {
+        try {
+          const started = await nativeStartCodexManagedDaemon();
+          if (!started) throw new Error("Codex App Server daemon 未能启动。");
+          const events = await nativePollCodexManagedStatus();
+          setCodexSessions((current) => reduceCodexEvents(current, events));
+          setCodexManagedStatusEnabled(true);
+          mutate((state) => ({ ...state, statusMessage: "Codex 精确状态已启用。" }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          mutate((state) => ({ ...state, statusMessage: `Codex 精确状态不可用：${message}` }));
+          throw error;
+        }
+      },
+      async installCodexHooks() {
+        try {
+          const result = await nativeInstallCodexHooks();
+          const status = await nativeCodexIntegrationStatus();
+          setCodexIntegration(status);
+          mutate((state) => ({ ...state, statusMessage: result.message }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          mutate((state) => ({ ...state, statusMessage: `Codex Hook 安装失败：${message}` }));
+          throw error;
+        }
+      },
+      async uninstallCodexHooks() {
+        try {
+          const result = await nativeUninstallCodexHooks();
+          const status = await nativeCodexIntegrationStatus();
+          setCodexIntegration(status);
+          mutate((state) => ({ ...state, statusMessage: result.message }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          mutate((state) => ({ ...state, statusMessage: `Codex Hook 移除失败：${message}` }));
+          throw error;
+        }
+      },
+      async copyCodexHookCommand() {
+        const status = codexIntegration ?? await nativeCodexIntegrationStatus();
+        if (!status?.hookCommand) throw new Error("当前环境无法取得 Codex Hook 命令。");
+        await navigator.clipboard?.writeText(status.hookCommand);
+        mutate((state) => ({ ...state, statusMessage: "已复制 Codex Hook 命令。" }));
+      },
+      async copyCodexStandaloneInstallCommand() {
+        // Standalone is optional: a normal Codex CLI can run Focus Pet's
+        // explicitly started observer. This installer only enables Codex's
+        // durable managed-daemon mode, and is always user initiated.
+        await navigator.clipboard?.writeText("curl -fsSL https://chatgpt.com/codex/install.sh | sh");
+        mutate((state) => ({ ...state, statusMessage: "已复制官方 standalone 安装命令；它可启用持久 daemon，普通 Codex CLI 也可直接启用精确状态。" }));
+      },
+      async updateCodexSyncPreferences(preferences) {
+        const result = await nativeSetCodexSyncPreferences(preferences);
+        const status = await nativeCodexIntegrationStatus();
+        setCodexIntegration(status);
+        if (result.contentMode === "statusOnly") {
+          setCodexSessions((current) => current.map((session) => ({ ...session, latestVisibleMessage: undefined })));
+        }
+        mutate((state) => ({
+          ...state,
+          statusMessage: result.contentMode === "statusOnly" ? "Codex 已切换为仅同步状态。" : "Codex 将显示 assistant 可见摘要。",
+        }));
+      },
+      async discoverCodexSshHosts() {
+        const hosts = await nativeDiscoverCodexSshHosts();
+        setCodexSshHosts(hosts);
+        mutate((state) => ({ ...state, statusMessage: hosts.length ? `发现 ${hosts.length} 个 SSH Host。` : "没有发现可用的 SSH Host alias。" }));
+      },
+      async saveCodexSshHost(host) {
+        const saved = await nativeSaveCodexSshHost(host);
+        setCodexSshHosts((current) => [...current.filter((existing) => existing.alias !== saved.alias), saved].sort((left, right) => left.alias.localeCompare(right.alias)));
+        mutate((state) => ({ ...state, statusMessage: `已保存 SSH 主机 ${saved.alias}；可先执行只读检查。` }));
+      },
+      async forgetCodexSshHost(alias) {
+        await nativeForgetCodexSshHost(alias);
+        setCodexSshHosts((current) => current.filter((host) => host.alias !== alias));
+        setCodexSshDiagnostics((current) => {
+          const { [alias]: _removed, ...remaining } = current;
+          return remaining;
+        });
+        setCodexSshConnections((current) => current.filter((connection) => connection.alias !== alias));
+        mutate((state) => ({ ...state, statusMessage: `已从 Focus Pet 移除 SSH 主机 ${alias}；未修改 ~/.ssh/config 或远端环境。` }));
+      },
+      async diagnoseCodexSshHost(alias) {
+        try {
+          const diagnostic = await nativeDiagnoseCodexSshHost(alias);
+          setCodexSshDiagnostics((current) => ({ ...current, [alias]: diagnostic }));
+          mutate((state) => ({
+            ...state,
+            statusMessage: `${alias} 可接入：${diagnostic.operatingSystem} ${diagnostic.architecture} · ${diagnostic.codexVersion}`,
+          }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          mutate((state) => ({ ...state, statusMessage: `SSH 主机检查失败：${message}` }));
+          throw error;
+        }
+      },
+      async provisionCodexSshHost(alias) {
+        try {
+          const diagnostic = await nativeDiagnoseCodexSshHost(alias);
+          const result = await nativeProvisionCodexSshHost(alias);
+          const connected = await nativeConnectCodexSshHost(alias);
+          if (!connected) throw new Error("远端官方 App Server 已启用，但无法建立 SSH proxy 事件流。");
+          mutate((state) => ({ ...state, statusMessage: `${result.message}（${diagnostic.operatingSystem} ${diagnostic.architecture}）` }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          mutate((state) => ({ ...state, statusMessage: `SSH Codex 连接失败：${message}` }));
+          throw error;
+        }
+      },
+      async uninstallCodexSshHost(alias) {
+        try {
+          const result = await nativeUninstallCodexSshHost(alias);
+          setCodexSshDiagnostics((current) => {
+            const next = { ...current };
+            delete next[alias];
+            return next;
+          });
+          mutate((state) => ({ ...state, statusMessage: result.message }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          mutate((state) => ({ ...state, statusMessage: `SSH Codex 断开失败：${message}` }));
+          throw error;
+        }
+      },
     }),
     [
       bundle.state,
@@ -876,6 +1149,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
       refreshRecognitionDiagnostics,
       refreshPetPacks,
       tick,
+      codexIntegration,
     ],
   );
 
@@ -888,6 +1162,12 @@ export const useFocusPetApp = (): FocusPetAppController => {
     setSelectedTab,
     activeFocus,
     installationNotice,
+    codexSessions,
+    codexIntegration,
+    codexManagedStatusEnabled,
+    codexSshHosts,
+    codexSshConnections,
+    codexSshDiagnostics,
     actions,
   };
 };
