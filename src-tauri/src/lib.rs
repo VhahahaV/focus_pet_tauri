@@ -41,8 +41,26 @@ struct NativeMenuAction {
 
 #[tauri::command]
 fn perform_menu_bar_action(app: tauri::AppHandle, action: String) -> bool {
+    if !is_native_menu_action(&action) {
+        return false;
+    }
     handle_native_menu_action(&app, &action);
     true
+}
+
+fn is_native_menu_action(action: &str) -> bool {
+    matches!(
+        action,
+        TRAY_OPEN_TODAY
+            | TRAY_OPEN_PET
+            | TRAY_OPEN_SETTINGS
+            | TRAY_TOGGLE_WIDGETS
+            | TRAY_TOGGLE_PET
+            | TRAY_PAUSE_REMINDERS
+            | TRAY_RESUME_REMINDERS
+            | TRAY_FINISH_FOCUS
+            | TRAY_QUIT
+    )
 }
 
 #[tauri::command]
@@ -402,7 +420,185 @@ fn export_app_icon(
     Ok(Some(output_path.to_string_lossy().to_string()))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn export_app_icon(
+    app: &tauri::AppHandle,
+    bundle_id: Option<&str>,
+    app_name: &str,
+) -> Result<Option<String>, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::os::windows::process::CommandExt;
+
+    let Some(source) = windows_icon_source(bundle_id) else {
+        return Ok(None);
+    };
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join("app-icons");
+    std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let store_packaged_app = is_windows_store_package_path(&source);
+    if store_packaged_app {
+        // Bump the cache identity when choosing the AppX light-background logo
+        // so existing white-on-transparent cache files are not reused.
+        "appx-light-logo-v2".hash(&mut hasher);
+    }
+    let safe_name = app_name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .take(32)
+        .collect::<String>();
+    let output_path = cache_dir.join(format!(
+        "{}-{:016x}.png",
+        if safe_name.is_empty() {
+            "app"
+        } else {
+            &safe_name
+        },
+        hasher.finish()
+    ));
+    if output_path.is_file() {
+        return Ok(Some(output_path.to_string_lossy().to_string()));
+    }
+
+    // Packaged Windows apps commonly expose only a generic executable icon.
+    // Prefer their AppX manifest logo when the foreground executable lives in
+    // WindowsApps, which covers ChatGPT/Codex and other Store-distributed apps.
+    if store_packaged_app {
+        if let Some(store_logo) = windows_store_logo_source(&source) {
+            if std::fs::copy(&store_logo, &output_path).is_ok() && output_path.is_file() {
+                return Ok(Some(output_path.to_string_lossy().to_string()));
+            }
+            let _ = std::fs::remove_file(&output_path);
+        }
+    }
+
+    let script = r#"
+Add-Type -AssemblyName System.Drawing
+$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:FOCUS_PET_ICON_SOURCE)
+if ($null -eq $icon) { exit 2 }
+$bitmap = $icon.ToBitmap()
+try {
+  $bitmap.Save($env:FOCUS_PET_ICON_OUTPUT, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally {
+  $bitmap.Dispose()
+  $icon.Dispose()
+}
+"#;
+    let status = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("FOCUS_PET_ICON_SOURCE", &source)
+        .env("FOCUS_PET_ICON_OUTPUT", &output_path)
+        .creation_flags(0x0800_0000)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if !status.success() || !output_path.is_file() {
+        let _ = std::fs::remove_file(&output_path);
+        return Ok(None);
+    }
+    Ok(Some(output_path.to_string_lossy().to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_icon_source(bundle_id: Option<&str>) -> Option<PathBuf> {
+    bundle_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_STORE_LOGO_SCRIPT: &str = r#"
+$source = $env:FOCUS_PET_ICON_SOURCE
+$package = Get-AppxPackage | Where-Object {
+  $source.StartsWith($_.InstallLocation, [StringComparison]::OrdinalIgnoreCase)
+} | Select-Object -First 1
+if ($null -eq $package) { exit 1 }
+$manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+$application = @($manifest.Package.Applications.Application | Where-Object {
+  $executable = Join-Path $package.InstallLocation $_.Executable.Replace('/', '\')
+  [string]::Equals($executable, $source, [StringComparison]::OrdinalIgnoreCase)
+} | Select-Object -First 1)
+$visual = $application.VisualElements
+$relative = [string]$visual.Square44x44Logo
+if ([string]::IsNullOrWhiteSpace($relative)) { $relative = [string]$visual.Square150x150Logo }
+if ([string]::IsNullOrWhiteSpace($relative)) { $relative = [string]$manifest.Package.Properties.Logo }
+if ([string]::IsNullOrWhiteSpace($relative)) { exit 2 }
+$logo = Join-Path $package.InstallLocation $relative.Replace('/', '\')
+$directory = Split-Path -Parent $logo
+$stem = [IO.Path]::GetFileNameWithoutExtension($logo)
+$extension = [IO.Path]::GetExtension($logo)
+$candidates = @(
+  (Join-Path $directory ($stem + '.targetsize-256_altform-lightunplated' + $extension)),
+  (Join-Path $directory ($stem + '.targetsize-256_altform-unplated' + $extension)),
+  (Join-Path $directory ($stem + '.targetsize-256' + $extension)),
+  (Join-Path $directory ($stem + '.scale-200' + $extension)),
+  $logo
+)
+foreach ($candidate in $candidates) {
+  if ((Test-Path -LiteralPath $candidate) -and [IO.Path]::GetExtension($candidate) -ieq '.png') {
+    $candidate
+    exit 0
+  }
+}
+exit 3
+"#;
+
+#[cfg(target_os = "windows")]
+fn windows_store_logo_source(source: &Path) -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+
+    if !is_windows_store_package_path(source) {
+        return None;
+    }
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            WINDOWS_STORE_LOGO_SCRIPT,
+        ])
+        .env("FOCUS_PET_ICON_SOURCE", source)
+        .creation_flags(0x0800_0000)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let logo = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+    logo.is_file().then_some(logo)
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_store_package_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+        .contains("\\program files\\windowsapps\\")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn export_app_icon(
     _app: &tauri::AppHandle,
     _bundle_id: Option<&str>,
@@ -435,6 +631,20 @@ fn open_log_folder(app: tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
+fn data_storage_path(app: tauri::AppHandle) -> Result<String, String> {
+    FocusPetStore::new(&app)
+        .map(|store| store.root_dir().to_string_lossy().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_data_folder(app: tauri::AppHandle) -> bool {
+    FocusPetStore::new(&app)
+        .map(|store| native::open_path(store.root_dir()))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 fn current_log_file(app: tauri::AppHandle, open_file: bool) -> Result<String, String> {
     let path = FocusPetStore::new(&app)
         .map_err(|error| error.to_string())?
@@ -447,13 +657,26 @@ fn current_log_file(app: tauri::AppHandle, open_file: bool) -> Result<String, St
 }
 
 #[tauri::command]
-fn choose_and_import_pet_pack(
+fn append_log_entry(app: tauri::AppHandle, entry: Value) -> Result<String, String> {
+    FocusPetStore::new(&app)
+        .map_err(|error| error.to_string())?
+        .append_log_entry(&entry)
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn choose_and_import_pet_pack(
     app: tauri::AppHandle,
 ) -> Result<Option<Vec<ImportedPetPack>>, String> {
-    let Some(path) = pet_pack::choose_pet_pack_source() else {
-        return Ok(None);
-    };
-    import_pet_pack_from_path(app, path.to_string_lossy().to_string()).map(Some)
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = pet_pack::choose_pet_pack_source(&app) else {
+            return Ok(None);
+        };
+        import_pet_pack_from_path(app, path.to_string_lossy().to_string()).map(Some)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -488,8 +711,10 @@ fn delete_pet_pack(app: tauri::AppHandle, id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn deliver_notification(title: String, body: String) -> bool {
-    notifications::deliver(&title, &body)
+async fn deliver_notification(title: String, body: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || notifications::deliver(&title, &body))
+        .await
+        .unwrap_or(false)
 }
 
 fn application_bundle_path() -> PathBuf {
@@ -525,6 +750,9 @@ fn is_running_from_mounted_volume_path(path: &Path) -> bool {
 }
 
 fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = home;
+
     #[cfg(target_os = "macos")]
     {
         let text = path.to_string_lossy();
@@ -537,22 +765,13 @@ fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        let normalized = path.to_string_lossy().replace('/', "\\").to_lowercase();
         let mut roots = Vec::new();
         for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
             if let Some(value) = std::env::var_os(key) {
-                let root = PathBuf::from(value);
-                roots.push(if key == "LOCALAPPDATA" {
-                    root.join("Programs")
-                } else {
-                    root
-                });
+                roots.push(PathBuf::from(value));
             }
         }
-        return roots
-            .iter()
-            .map(|root| root.to_string_lossy().replace('/', "\\").to_lowercase())
-            .any(|root| normalized.starts_with(&root));
+        return is_windows_installed_path(path, &roots);
     }
 
     #[cfg(target_os = "linux")]
@@ -566,8 +785,25 @@ fn is_installed_application_path(path: &Path, home: Option<&Path>) -> bool {
     false
 }
 
+#[cfg(target_os = "windows")]
+fn is_windows_installed_path(path: &Path, roots: &[PathBuf]) -> bool {
+    let normalized = normalize_windows_path(path);
+    roots.iter().any(|root| {
+        let root = normalize_windows_path(root);
+        normalized == root || normalized.starts_with(&format!("{root}\\"))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
 #[tauri::command]
-fn sync_widget_windows(
+async fn sync_widget_windows(
     app: tauri::AppHandle,
     current_status_visible: bool,
     recent_rhythm_visible: bool,
@@ -612,6 +848,9 @@ fn sync_widget_windows(
                 pet_window_height,
             )
         });
+    log::info!(
+        "sync pet window: visible={pet_companion_visible}, placement={pet_placement}, size={pet_size}, origin={pet_origin:?}"
+    );
     sync_widget_window(
         &app,
         "widget-pet-companion",
@@ -699,7 +938,6 @@ fn default_pet_origin(
     let screen = monitor.size();
     let screen_pos = monitor.position();
     let work_area = monitor.work_area();
-    let scale_factor = monitor.scale_factor();
     let screen_rect = Rect {
         x: f64::from(screen_pos.x),
         y: f64::from(screen_pos.y),
@@ -712,6 +950,7 @@ fn default_pet_origin(
         width: f64::from(work_area.size.width),
         height: f64::from(work_area.size.height),
     };
+    let scale_factor = monitor.scale_factor();
     Some(default_pet_origin_for_rects(
         placement,
         width * scale_factor,
@@ -801,6 +1040,68 @@ fn clamped_origin(value: f64, lower: f64, upper: f64) -> f64 {
     }
 }
 
+fn rect_contains_origin(rect: Rect, origin: (f64, f64)) -> bool {
+    origin.0 >= rect.x
+        && origin.0 < rect.x + rect.width
+        && origin.1 >= rect.y
+        && origin.1 < rect.y + rect.height
+}
+
+fn clamp_origin_to_work_area(
+    origin: (f64, f64),
+    physical_width: f64,
+    physical_height: f64,
+    work: Rect,
+) -> (f64, f64) {
+    (
+        clamped_origin(origin.0, work.x, work.x + work.width - physical_width),
+        clamped_origin(origin.1, work.y, work.y + work.height - physical_height),
+    )
+}
+
+fn visible_widget_origin(
+    app: &tauri::AppHandle,
+    origin: (f64, f64),
+    logical_width: f64,
+    logical_height: f64,
+) -> (f64, f64) {
+    let monitors = app.available_monitors().unwrap_or_default();
+    let target = monitors
+        .iter()
+        .find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            rect_contains_origin(
+                Rect {
+                    x: f64::from(position.x),
+                    y: f64::from(position.y),
+                    width: f64::from(size.width),
+                    height: f64::from(size.height),
+                },
+                origin,
+            )
+        })
+        .cloned()
+        .or_else(|| app.primary_monitor().ok().flatten())
+        .or_else(|| monitors.first().cloned());
+    let Some(monitor) = target else {
+        return origin;
+    };
+    let work = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
+    clamp_origin_to_work_area(
+        origin,
+        logical_width * scale_factor,
+        logical_height * scale_factor,
+        Rect {
+            x: f64::from(work.position.x),
+            y: f64::from(work.position.y),
+            width: f64::from(work.size.width),
+            height: f64::from(work.size.height),
+        },
+    )
+}
+
 fn sync_widget_window(
     app: &tauri::AppHandle,
     label: &str,
@@ -813,18 +1114,24 @@ fn sync_widget_window(
     use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
     if visible {
+        let origin = origin.map(|value| visible_widget_origin(app, value, width, height));
         if let Some(window) = app.get_webview_window(label) {
-            window.show().map_err(|error| error.to_string())?;
             window.set_always_on_top(true).ok();
             window.set_visible_on_all_workspaces(true).ok();
             window.set_shadow(false).ok();
-            window.set_size(LogicalSize::new(width, height)).ok();
+            window
+                .set_size(LogicalSize::new(width, height))
+                .map_err(|error| error.to_string())?;
+            window.show().map_err(|error| error.to_string())?;
             if let Some((x, y)) = origin {
-                window.set_position(PhysicalPosition::new(x, y)).ok();
+                let position = PhysicalPosition::new(x.round() as i32, y.round() as i32);
+                window
+                    .set_position(position)
+                    .map_err(|error| error.to_string())?;
             }
             return Ok(());
         }
-        let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
             .title("Focus Pet Widget")
             .inner_size(width, height)
             .resizable(false)
@@ -834,11 +1141,21 @@ fn sync_widget_window(
             .always_on_top(true)
             .visible_on_all_workspaces(true)
             .skip_taskbar(true)
-            .visible(true)
-            .build()
-            .map_err(|error| error.to_string())?;
+            .visible(origin.is_none());
         if let Some((x, y)) = origin {
-            window.set_position(PhysicalPosition::new(x, y)).ok();
+            // Supplying the coordinate before WebView2 creates the native
+            // window avoids its default cascade placement without resolving
+            // an HWND (which can block Tauri's Windows event loop). The builder
+            // uses logical pixels, so this is only an initial approximation;
+            // the physical position below is the cross-DPI source of truth.
+            builder = builder.position(x, y);
+        }
+        let window = builder.build().map_err(|error| error.to_string())?;
+        if let Some((x, y)) = origin {
+            window
+                .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+                .map_err(|error| error.to_string())?;
+            window.show().map_err(|error| error.to_string())?;
         }
     } else if let Some(window) = app.get_webview_window(label) {
         window.hide().map_err(|error| error.to_string())?;
@@ -968,6 +1285,8 @@ fn install_desktop_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .text(TRAY_TOGGLE_PET, "显示/隐藏桌宠")
         .separator()
         .text(TRAY_PAUSE_REMINDERS, "暂停提醒")
+        .text(TRAY_RESUME_REMINDERS, "恢复提醒")
+        .text(TRAY_FINISH_FOCUS, "结束当前专注")
         .separator()
         .text(TRAY_QUIT, "退出")
         .build()?;
@@ -992,6 +1311,8 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .text(TRAY_TOGGLE_WIDGETS, "显示/隐藏桌面状态卡")
         .text(TRAY_TOGGLE_PET, "显示/隐藏桌宠")
         .text(TRAY_PAUSE_REMINDERS, "暂停提醒")
+        .text(TRAY_RESUME_REMINDERS, "恢复提醒")
+        .text(TRAY_FINISH_FOCUS, "结束当前专注")
         .separator()
         .text(TRAY_QUIT, "退出")
         .build()?;
@@ -1038,10 +1359,12 @@ fn install_tray(_app: &mut tauri::App) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_pet_origin_for_rects, installation_snapshot_for_path,
-        is_running_from_mounted_volume_path, Rect,
+        clamp_origin_to_work_area, default_pet_origin_for_rects, installation_snapshot_for_path,
+        is_native_menu_action, is_running_from_mounted_volume_path, rect_contains_origin, Rect,
     };
     use std::path::Path;
+    #[cfg(target_os = "windows")]
+    use std::path::PathBuf;
 
     const SCREEN: Rect = Rect {
         x: 0.0,
@@ -1049,6 +1372,51 @@ mod tests {
         width: 1440.0,
         height: 900.0,
     };
+
+    #[test]
+    fn native_menu_rejects_unknown_actions() {
+        for action in [
+            "open-today",
+            "open-pet",
+            "open-settings",
+            "toggle-widgets",
+            "toggle-pet",
+            "pause-reminders",
+            "resume-reminders",
+            "finish-focus",
+            "quit",
+        ] {
+            assert!(is_native_menu_action(action), "missing {action}");
+        }
+        assert!(!is_native_menu_action("delete-all-data"));
+        assert!(!is_native_menu_action(""));
+    }
+
+    #[test]
+    fn persisted_widget_origins_are_kept_inside_physical_work_areas() {
+        let primary_work = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 860.0,
+        };
+        assert_eq!(
+            clamp_origin_to_work_area((1500.0, 900.0), 300.0, 200.0, primary_work),
+            (1140.0, 660.0)
+        );
+
+        let left_monitor_work = Rect {
+            x: -1920.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1040.0,
+        };
+        assert!(rect_contains_origin(left_monitor_work, (-1800.0, 120.0)));
+        assert_eq!(
+            clamp_origin_to_work_area((-1800.0, 120.0), 450.0, 300.0, left_monitor_work),
+            (-1800.0, 120.0)
+        );
+    }
 
     #[test]
     fn dock_pet_origin_tracks_bottom_taskbar_work_area() {
@@ -1180,11 +1548,56 @@ mod tests {
             );
         }
     }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn installation_snapshot_accepts_current_user_nsis_paths_with_boundaries() {
+        let roots = [
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Users\tester\AppData\Local"),
+        ];
+        assert!(super::is_windows_installed_path(
+            Path::new(r"C:\Users\tester\AppData\Local\Focus Pet\focus-pet.exe"),
+            &roots,
+        ));
+        assert!(super::is_windows_installed_path(
+            Path::new(r"C:\Program Files\Focus Pet\focus-pet.exe"),
+            &roots,
+        ));
+        assert!(!super::is_windows_installed_path(
+            Path::new(r"C:\Program FilesEvil\Focus Pet\focus-pet.exe"),
+            &roots,
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_icon_source_requires_an_existing_executable_path() {
+        let current = std::env::current_exe().expect("test executable path");
+        assert_eq!(
+            super::windows_icon_source(Some(current.to_string_lossy().as_ref())),
+            Some(current)
+        );
+        assert!(super::windows_icon_source(None).is_none());
+        assert!(super::windows_icon_source(Some(r"C:\missing\focus-pet.exe")).is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_store_package_paths_are_detected_without_matching_similar_paths() {
+        assert!(super::is_windows_store_package_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1\app\ChatGPT.exe"
+        )));
+        assert!(!super::is_windows_store_package_path(Path::new(
+            r"C:\Program Files\WindowsAppsBackup\OpenAI.Codex\ChatGPT.exe"
+        )));
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -1261,7 +1674,10 @@ pub fn run() {
             installation_snapshot,
             open_system_settings,
             open_log_folder,
+            data_storage_path,
+            open_data_folder,
             current_log_file,
+            append_log_entry,
             choose_and_import_pet_pack,
             import_pet_pack_from_path,
             list_pet_packs,

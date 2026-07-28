@@ -38,8 +38,10 @@ import {
   nativeStartCodexManagedDaemon,
   nativeUninstallCodexSshHost,
   nativeUninstallCodexHooks,
+  nativeAppendLogEntry,
   nativeDrainAgentEvents,
   nativeDataSize,
+  nativeDataStoragePath,
   nativeDeletePetPack,
   nativeDeliverNotification,
   nativeCurrentLogFile,
@@ -48,17 +50,20 @@ import {
   nativeInstallationSnapshot,
   nativeListPetPacks,
   nativeOpenLogFolder,
+  nativeOpenDataFolder,
   nativeOpenSystemSettings,
   nativePetPackAssets,
   nativePermissionSnapshot,
   nativeSyncWidgetWindows,
   isTauriRuntime,
 } from "../store/native";
-import { makeMockActivitySample, mockPermissionSnapshot } from "./mockNative";
+import { mockPermissionSnapshot } from "./mockNative";
+import { activitySampleForRuntime } from "./activitySampling";
 import {
   advanceRuntime,
   emptyRuntime,
   inputMonitoringPermissionTitle,
+  permissionSnapshotForDisplay,
   runtimeActions,
   runtimeFromSnapshot,
   runtimeSnapshot,
@@ -106,9 +111,11 @@ export interface FocusPetAppController {
     refreshPermissions: () => Promise<void>;
     sendTestNotification: () => Promise<void>;
     openLogFolder: () => Promise<void>;
+    openDataFolder: () => Promise<void>;
+    copyDataPath: () => Promise<void>;
     openCurrentLogFile: () => Promise<void>;
     copyLogPath: () => Promise<void>;
-    writeDiagnosticsLogSnapshot: () => void;
+    writeDiagnosticsLogSnapshot: () => Promise<void>;
     refreshPetPacks: () => Promise<void>;
     importPetPack: () => Promise<void>;
     importPetPackFromPath: (path: string) => Promise<void>;
@@ -131,9 +138,9 @@ export interface FocusPetAppController {
   };
 }
 
-const sampleActivity = async (): Promise<NativeActivitySample> => {
+const sampleActivity = async (): Promise<NativeActivitySample | undefined> => {
   const native = await nativeActivitySample().catch(() => undefined);
-  return native ?? makeMockActivitySample();
+  return activitySampleForRuntime(native, isTauriRuntime());
 };
 
 const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
@@ -187,6 +194,9 @@ const petPackNeedsSourceAssets = (record: PetPackRecord): boolean =>
 
 const ensureSelectedPetPack = (state: AppRuntimeState, records: PetPackRecord[]): AppRuntimeState => {
   if (records.length === 0) {
+    // A native pack scan can still be in flight (notably for large Windows packs).
+    // Preserve an existing selection and visibility until the scan result is known.
+    if (state.settings.pet.selectedPackID) return state;
     return runtimeActions.updateSettings(state, (settings) => ({
       ...settings,
       pet: { ...settings.pet, selectedPackID: "", hidden: true },
@@ -251,6 +261,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const lastPersistedAt = useRef(0);
   const lastRetentionPruneAt = useRef(Date.now());
   const tickInFlight = useRef<Promise<void> | undefined>(undefined);
+  const nativeSampleUnavailable = useRef(false);
   const lastNotificationID = useRef<string | undefined>(undefined);
   const hydratingPetPackIDs = useRef<Set<string>>(new Set());
   const hydratedPetPackIDs = useRef<Set<string>>(new Set());
@@ -321,7 +332,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
             rememberWarning(`识别目录读取失败，已使用兜底规则启动：${error instanceof Error ? error.message : String(error)}`);
             return [] as ClassificationCatalogEntry[];
           }),
-          startupTimeout(nativeListPetPacks(), 2200, [] as PetPackRecord[], () => {
+          startupTimeout(nativeListPetPacks(), 8000, [] as PetPackRecord[], () => {
             rememberWarning("本地桌宠资源读取超时，已先隐藏桌宠启动。");
           }).catch((error) => {
             rememberWarning(`本地桌宠资源读取失败，已隐藏桌宠：${error instanceof Error ? error.message : String(error)}`);
@@ -345,7 +356,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
         const state = ensureSelectedPetPack(
           {
             ...initial.state,
-            permissionSnapshot: permissionSnapshot ?? mockPermissionSnapshot(),
+            permissionSnapshot: permissionSnapshotForDisplay(permissionSnapshot ?? mockPermissionSnapshot()),
             dataSizeBytes,
             statusMessage: warnings[0] ?? initial.state.statusMessage,
           },
@@ -394,10 +405,28 @@ export const useFocusPetApp = (): FocusPetAppController => {
     if (tickInFlight.current) return tickInFlight.current;
     const request = (async () => {
       const sample = await sampleActivity();
+      if (!sample) {
+        if (!nativeSampleUnavailable.current) {
+          nativeSampleUnavailable.current = true;
+          setBundle((current) => ({
+            ...current,
+            state: {
+              ...current.state,
+              statusMessage: "Windows 原生监控采样暂时不可用，本轮未写入模拟数据。",
+            },
+          }));
+        }
+        return;
+      }
+      const recoveredFromUnavailable = nativeSampleUnavailable.current;
+      nativeSampleUnavailable.current = false;
       setBundle((current) => {
         const next = advanceRuntime(current, sample, catalogRef.current);
         const shouldPrune = Date.now() - lastRetentionPruneAt.current >= retentionPruneIntervalMilliseconds;
-        const nextState = shouldPrune ? recomputeDerived(next.state) : next.state;
+        const sampledState = recoveredFromUnavailable
+          ? { ...next.state, statusMessage: "Windows 原生监控采样已恢复。" }
+          : next.state;
+        const nextState = shouldPrune ? recomputeDerived(sampledState) : sampledState;
         if (shouldPrune) lastRetentionPruneAt.current = Date.now();
         persist(runtimeSnapshot(nextState), "sample");
         return { ...next, state: nextState };
@@ -412,6 +441,13 @@ export const useFocusPetApp = (): FocusPetAppController => {
 
   const refreshRecognitionDiagnostics = useCallback(async () => {
     const sample = await sampleActivity();
+    if (!sample) {
+      mutate((state) => ({
+        ...state,
+        statusMessage: "Windows 原生监控采样不可用，未生成模拟诊断。",
+      }));
+      return;
+    }
     mutate((state) => {
       const classifier = new ActivityClassifier(state.classificationRules, catalogRef.current);
       const category = classifier.classify(sample.appName, sample.bundleID, sample.windowTitle);
@@ -420,9 +456,15 @@ export const useFocusPetApp = (): FocusPetAppController => {
         ...state,
         recognitionDiagnostic: {
           sampledAt: sample.timestamp,
+          sampleQuality: sample.sampleQuality,
           appName: sample.appName,
           bundleID: sample.bundleID,
           windowTitle: sanitizedTitle.rawTitle ?? sanitizedTitle.titleDisplay,
+          idleSeconds: sample.idleSeconds,
+          keyboardCount: sample.keyboardCount,
+          pointerCount: sample.pointerCount,
+          switchCount: sample.switchCount,
+          isScreenLocked: sample.isScreenLocked,
           category,
           catalogEntryCount: catalogRef.current.length,
           defaultRuleCount: classifier.defaultRules.length,
@@ -443,7 +485,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
       ]);
       mutate((state) => ({
         ...state,
-        permissionSnapshot: permissionSnapshot ?? mockPermissionSnapshot(),
+        permissionSnapshot: permissionSnapshotForDisplay(permissionSnapshot ?? mockPermissionSnapshot()),
         dataSizeBytes,
         statusMessage,
       }));
@@ -710,6 +752,58 @@ export const useFocusPetApp = (): FocusPetAppController => {
 
   const desktopWidgetSettings = bundle.state.settings.desktopWidget;
   const petSettings = bundle.state.settings.pet;
+  const petCompanionStateRef = useRef(makePetCompanionViewState(bundle.state));
+  const petPacksRef = useRef(petPacks);
+  const petHiddenRef = useRef(petSettings.hidden);
+  const widgetWindowSyncArgsRef = useRef<Parameters<typeof nativeSyncWidgetWindows>>([
+    desktopWidgetSettings.currentStatusVisible,
+    desktopWidgetSettings.recentRhythmVisible,
+    widgetOrigin(desktopWidgetSettings.currentStatusOrigin),
+    widgetOrigin(desktopWidgetSettings.recentRhythmOrigin),
+    !petSettings.hidden,
+    petSettings.size,
+    petSettings.placement,
+    undefined,
+  ]);
+  petCompanionStateRef.current = makePetCompanionViewState(bundle.state);
+  petPacksRef.current = petPacks;
+  petHiddenRef.current = petSettings.hidden;
+  widgetWindowSyncArgsRef.current = [
+    desktopWidgetSettings.currentStatusVisible,
+    desktopWidgetSettings.recentRhythmVisible,
+    widgetOrigin(desktopWidgetSettings.currentStatusOrigin),
+    widgetOrigin(desktopWidgetSettings.recentRhythmOrigin),
+    !petSettings.hidden,
+    petSettings.size,
+    petSettings.placement,
+    petSettings.placement === "custom" && petSettings.customOriginX !== undefined && petSettings.customOriginY !== undefined
+      ? { x: petSettings.customOriginX, y: petSettings.customOriginY }
+      : undefined,
+  ];
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return undefined;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("focus-pet-companion-ready", () => {
+      if (petHiddenRef.current) return;
+      void emitTo("widget-pet-companion", "focus-pet-companion-state", petCompanionStateRef.current);
+      void emitTo("widget-pet-companion", "focus-pet-companion-packs", petPacksRef.current);
+      // WebView2 can apply a cascade position while the transparent companion
+      // is loading. Re-sync once the companion confirms that its DOM is ready.
+      void nativeSyncWidgetWindows(...widgetWindowSyncArgsRef.current);
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -728,7 +822,12 @@ export const useFocusPetApp = (): FocusPetAppController => {
               y: petSettings.customOriginY,
             }
           : undefined,
-      ).catch(() => undefined);
+      ).catch((error) => {
+        mutate((state) => ({
+          ...state,
+          statusMessage: `桌宠窗口同步失败：${error instanceof Error ? error.message : String(error)}`,
+        }));
+      });
     }, 220);
     return () => window.clearTimeout(timeoutID);
   }, [
@@ -742,6 +841,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
     petSettings.customOriginX,
     petSettings.customOriginY,
     petSettings.size,
+    mutate,
   ]);
 
   useEffect(() => {
@@ -881,6 +981,9 @@ export const useFocusPetApp = (): FocusPetAppController => {
       },
       togglePetHidden() {
         mutate(runtimeActions.togglePetHidden);
+        // Persist visibility before creating or hiding the native window. This
+        // keeps the user's choice durable even if WebView2 delays background timers.
+        window.setTimeout(() => void flushPersist(), 0);
       },
       selectPetPack(packID) {
         mutate((state) => runtimeActions.setSelectedPetPack(state, packID));
@@ -922,6 +1025,17 @@ export const useFocusPetApp = (): FocusPetAppController => {
       async openLogFolder() {
         await nativeOpenLogFolder();
       },
+      async openDataFolder() {
+        const opened = await nativeOpenDataFolder();
+        mutate((state) => ({ ...state, statusMessage: opened ? "已打开本机数据目录。" : "当前环境无法打开数据目录。" }));
+      },
+      async copyDataPath() {
+        const path = await nativeDataStoragePath();
+        if (path) {
+          await navigator.clipboard?.writeText(path).catch(() => undefined);
+        }
+        mutate((state) => ({ ...state, statusMessage: path ? `已复制数据目录：${path}` : "浏览器预览使用浏览器本地存储。" }));
+      },
       async openCurrentLogFile() {
         const path = await nativeCurrentLogFile(true);
         mutate((state) => ({ ...state, statusMessage: path ? "已打开当前日志文件。" : "当前环境无法打开日志文件。" }));
@@ -933,8 +1047,22 @@ export const useFocusPetApp = (): FocusPetAppController => {
         }
         mutate((state) => ({ ...state, statusMessage: path ? "已复制日志文件路径。" : "当前环境无法复制日志路径。" }));
       },
-      writeDiagnosticsLogSnapshot() {
+      async writeDiagnosticsLogSnapshot() {
+        const state = bundle.state;
         mutate(runtimeActions.writeDiagnosticSnapshot);
+        if (!state.settings.logging.isEnabled) return;
+        const path = await nativeAppendLogEntry({
+          kind: "diagnostic",
+          time: new Date().toISOString(),
+          state: state.currentDecision.state,
+          app: state.currentSnapshot.appName,
+          reason: state.currentDecision.reason,
+          inputMonitoringStatus: state.permissionSnapshot.inputMonitoring,
+        }).catch(() => undefined);
+        mutate((current) => ({
+          ...current,
+          statusMessage: path ? "诊断快照已写入本机日志。" : "诊断日志写入失败，请检查数据目录权限。",
+        }));
       },
       async refreshPetPacks() {
         await refreshPetPacks();
@@ -1141,6 +1269,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
     }),
     [
       bundle.state,
+      flushPersist,
       installationNotice,
       mutate,
       persist,

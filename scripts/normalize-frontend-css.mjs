@@ -1,9 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import * as csstree from "css-tree";
 
-const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const modules = ["base", "primitives", "charts", "shell", "today", "history", "pet", "settings", "widgets"];
 const files = modules.map((name) => ({ name, path: join(projectRoot, "src", "styles", `${name}.css`) }));
 const asts = new Map(files.map(({ name, path }) => [name, csstree.parse(readFileSync(path, "utf8"))]));

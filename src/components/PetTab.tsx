@@ -23,6 +23,7 @@ import { petIntentLabels, petPlacementLabels } from "../core/labels";
 import { advancedMappingIntents, userMappingIntents } from "../core/pet";
 import type { PetIntentKind } from "../core/types";
 import { SegmentedControl, SliderRow, SoftButton, TogglePill } from "./ui";
+import { usePetFrames } from "./usePetFrames";
 import {
   resolveSourceActionForIntent,
   sourceActionAssetsForID,
@@ -77,7 +78,8 @@ const resolvePreviewAction = (
 };
 
 const PetPreviewStage = ({ record, action }: { record: PetPackRecord; action?: PetSourceActionSpec }) => {
-  const frames = useMemo(() => (action ? sourceActionAssetsForID(record, action.id)?.frameURLs ?? [] : []), [action, record]);
+  const sourceFrames = useMemo(() => (action ? sourceActionAssetsForID(record, action.id)?.frameURLs ?? [] : []), [action, record]);
+  const frames = usePetFrames(sourceFrames, record.previewURL ?? fallbackPetPreviewURL);
   const [frameIndex, setFrameIndex] = useState(0);
   const previewFPS = Math.min(6, Math.max(1, action?.fps ?? 6));
 

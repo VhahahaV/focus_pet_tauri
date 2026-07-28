@@ -177,9 +177,24 @@ export const nativeOpenLogFolder = async (): Promise<boolean> => {
   return invoke<boolean>("open_log_folder");
 };
 
+export const nativeDataStoragePath = async (): Promise<string | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<string>("data_storage_path");
+};
+
+export const nativeOpenDataFolder = async (): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("open_data_folder");
+};
+
 export const nativeCurrentLogFile = async (openFile: boolean): Promise<string | undefined> => {
   if (!isTauriRuntime()) return undefined;
   return invoke<string>("current_log_file", { openFile });
+};
+
+export const nativeAppendLogEntry = async (entry: Record<string, unknown>): Promise<string | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<string>("append_log_entry", { entry });
 };
 
 export const nativeImportPetPack = async (): Promise<PetPackRecord[] | undefined> => {

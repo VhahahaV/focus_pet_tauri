@@ -10,7 +10,6 @@ const preflightOnly = process.argv.includes("--preflight-only");
 const commandExists = (program, args = ["--version"]) => {
   const result = spawnSync(program, args, {
     env: process.env,
-    shell: platform === "win32",
     stdio: "ignore",
   });
   return result.status === 0;
@@ -22,7 +21,6 @@ const commandAvailable = (program) => {
     : ["sh", ["-lc", `command -v ${program}`]];
   const result = spawnSync(lookup[0], lookup[1], {
     env: process.env,
-    shell: platform === "win32",
     stdio: "ignore",
   });
   return result.status === 0;
@@ -32,7 +30,6 @@ const commandOutput = (program, args = []) => {
   const result = spawnSync(program, args, {
     env: process.env,
     encoding: "utf8",
-    shell: platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
   return `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
@@ -55,13 +52,13 @@ const dependencyChecks = {
     ["osascript", () => commandExists("osascript", ["-e", "return 1"])],
     ["ioreg", () => commandExists("ioreg", ["-c", "IOHIDSystem", "-r", "-d", "1"])],
     ["cargo", () => commandAvailable("cargo")],
-    ["npm", () => commandAvailable("npm")],
+    ["Node.js", () => commandExists(process.execPath)],
   ],
   win32: [
     ["PowerShell", () => commandExists("powershell", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion"])],
     ["VBScript packaging host", () => commandAvailable("cscript") && windowsVbScriptEnabled()],
     ["cargo", () => commandAvailable("cargo")],
-    ["npm", () => commandAvailable("npm")],
+    ["Node.js", () => commandExists(process.execPath)],
   ],
   linux: [
     ["Tauri WebKitGTK build libraries", () => commandAvailable("pkg-config") && commandExists("pkg-config", ["--exists", "webkit2gtk-4.1"])],
@@ -75,7 +72,7 @@ const dependencyChecks = {
     ["xprintidle or qdbus idle fallback", () => commandAvailable("xprintidle") || commandExists("qdbus", ["--version"])],
     ["zenity or kdialog picker", () => commandExists("zenity", ["--version"]) || commandExists("kdialog", ["--version"])],
     ["cargo", () => commandAvailable("cargo")],
-    ["npm", () => commandAvailable("npm")],
+    ["Node.js", () => commandExists(process.execPath)],
   ],
 };
 
@@ -120,11 +117,11 @@ const platformNativeChecklist = {
     "Confirm Dock-near pet placement uses the active monitor work area.",
   ],
   win32: [
-    "Confirm Settings > Recognition > Refresh Diagnostics reads foreground window title and process name through Win32/PowerShell.",
+    "Confirm Settings > Recognition > Refresh Diagnostics reads foreground window title and process name through the direct Win32 adapter.",
     "Confirm Settings > Permissions opens Windows privacy and notification settings.",
     "Confirm a test notification appears through BurntToast or the tray balloon fallback.",
     "Confirm taskbar-near pet placement uses the active monitor work area.",
-    "Confirm the Windows Forms picker imports folder, pet.json, and zip packs.",
+    "Confirm the Tauri native dialog imports a folder, pet.json, a single-pack zip, and a collection zip.",
   ],
   linux: [
     "Confirm Settings > Recognition > Refresh Diagnostics reads active window information on X11, or reports wayland-limited on restricted Wayland sessions.",
@@ -154,18 +151,23 @@ if (preflightOnly) {
   process.exit(missing.length > 0 ? 1 : 0);
 }
 
+const nodeCommand = (entry, args = []) => [process.execPath, [entry, ...args]];
+const rustTestArgs = ["test", "--manifest-path", "src-tauri/Cargo.toml"];
+if ((process.env.RUSTUP_TOOLCHAIN ?? "").includes("gnullvm")) rustTestArgs.splice(1, 0, "--release");
+
 const commands = [
-  ["npm", ["run", "verify:tauri-contract"]],
-  ["npm", ["run", "verify:migration"]],
-  ["npm", ["run", "verify:frontend-tokens"]],
-  ["npm", ["run", "build"]],
-  ["npm", ["test"]],
-  ["npm", ["run", "lint"]],
-  ["npm", ["run", "test:ui"]],
+  nodeCommand("scripts/verify-tauri-contract.mjs"),
+  nodeCommand("scripts/verify-migration.mjs"),
+  nodeCommand("scripts/verify-frontend-tokens.mjs"),
+  nodeCommand("node_modules/typescript/bin/tsc", ["-b"]),
+  nodeCommand("node_modules/vite/bin/vite.js", ["build"]),
+  nodeCommand("node_modules/vitest/vitest.mjs", ["run"]),
+  nodeCommand("node_modules/oxlint/bin/oxlint"),
+  nodeCommand("node_modules/@playwright/test/cli.js", ["test"]),
   ["cargo", ["fmt", "--manifest-path", "src-tauri/Cargo.toml", "--check"]],
   ["cargo", ["check", "--manifest-path", "src-tauri/Cargo.toml"]],
-  ["cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml"]],
-  ["npm", ["run", "tauri:build"]],
+  ["cargo", rustTestArgs],
+  nodeCommand("node_modules/@tauri-apps/cli/tauri.js", ["build", "--config", JSON.stringify({ build: { beforeBuildCommand: "" } })]),
 ];
 
 for (const [program, args] of commands) {
@@ -174,7 +176,6 @@ for (const [program, args] of commands) {
   const result = spawnSync(program, args, {
     cwd: process.cwd(),
     env: process.env,
-    shell: process.platform === "win32",
     stdio: "inherit",
   });
   if (result.status !== 0) {

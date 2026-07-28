@@ -215,7 +215,7 @@ Tauri/Rust 对应实现：
 已实现平台行为：
 
 - macOS：System Events 获取前台 App/window，`ioreg` 获取 HID idle，CoreGraphics 输入 fallback，锁屏探针，隐私/通知设置入口，AppleScript 通知和 picker。
-- Windows：PowerShell/Win32 获取前台窗口和 idle time，`ms-settings` 入口，BurntToast 或 tray balloon 通知，Windows Forms picker。
+- Windows：直接 Win32 获取前台窗口、进程、idle time、锁屏状态和全局键鼠计数，`ms-settings` 入口，BurntToast 或 tray balloon 通知，Tauri 原生文件/目录选择器。
 - Linux：X11/KDE 友好的活动窗口和 idle 探针，Wayland 受限状态，`notify-send`，`zenity`/`kdialog` picker。
 - 共享 native tracker 计算 App switch delta 和保守的 idle-based input fallback。
 
@@ -389,14 +389,14 @@ Tauri/React 对应实现：
 - [ ] 运行 `npm run verify:preflight`。
   - 预期：Windows 所需 helper 和 toolchain 可用。
 - [ ] 运行 `npm run verify:native`。
-  - 预期：PowerShell/Win32 前台窗口与 idle 探针工作。
+  - 预期：直接 Win32 前台窗口、idle、键鼠钩子与锁屏探针工作。
 - [ ] 运行 `npm run verify:native:notify`。
   - 预期：BurntToast 或 fallback 通知出现。
 - [ ] 运行 `npm run verify:platform`。
   - 预期：自动 build/test/bundle 链路通过。
 - [ ] 启动生成的 Windows bundle。
   - 预期：主 dashboard 打开；关闭主窗口后 tray 仍可用。
-- [ ] 验证 Windows Forms picker 和全部资源包导入形态。
+- [ ] 验证 Tauri 原生 picker 和全部资源包导入形态。
 - [ ] 验证 taskbar-near 浮动桌宠位置。
 - [ ] 验证 export/delete/log folder/current-log 动作。
 

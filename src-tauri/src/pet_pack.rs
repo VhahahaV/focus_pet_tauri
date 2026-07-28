@@ -10,7 +10,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::native::run_text_command;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,69 +109,47 @@ pub fn pet_pack_assets(library_dir: &Path, id: &str) -> io::Result<Vec<PetSource
     Ok(source_action_assets(&manifest, &root))
 }
 
-pub fn choose_pet_pack_source() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"
-set sourceKind to button returned of (display dialog "选择 .zip、包含 pet.json 的文件夹，或直接选择 pet.json。" buttons {"取消", "文件", "文件夹"} default button "文件夹" cancel button "取消")
-if sourceKind is "文件夹" then
-  POSIX path of (choose folder with prompt "选择 Focus Pet 资源包文件夹")
-else
-  POSIX path of (choose file with prompt "选择 Focus Pet .zip 或 pet.json")
-end if
-"#;
-        return run_text_command("osascript", &["-e", script]).map(PathBuf::from);
-    }
+pub fn choose_pet_pack_source(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let folder_label = "选择文件夹".to_string();
+    let file_label = "选择文件".to_string();
+    let cancel_label = "取消".to_string();
+    let choice = app
+        .dialog()
+        .message("请选择包含 pet.json 的文件夹，或选择 .zip / pet.json 文件。")
+        .title("导入 Focus Pet 资源包")
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            folder_label.clone(),
+            file_label.clone(),
+            cancel_label,
+        ))
+        .blocking_show_with_result();
 
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$choice = [System.Windows.Forms.MessageBox]::Show("选择“是”导入文件夹，选择“否”导入 .zip 或 pet.json。", "导入 Focus Pet 资源包", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel)
-if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
-  $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-  $dialog.Description = "选择 Focus Pet 资源包文件夹"
-  $dialog.ShowNewFolderButton = $false
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $dialog.SelectedPath
-  }
-} elseif ($choice -eq [System.Windows.Forms.DialogResult]::No) {
-  $dialog = New-Object System.Windows.Forms.OpenFileDialog
-  $dialog.Title = "选择 Focus Pet .zip 或 pet.json"
-  $dialog.Filter = "Focus Pet packs (*.zip;pet.json)|*.zip;pet.json|All files (*.*)|*.*"
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $dialog.FileName
-  }
-}
-"#;
-        return run_text_command(
-            "powershell",
-            &[
-                "-NoProfile",
-                "-STA",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ],
-        )
-        .map(PathBuf::from);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        return run_text_command(
-            "sh",
-            &[
-                "-lc",
-                "if command -v zenity >/dev/null 2>&1; then choice=$(zenity --list --title='导入 Focus Pet 资源包' --column='类型' '文件夹' '文件'); case \"$choice\" in 文件夹) zenity --file-selection --directory --title='选择 Focus Pet 资源包文件夹' ;; 文件) zenity --file-selection --title='选择 Focus Pet .zip 或 pet.json' ;; esac; elif command -v kdialog >/dev/null 2>&1; then choice=$(kdialog --combobox '导入 Focus Pet 资源包' '文件夹' '文件'); case \"$choice\" in 文件夹) kdialog --getexistingdirectory . '选择 Focus Pet 资源包文件夹' ;; 文件) kdialog --getopenfilename . '*.zip *.json|Focus Pet packs' ;; esac; fi",
-            ],
-        )
-        .map(PathBuf::from);
-    }
-
-    #[allow(unreachable_code)]
-    None
+    let selected = match choice {
+        MessageDialogResult::Yes => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet 资源包文件夹")
+            .blocking_pick_folder(),
+        MessageDialogResult::No => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet .zip 或 pet.json")
+            .add_filter("Focus Pet 资源包", &["zip", "json"])
+            .blocking_pick_file(),
+        MessageDialogResult::Custom(label) if label == folder_label => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet 资源包文件夹")
+            .blocking_pick_folder(),
+        MessageDialogResult::Custom(label) if label == file_label => app
+            .dialog()
+            .file()
+            .set_title("选择 Focus Pet .zip 或 pet.json")
+            .add_filter("Focus Pet 资源包", &["zip", "json"])
+            .blocking_pick_file(),
+        _ => None,
+    };
+    selected.and_then(|path| path.into_path().ok())
 }
 
 fn record_from_root(
@@ -219,7 +197,7 @@ fn source_action_assets(manifest: &Value, root: &Path) -> Vec<PetSourceActionAss
             let audio_url = action
                 .get("audio")
                 .and_then(audio_file_field)
-                .map(|file| root.join(file))
+                .and_then(|file| safe_asset_path(root, &file))
                 .filter(|path| path.is_file())
                 .map(|path| path.to_string_lossy().to_string());
             Some(PetSourceActionAssets {
@@ -232,7 +210,10 @@ fn source_action_assets(manifest: &Value, root: &Path) -> Vec<PetSourceActionAss
 }
 
 fn frame_urls(root: &Path, folder: &str) -> Vec<String> {
-    let mut frames = fs::read_dir(root.join(folder))
+    let Some(folder_path) = safe_asset_path(root, folder) else {
+        return Vec::new();
+    };
+    let mut frames = fs::read_dir(folder_path)
         .ok()
         .into_iter()
         .flatten()
@@ -245,6 +226,21 @@ fn frame_urls(root: &Path, folder: &str) -> Vec<String> {
         .into_iter()
         .map(|path| path.to_string_lossy().to_string())
         .collect()
+}
+
+fn safe_asset_path(root: &Path, relative: &str) -> Option<PathBuf> {
+    use std::path::Component;
+
+    let relative = Path::new(relative);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || !relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(root.join(relative))
 }
 
 fn audio_file_field(value: &Value) -> Option<String> {
@@ -486,11 +482,33 @@ fn validate_manifest(manifest: &Value, root: &Path) -> PetPackImportValidation {
         .into_iter()
         .flatten()
     {
-        if let Some(id) = string_field(action, "id") {
-            source_action_ids.insert(id);
+        let Some(id) = string_field(action, "id").filter(|value| !value.trim().is_empty()) else {
+            errors.push("missingSourceActionID".to_string());
+            continue;
+        };
+        if !source_action_ids.insert(id.clone()) {
+            errors.push(format!("duplicateSourceActionID:{id}"));
         }
         if let Some(folder) = string_field(action, "folder") {
-            validate_folder(root, &folder, &mut errors, "sourceAction");
+            let folder_path = validate_folder(root, &folder, &mut errors, &id);
+            if let (Some(path), Some(expected)) = (
+                folder_path,
+                action.get("frameCount").and_then(Value::as_u64),
+            ) {
+                let actual = png_count(&path);
+                if actual != expected {
+                    errors.push(format!(
+                        "frameCountMismatch:sourceAction:{id}:{expected}:{actual}"
+                    ));
+                }
+            }
+        } else {
+            errors.push(format!("missingAnimationFolder:{id}"));
+        }
+        if let Some(file) = action.get("audio").and_then(audio_file_field) {
+            if safe_asset_path(root, &file).is_none() {
+                errors.push(format!("unsafeAudioPath:{id}"));
+            }
         }
     }
     if manifest
@@ -508,9 +526,11 @@ fn validate_manifest(manifest: &Value, root: &Path) -> PetPackImportValidation {
     if let Some(animations) = manifest.get("animations").and_then(Value::as_object) {
         for (action, spec) in animations {
             if let Some(folder) = string_field(spec, "folder") {
-                validate_folder(root, &folder, &mut errors, action);
-                if let Some(expected) = spec.get("frameCount").and_then(Value::as_u64) {
-                    let actual = png_count(&root.join(&folder));
+                let folder_path = validate_folder(root, &folder, &mut errors, action);
+                if let (Some(path), Some(expected)) =
+                    (folder_path, spec.get("frameCount").and_then(Value::as_u64))
+                {
+                    let actual = png_count(&path);
                     if actual != expected {
                         errors.push(format!("frameCountMismatch:{action}:{expected}:{actual}"));
                     }
@@ -540,13 +560,22 @@ fn validate_manifest(manifest: &Value, root: &Path) -> PetPackImportValidation {
     }
 }
 
-fn validate_folder(root: &Path, folder: &str, errors: &mut Vec<String>, action: &str) {
-    let folder_path = root.join(folder);
+fn validate_folder(
+    root: &Path,
+    folder: &str,
+    errors: &mut Vec<String>,
+    action: &str,
+) -> Option<PathBuf> {
+    let Some(folder_path) = safe_asset_path(root, folder) else {
+        errors.push(format!("unsafeAnimationFolder:{action}"));
+        return None;
+    };
     if !folder_path.is_dir() {
         errors.push(format!("missingAnimationFolder:{action}"));
     } else if png_count(&folder_path) == 0 {
         errors.push(format!("missingAnimationFrames:{action}"));
     }
+    Some(folder_path)
 }
 
 fn png_count(path: &Path) -> u64 {
@@ -698,8 +727,56 @@ mod tests {
         assert!(imported.validation.is_valid);
         assert!(PathBuf::from(imported.path).join("pet.json").is_file());
         assert_eq!(imported.source_action_assets[0].id, "idle");
-        assert!(imported.source_action_assets[0].frame_urls[0].ends_with("idle/000.png"));
+        assert!(Path::new(&imported.source_action_assets[0].frame_urls[0])
+            .ends_with(Path::new("idle").join("000.png")));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_source_action_frame_count_mismatches() {
+        let root = temp_dir("focus-pet-pack-source-frame-count");
+        let source = root.join("source");
+        let library = root.join("library");
+        fs::create_dir_all(source.join("idle")).unwrap();
+        let mut manifest = minimal_pack_manifest();
+        manifest["sourceActions"][0]["frameCount"] = serde_json::Value::from(2);
+        fs::write(
+            source.join("pet.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(source.join("idle/000.png"), []).unwrap();
+
+        let error = import_pet_pack(&source, &library).expect_err("frame mismatch rejects pack");
+        assert!(error
+            .to_string()
+            .contains("frameCountMismatch:sourceAction:idle:2:1"));
+        assert!(!library.join("demo").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_animation_and_audio_paths_outside_the_pack() {
+        let root = temp_dir("focus-pet-pack-path-traversal");
+        let source = root.join("source");
+        let library = root.join("library");
+        fs::create_dir_all(source.join("idle")).unwrap();
+        fs::write(source.join("idle/000.png"), []).unwrap();
+        let mut manifest = minimal_pack_manifest();
+        manifest["sourceActions"][0]["folder"] = serde_json::Value::from("../outside");
+        manifest["sourceActions"][0]["audio"] = serde_json::Value::from("../secret.wav");
+        fs::write(
+            source.join("pet.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let error = import_pet_pack(&source, &library).expect_err("unsafe paths reject pack");
+        let message = error.to_string();
+        assert!(message.contains("unsafeAnimationFolder:idle"));
+        assert!(message.contains("unsafeAudioPath:idle"));
+        assert!(!library.join("demo").exists());
         let _ = fs::remove_dir_all(root);
     }
 

@@ -26,7 +26,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { categoryLabels } from "../core/labels";
-import { formatDate } from "../core/formatters";
+import { formatDate, formatDuration } from "../core/formatters";
 import { judgmentPresetSettings, matchingJudgmentPreset, type JudgmentSensitivityPreset } from "../core/settings";
 import { CommandButton } from "./common";
 import { SegmentedControl, Stepper, TogglePill } from "./ui";
@@ -107,6 +107,15 @@ const formatBytes = (bytes: number): string => {
   if (safe >= 1024 * 1024) return `${(safe / 1024 / 1024).toFixed(1)} MB`;
   if (safe >= 1024) return `${(safe / 1024).toFixed(1)} KB`;
   return `${Math.round(safe)} B`;
+};
+
+const sampleQualityTitle = (quality?: string): string => {
+  if (!quality) return "等待采样";
+  if (quality === "screen-locked") return "锁屏隔离";
+  if (quality.includes("low-level-input-hooks")) return "Win32 原生钩子";
+  if (quality.includes("fallback")) return "空闲状态回退";
+  if (quality === "browser-preview") return "浏览器预览";
+  return quality;
 };
 
 const SettingsSegmentedControl = <T extends string | number,>({
@@ -240,6 +249,10 @@ const RecognitionSettings = () => {
             <ShieldCheck size={13} />
             输入监控 {diagnostic.inputMonitoringStatus}
           </span>
+          <span className={diagnostic.sampleQuality?.includes("fallback") ? "warn" : "ok"}>
+            <Monitor size={13} />
+            采样链路 {sampleQualityTitle(diagnostic.sampleQuality)}
+          </span>
         </div>
         <div className="recognition-tile-grid">
           <div>
@@ -259,6 +272,22 @@ const RecognitionSettings = () => {
           <div>
             <small>用户例外</small>
             <strong>{diagnostic.userRuleCount} 条</strong>
+          </div>
+          <div>
+            <small>空闲时间</small>
+            <strong>{diagnostic.isScreenLocked ? "锁屏" : formatDuration(diagnostic.idleSeconds)}</strong>
+          </div>
+          <div>
+            <small>本轮键盘</small>
+            <strong>{diagnostic.keyboardCount} 次</strong>
+          </div>
+          <div>
+            <small>本轮鼠标</small>
+            <strong>{diagnostic.pointerCount} 次</strong>
+          </div>
+          <div>
+            <small>本轮切换</small>
+            <strong>{diagnostic.switchCount} 次</strong>
           </div>
         </div>
         {diagnostic.windowTitle ? <p className="recognition-window-title">{diagnostic.windowTitle}</p> : null}
@@ -637,6 +666,7 @@ const PermissionSettings = () => {
   const { bundle, actions } = useFocusPet();
   const snapshot = bundle.state.permissionSnapshot;
   const systemNotificationsEnabled = bundle.state.settings.reminder.enableSystemNotifications;
+  const isWindows = navigator.userAgent.includes("Windows");
   const [pendingAction, setPendingAction] = useState<string | undefined>(undefined);
   const runPermissionAction = async (key: string, action: () => Promise<void>) => {
     if (pendingAction) return;
@@ -651,20 +681,29 @@ const PermissionSettings = () => {
     {
       id: "inputMonitoring",
       title: "输入监控",
-      subtitle: "键盘与鼠标事件计数",
+      subtitle: isWindows ? "Windows 全局键盘与鼠标事件计数（无需额外授权）" : "键盘与鼠标事件计数",
       status: snapshot.inputMonitoring,
       Icon: Keyboard,
       destination: "inputMonitoring",
-      canRequest: true,
+      canRequest: !isWindows,
     },
     {
       id: "notifications",
       title: "通知",
-      subtitle: "系统提醒横幅 · 可在此开启或关闭 Focus Pet 通知",
+      subtitle: isWindows ? "系统提醒横幅（可能受 Windows 勿扰模式抑制）· 可在此开启或关闭 Focus Pet 通知" : "系统提醒横幅 · 可在此开启或关闭 Focus Pet 通知",
       status: snapshot.notifications,
       Icon: Bell,
       destination: "notifications",
       canRequest: true,
+    },
+    {
+      id: "privacySecurity",
+      title: isWindows ? "Windows 隐私设置" : "隐私与安全",
+      subtitle: isWindows ? "Windows 系统隐私管理入口" : "macOS 隐私面板",
+      status: "系统设置",
+      Icon: Lock,
+      destination: "privacySecurity",
+      canRequest: false,
     },
   ];
   return (
@@ -679,6 +718,8 @@ const PermissionSettings = () => {
         {permissionRows.map((item) => {
           const { Icon } = item;
           const allowed = item.status === "已允许";
+          const isNotifications = item.id === "notifications";
+          const statusLabel = isNotifications ? (systemNotificationsEnabled ? "应用已开启" : "应用已关闭") : item.status;
           return (
             <div className={`settings-list-row ${allowed ? "allowed" : ""}`} key={item.id}>
               <span className="settings-list-icon">
@@ -688,13 +729,24 @@ const PermissionSettings = () => {
                 <strong>{item.title}</strong>
                 <small>{item.subtitle}</small>
               </div>
-              <em className={`settings-status-badge status-${allowed ? "success" : "warning"}`}>{item.status}</em>
+              <em className={`settings-status-badge status-${isNotifications && systemNotificationsEnabled ? "success" : allowed ? "success" : "warning"}`}>{statusLabel}</em>
+              {isNotifications ? (
+                <TogglePillButton
+                  label="启用通知"
+                  Icon={Bell}
+                  checked={systemNotificationsEnabled}
+                  onChange={(checked) => actions.updateSettings((settings) => ({
+                    ...settings,
+                    reminder: { ...settings.reminder, enableSystemNotifications: checked },
+                  }))}
+                />
+              ) : null}
               {item.canRequest && !allowed ? (
                 <CommandButton loading={pendingAction === `request:${item.id}`} loadingLabel="请求中" disabled={Boolean(pendingAction)} onClick={() => void runPermissionAction(`request:${item.id}`, () => actions.requestSystemPermission(item.destination))}>
-                  <ShieldCheck size={15} /> 请求
+                  <ShieldCheck size={15} /> {isNotifications ? "请求授权" : "请求"}
                 </CommandButton>
               ) : null}
-              <CommandButton loading={pendingAction === `open:${item.id}`} loadingLabel="打开中" disabled={Boolean(pendingAction)} onClick={() => void runPermissionAction(`open:${item.id}`, () => actions.openSystemSettings(item.destination))}>打开</CommandButton>
+              <CommandButton loading={pendingAction === `open:${item.id}`} loadingLabel="打开中" disabled={Boolean(pendingAction)} onClick={() => void runPermissionAction(`open:${item.id}`, () => actions.openSystemSettings(item.destination))}>{isNotifications ? "系统设置" : "打开"}</CommandButton>
               {item.id === "notifications" ? (
                 <CommandButton loading={pendingAction === "test:notifications"} loadingLabel="发送中" disabled={Boolean(pendingAction)} onClick={() => void runPermissionAction("test:notifications", actions.sendTestNotification)}>测试</CommandButton>
               ) : null}
@@ -744,6 +796,14 @@ const PrivacyDataSettings = () => {
           <small>{recordingEnabled ? "本地记录中" : "记录已暂停"}</small>
         </div>
         <em>{formatBytes(bundle.state.dataSizeBytes)}</em>
+      </div>
+      <div className="settings-command-grid">
+        <CommandButton onClick={() => void actions.openDataFolder()}>
+          <FolderOpen size={15} /> 打开数据目录
+        </CommandButton>
+        <CommandButton onClick={() => void actions.copyDataPath()}>
+          <ShieldCheck size={15} /> 复制数据路径
+        </CommandButton>
       </div>
       <div className="settings-command-grid">
         <CommandButton loading={pendingAction === "export-redacted"} loadingLabel="导出中" disabled={Boolean(pendingAction)} onClick={() => void runDataAction("export-redacted", async () => setLastExportURL(await actions.exportData(true)))}>

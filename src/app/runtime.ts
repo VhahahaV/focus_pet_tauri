@@ -10,6 +10,7 @@ import type {
   NativeActivitySample,
   NudgeEvent,
   NudgeReason,
+  PermissionSnapshot,
   PetIntentKind,
   PetIntentSource,
 } from "../core/types";
@@ -116,9 +117,15 @@ export const runtimeFromSnapshot = (
       permissionSnapshot: mockPermissionSnapshot(),
       recognitionDiagnostic: {
         sampledAt: now.toISOString(),
+        sampleQuality: undefined,
         appName: currentSnapshot.appName,
         bundleID: currentSnapshot.bundleID,
         windowTitle: currentSnapshot.windowTitle,
+        idleSeconds: 0,
+        keyboardCount: 0,
+        pointerCount: 0,
+        switchCount: 0,
+        isScreenLocked: false,
         category: currentSnapshot.category,
         catalogEntryCount: catalogEntries.length,
         defaultRuleCount: new ActivityClassifier(normalized.classificationRules, catalogEntries).defaultRules.length,
@@ -142,6 +149,28 @@ export const inputMonitoringPermissionTitle = (status: string): string => {
   if (normalized === "检查中") return "检查中";
   return "待开启";
 };
+
+export const notificationPermissionTitle = (status: string): string => {
+  const normalized = status.trim().toLowerCase();
+  if (
+    normalized === "已允许" ||
+    normalized === "granted" ||
+    normalized.includes("available") ||
+    normalized.includes("delivered") ||
+    normalized.includes("sent")
+  ) return "已允许";
+  if (normalized === "browser-preview") return "预览环境";
+  if (normalized === "检查中") return "检查中";
+  return "待开启";
+};
+
+export const permissionSnapshotForDisplay = (snapshot: PermissionSnapshot): PermissionSnapshot => ({
+  ...snapshot,
+  inputMonitoring: snapshot.inputMonitoring === "browser-preview"
+    ? "预览环境"
+    : inputMonitoringPermissionTitle(snapshot.inputMonitoring),
+  notifications: notificationPermissionTitle(snapshot.notifications),
+});
 
 const applyStability = (
   decision: ReturnType<typeof evaluateState>,
@@ -387,9 +416,15 @@ export const advanceRuntime = (
   runtime.todayWorkload = inputWorkloadSummary(runtime.inputActivity, bounds.start, bounds.end);
   runtime.recognitionDiagnostic = {
     sampledAt: now.toISOString(),
+    sampleQuality: nativeSample.sampleQuality,
     appName: activitySnapshot.appName,
     bundleID: activitySnapshot.bundleID,
     windowTitle: activitySnapshot.windowTitle ?? activitySnapshot.titleDisplay,
+    idleSeconds: nativeSample.idleSeconds,
+    keyboardCount: nativeSample.keyboardCount,
+    pointerCount: nativeSample.pointerCount,
+    switchCount: nativeSample.switchCount,
+    isScreenLocked: nativeSample.isScreenLocked,
     category: activitySnapshot.category,
     catalogEntryCount: catalogEntries.length,
     defaultRuleCount: classifier.defaultRules.length,

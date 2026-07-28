@@ -9,13 +9,21 @@ import { buildDailySummary } from "../core/summary";
 import { defaultAppSettings, judgmentPresetSettings, matchingJudgmentPreset } from "../core/settings";
 import type { ActivitySnapshot, FocusStateSnapshot, StateDecision } from "../core/types";
 import { importedPetPackRecord, normalizePetPack, validatePetPack } from "../resources/petPack";
-import { advanceRuntime, emptyRuntime, inputMonitoringPermissionTitle, runtimeActions } from "../app/runtime";
+import {
+  advanceRuntime,
+  emptyRuntime,
+  inputMonitoringPermissionTitle,
+  notificationPermissionTitle,
+  permissionSnapshotForDisplay,
+  runtimeActions,
+} from "../app/runtime";
 import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
 import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWindows";
-import { cyclePlayableSourceAction, resolveDisplaySourceAction } from "../app/petCompanionLogic";
+import { cyclePlayableSourceAction, nextPetFrameIndex, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
-import { pruneSnapshotForRetention } from "../store/localStore";
 import { codexBubble, reduceCodexEvents } from "../core/codexSessions";
+import { activitySampleForRuntime } from "../app/activitySampling";
+import { emptySnapshot, maximumPointerActionsPerMinute, normalizeInputActivityBucket, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -37,11 +45,43 @@ const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapsh
 });
 
 describe("Focus Pet migrated core", () => {
+  it("never substitutes browser preview input for a failed native sample", () => {
+    const now = new Date("2026-07-18T10:00:00.000Z");
+    expect(activitySampleForRuntime(undefined, true, now)).toBeUndefined();
+    expect(activitySampleForRuntime(undefined, false, now)?.inputMonitoringStatus).toBe("browser-preview");
+
+    const nativeSample = activitySampleForRuntime(undefined, false, now)!;
+    expect(activitySampleForRuntime(nativeSample, true, now)).toBe(nativeSample);
+  });
+
+  it("advances looping and one-shot pet animations without overrunning frames", () => {
+    expect(nextPetFrameIndex(0, 3, true, true)).toBe(1);
+    expect(nextPetFrameIndex(2, 3, true, true)).toBe(0);
+    expect(nextPetFrameIndex(2, 3, true, false)).toBe(2);
+    expect(nextPetFrameIndex(1, 3, false, true)).toBe(1);
+    expect(nextPetFrameIndex(99, 3, true, false)).toBe(2);
+    expect(nextPetFrameIndex(0, 0, true, true)).toBe(0);
+  });
+
   it("normalizes native input monitoring states to Swift permission titles", () => {
     expect(inputMonitoringPermissionTitle("available")).toBe("已允许");
     expect(inputMonitoringPermissionTitle("frontmost-app-window-cg-event-tap · available")).toBe("已允许");
     expect(inputMonitoringPermissionTitle("needs-input-monitoring-permission")).toBe("待开启");
     expect(inputMonitoringPermissionTitle("检查中")).toBe("检查中");
+  });
+
+  it("normalizes Windows native permission adapter details for display", () => {
+    expect(notificationPermissionTitle("windows-notification-runtime-available")).toBe("已允许");
+    expect(notificationPermissionTitle("denied")).toBe("待开启");
+    expect(permissionSnapshotForDisplay({
+      refreshedAt: "2026-07-18T00:00:00.000Z",
+      inputMonitoring: "windows-low-level-hooks-available",
+      notifications: "windows-notification-runtime-available",
+    })).toEqual({
+      refreshedAt: "2026-07-18T00:00:00.000Z",
+      inputMonitoring: "已允许",
+      notifications: "已允许",
+    });
   });
 
   it("classifies work and entertainment with user rules taking priority", () => {
@@ -364,6 +404,14 @@ describe("Focus Pet migrated core", () => {
     expect(advanced.state.stateSegments).not.toBe(previousArrays.stateSegments);
     expect(advanced.state.appUsage).not.toBe(previousArrays.appUsage);
     expect(advanced.state.inputActivity).not.toBe(previousArrays.inputActivity);
+    expect(advanced.state.recognitionDiagnostic).toMatchObject({
+      sampleQuality: "test",
+      idleSeconds: 0,
+      keyboardCount: 2,
+      pointerCount: 1,
+      switchCount: 0,
+      isScreenLocked: false,
+    });
   });
 
   it("backfills long sampling gaps as system sleep time", () => {
@@ -550,7 +598,10 @@ describe("Focus Pet migrated core", () => {
       expect(next).toBeDefined();
       return next!;
     };
+    expect(nativeMenuTab("open-today")).toBe("today");
+    expect(nativeMenuTab("open-pet")).toBe("pet");
     expect(nativeMenuTab("open-settings")).toBe("settings");
+    expect(nativeMenuTab("toggle-pet")).toBeUndefined();
 
     const widgetsShown = applyRequiredMenuAction("toggle-widgets");
     expect(widgetsShown.settings.desktopWidget.currentStatusVisible).toBe(true);
@@ -566,6 +617,25 @@ describe("Focus Pet migrated core", () => {
     const remindersPaused = applyRequiredMenuAction("pause-reminders");
     expect(remindersPaused.settings.reminder.pauseUntil).toBeTruthy();
 
+    const remindersResumed = applyRequiredMenuAction("resume-reminders", remindersPaused);
+    expect(remindersResumed.settings.reminder.pauseUntil).toBeUndefined();
+
+    const focusing = runtimeActions.startFocusSession(runtime, "Tray action", 25);
+    const focusFinished = applyRequiredMenuAction("finish-focus", focusing);
+    expect(focusFinished.focusSessions.at(-1)?.status).toBe("completed");
+  });
+
+  it("clamps historical pointer-motion storms to a usable interaction count", () => {
+    expect(normalizeInputActivityBucket({
+      start: "2026-07-07T10:00:00.000Z",
+      end: "2026-07-07T10:01:00.000Z",
+      pointerCount: 90_000,
+    }).pointerCount).toBe(0);
+    expect(normalizeInputActivityBucket({
+      start: "2026-07-07T10:00:00.000Z",
+      end: "2026-07-07T10:01:00.000Z",
+      pointerCount: maximumPointerActionsPerMinute - 1,
+    }).pointerCount).toBe(maximumPointerActionsPerMinute - 1);
   });
 
   it("persists desktop widget window positions for later native sync", () => {
@@ -579,24 +649,27 @@ describe("Focus Pet migrated core", () => {
     const withRhythmOrigin = applyDesktopWidgetMoved(withStatusOrigin, "recentRhythm", { x: 460, y: 96 });
     expect(withRhythmOrigin.settings.desktopWidget.recentRhythmOrigin).toEqual({ x: 460, y: 96 });
 
+    const onLeftMonitor = applyDesktopWidgetMoved(withRhythmOrigin, "currentStatus", { x: -1200, y: 80 });
+    expect(onLeftMonitor.settings.desktopWidget.currentStatusOrigin).toEqual({ x: -1200, y: 80 });
+
     const syncState = widgetWindowSyncState({
-      ...withRhythmOrigin,
+      ...onLeftMonitor,
       settings: {
-        ...withRhythmOrigin.settings,
+        ...onLeftMonitor.settings,
         desktopWidget: {
-          ...withRhythmOrigin.settings.desktopWidget,
+          ...onLeftMonitor.settings.desktopWidget,
           currentStatusVisible: true,
           recentRhythmVisible: true,
         },
         pet: {
-          ...withRhythmOrigin.settings.pet,
+          ...onLeftMonitor.settings.pet,
           placement: "custom",
           customOriginX: 300,
           customOriginY: 200,
         },
       },
     });
-    expect(syncState.currentStatusOrigin).toEqual({ x: 120, y: 80 });
+    expect(syncState.currentStatusOrigin).toEqual({ x: -1200, y: 80 });
     expect(syncState.recentRhythmOrigin).toEqual({ x: 460, y: 96 });
     expect(syncState.movementMode).toBe("free");
     expect(syncState.petPlacement).toBe("custom");
@@ -774,6 +847,64 @@ describe("Focus Pet migrated core", () => {
     expect(pruned.snapshot.inputActivity[0].keyboardCount).toBe(2);
     expect(pruned.snapshot.focusSessions.map((session) => session.taskName)).toEqual(["recent"]);
     expect(pruned.snapshot.nudges.map((nudge) => nudge.id)).toEqual(["recent-nudge"]);
+  });
+
+  it("removes private app and task metadata before a redacted native export", () => {
+    const start = "2026-07-18T09:00:00.000Z";
+    const end = "2026-07-18T09:10:00.000Z";
+    const session = {
+      ...finishFocusSession(makeFocusSession("Secret project", 25, new Date(start)), "completed", new Date(end)),
+      mainAppName: "Secret Editor",
+    };
+    const redacted = redactedSnapshot({
+      ...emptySnapshot(),
+      classificationRules: [
+        { id: "secret-rule", matchKind: "windowTitle", pattern: "Secret project", category: "work", priority: 0 },
+      ],
+      stateSegments: [
+        {
+          id: "secret-state",
+          start,
+          end,
+          state: "focus",
+          appName: "Secret Editor",
+          bundleID: "com.example.secret",
+          category: "work",
+          titleStored: true,
+          titleDisplay: "Secret project - Draft",
+          source: ["frontmostApplication"],
+        },
+      ],
+      appUsage: [
+        { id: "secret-usage", start, end, appName: "Secret Editor", bundleID: "com.example.secret", category: "work" },
+      ],
+      focusSessions: [session],
+      nudges: [
+        {
+          id: "secret-nudge",
+          time: end,
+          reason: "distractedOverThreshold",
+          state: "distracted",
+          appName: "Secret Game",
+          category: "entertainment",
+          petIntent: "nudgeGentle",
+          channel: "desktop",
+          cooldownSeconds: 600,
+          message: "return to focus",
+        },
+      ],
+    });
+
+    expect(redacted.classificationRules).toEqual([]);
+    expect(redacted.stateSegments[0]).toMatchObject({
+      appName: "工作工具",
+      titleStored: false,
+      bundleID: undefined,
+      titleDisplay: undefined,
+    });
+    expect(redacted.appUsage[0]).toMatchObject({ appName: "工作工具", bundleID: undefined });
+    expect(redacted.focusSessions[0]).toMatchObject({ taskName: "专注任务", mainAppName: undefined });
+    expect(redacted.nudges[0].appName).toBe("容易分心");
   });
 
   it("builds a compact desktop pet payload without persisted history", () => {

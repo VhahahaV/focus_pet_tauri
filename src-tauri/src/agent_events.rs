@@ -109,7 +109,18 @@ pub fn ingest_payload(
 }
 
 pub fn drain_events() -> Result<Vec<AgentCompletionEvent>, String> {
-    let root = app_data_root();
+    let mut events = drain_events_from_root(&app_data_root())?;
+    #[cfg(target_os = "windows")]
+    if let Some(legacy_root) = legacy_windows_app_data_root() {
+        if legacy_root != app_data_root() {
+            events.extend(drain_events_from_root(&legacy_root)?);
+        }
+    }
+    events.sort_by(|left, right| left.occurred_at.cmp(&right.occurred_at));
+    Ok(events)
+}
+
+fn drain_events_from_root(root: &PathBuf) -> Result<Vec<AgentCompletionEvent>, String> {
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let inbox = root.join(INBOX_FILE);
     if !inbox.exists() {
@@ -213,10 +224,8 @@ fn app_data_root() -> PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        return env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or(home)
-            .join("Focus Pet");
+        return crate::store::windows_focus_pet_data_root()
+            .unwrap_or_else(|| home.join("AppData/Local/Focus Pet Data"));
     }
     #[cfg(target_os = "linux")]
     {
@@ -225,6 +234,13 @@ fn app_data_root() -> PathBuf {
             .unwrap_or_else(|| home.join(".local/share"))
             .join("Focus Pet");
     }
+}
+
+#[cfg(target_os = "windows")]
+fn legacy_windows_app_data_root() -> Option<PathBuf> {
+    env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|root| root.join("Focus Pet"))
 }
 
 #[cfg(test)]
@@ -242,5 +258,19 @@ mod tests {
         assert_eq!(detect_provider(None, &claude), "claude");
         assert_eq!(detect_status(&claude), "failed");
         assert_eq!(compact_text("a  b\n c", 16), "a b c");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_agent_inbox_uses_the_stable_local_data_root() {
+        let root = super::app_data_root();
+        assert!(root.ends_with("Focus Pet Data"));
+        assert_eq!(
+            super::inbox_path(),
+            root.join(super::INBOX_FILE).to_string_lossy().to_string()
+        );
+        if let Some(legacy) = super::legacy_windows_app_data_root() {
+            assert_ne!(root, legacy);
+        }
     }
 }

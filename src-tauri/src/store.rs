@@ -11,10 +11,24 @@ use walkdir::WalkDir;
 const SCHEMA_VERSION: &str = "focuspet-mvp-1";
 const COMPATIBLE_SCHEMA_VERSIONS: &[&str] = &["focuspet-tauri-1"];
 const APP_SUPPORT_FOLDER: &str = "Focus Pet";
+#[cfg(target_os = "windows")]
+const WINDOWS_APP_SUPPORT_FOLDER: &str = "Focus Pet Data";
 const LEGACY_APP_SUPPORT_FOLDERS: &[&str] = &["FocusPetMVP", "FocusPetV0", "FocusPetLegacy"];
+const ACTIVITY_DATA_FILES: &[&str] = &[
+    "state-segments.json",
+    "app-usage.json",
+    "input-activity.json",
+    "focus-sessions.json",
+    "nudges.json",
+];
 
 pub struct FocusPetStore {
     root: PathBuf,
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_focus_pet_data_root() -> Option<PathBuf> {
+    windows_local_app_data_dir().map(|directory| directory.join(WINDOWS_APP_SUPPORT_FOLDER))
 }
 
 impl FocusPetStore {
@@ -23,6 +37,34 @@ impl FocusPetStore {
             .path()
             .app_data_dir()
             .unwrap_or_else(|_| fallback_data_dir());
+        #[cfg(target_os = "windows")]
+        let root = {
+            let tauri_local_root = app
+                .path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| fallback_data_dir());
+            let stable_local_data = windows_local_app_data_dir();
+            let root = stable_local_data
+                .as_ref()
+                .map(|directory| directory.join(WINDOWS_APP_SUPPORT_FOLDER))
+                .unwrap_or_else(|| tauri_local_root.clone());
+            // NSIS current-user installs use `%LOCALAPPDATA%\Focus Pet` as the
+            // application directory. Keep user data outside that tree so an
+            // uninstall cannot remove history or imported pet packs. Older
+            // builds stored data there, so copy only known data entries and
+            // never migrate the executable/uninstaller alongside them.
+            if let Some(directory) = stable_local_data {
+                migrate_store_contents_if_needed(&directory.join(APP_SUPPORT_FOLDER), &root)?;
+            }
+            let legacy_root = app_data_dir
+                .parent()
+                .map(|parent| parent.join(APP_SUPPORT_FOLDER))
+                .unwrap_or_else(|| app_data_dir.clone());
+            migrate_store_root_if_needed(&legacy_root, &root)?;
+            migrate_store_root_if_needed(&tauri_local_root, &root)?;
+            root
+        };
+        #[cfg(not(target_os = "windows"))]
         let root = app_data_dir
             .parent()
             .map(|parent| parent.join(APP_SUPPORT_FOLDER))
@@ -41,6 +83,10 @@ impl FocusPetStore {
         self.root.join("Logs")
     }
 
+    pub fn root_dir(&self) -> &Path {
+        &self.root
+    }
+
     pub fn current_log_file(&self) -> io::Result<PathBuf> {
         self.prepare_store_for_access(true)?;
         let path = self
@@ -48,6 +94,18 @@ impl FocusPetStore {
             .join(format!("focus-pet-{}.log", Utc::now().format("%Y-%m-%d")));
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         writeln!(file, "[{}] log file prepared", Utc::now().to_rfc3339())?;
+        Ok(path)
+    }
+
+    pub fn append_log_entry(&self, entry: &Value) -> io::Result<PathBuf> {
+        self.prepare_store_for_access(true)?;
+        let path = self
+            .logs_dir()
+            .join(format!("focus-pet-{}.log", Utc::now().format("%Y-%m-%d")));
+        let serialized = serde_json::to_string(entry).map_err(io::Error::other)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        writeln!(file, "{serialized}")?;
+        file.flush()?;
         Ok(path)
     }
 
@@ -109,16 +167,24 @@ impl FocusPetStore {
         let path = self
             .root
             .join(format!("{}-{}.json", prefix, Utc::now().timestamp()));
-        let bytes = serde_json::to_vec_pretty(snapshot).map_err(io::Error::other)?;
+        let mut exported = snapshot.clone();
+        if redacted {
+            redact_snapshot(&mut exported);
+        }
+        let bytes = serde_json::to_vec_pretty(&exported).map_err(io::Error::other)?;
         fs::write(&path, bytes)?;
         Ok(path)
     }
 
     pub fn delete_all(&self) -> io::Result<()> {
-        if self.root.exists() {
-            fs::remove_dir_all(&self.root)?;
+        self.prepare_store_for_access(true)?;
+        for file_name in ACTIVITY_DATA_FILES {
+            match fs::remove_file(self.root.join(file_name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
-        self.ensure_root()?;
         self.write_metadata()
     }
 
@@ -388,9 +454,44 @@ impl FocusPetStore {
             return Ok(());
         }
         fs::write(&temporary, &bytes)?;
-        fs::rename(temporary, path)?;
+        replace_file(&temporary, &path)?;
         Ok(())
     }
+}
+
+fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+
+        let source_wide = source
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let destination_wide = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let replaced = unsafe {
+            MoveFileExW(
+                source_wide.as_ptr(),
+                destination_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if replaced == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fs::rename(source, destination)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -412,10 +513,10 @@ fn fallback_data_dir() -> PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        return std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or(home)
-            .join("Focus Pet");
+        return windows_local_app_data_dir()
+            .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+            .unwrap_or_else(|| home.join("AppData/Local"))
+            .join(WINDOWS_APP_SUPPORT_FOLDER);
     }
     #[cfg(target_os = "linux")]
     {
@@ -424,6 +525,207 @@ fn fallback_data_dir() -> PathBuf {
             .unwrap_or_else(|| home.join(".local/share"))
             .join("Focus Pet");
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_local_app_data_dir() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::{
+        System::Com::CoTaskMemFree,
+        UI::Shell::{FOLDERID_LocalAppData, FOLDERID_Profile, SHGetKnownFolderPath},
+    };
+
+    fn known_folder(id: &GUID) -> Option<PathBuf> {
+        let mut raw_path = std::ptr::null_mut();
+        let result = unsafe { SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut raw_path) };
+        if result < 0 || raw_path.is_null() {
+            return None;
+        }
+        let mut length = 0usize;
+        while unsafe { *raw_path.add(length) } != 0 {
+            length += 1;
+        }
+        let path = PathBuf::from(std::ffi::OsString::from_wide(unsafe {
+            std::slice::from_raw_parts(raw_path, length)
+        }));
+        unsafe { CoTaskMemFree(raw_path.cast()) };
+        Some(path)
+    }
+
+    // FOLDERID_LocalAppData is package-virtualized when a normal executable is
+    // launched by an MSIX parent (for example Codex Computer Use). The profile
+    // folder is stable across launchers, so derive the conventional local data
+    // root from it before falling back to the virtualizable known folder.
+    windows_user_profile_dir()
+        .map(|profile| profile.join("AppData/Local"))
+        .or_else(|| {
+            known_folder(&FOLDERID_Profile)
+                .map(|profile| profile.join("AppData/Local"))
+                .or_else(|| known_folder(&FOLDERID_LocalAppData))
+        })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_user_profile_dir() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        Security::TOKEN_QUERY,
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+        UI::Shell::GetUserProfileDirectoryW,
+    };
+
+    let mut token: HANDLE = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return None;
+    }
+    let result = (|| {
+        let mut size = 0u32;
+        unsafe { GetUserProfileDirectoryW(token, std::ptr::null_mut(), &mut size) };
+        if size == 0 {
+            return None;
+        }
+        let mut buffer = vec![0u16; size as usize];
+        if unsafe { GetUserProfileDirectoryW(token, buffer.as_mut_ptr(), &mut size) } == 0 {
+            return None;
+        }
+        let length = buffer
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(buffer.len());
+        Some(PathBuf::from(std::ffi::OsString::from_wide(
+            &buffer[..length],
+        )))
+    })();
+    unsafe { CloseHandle(token) };
+    result
+}
+
+fn migrate_store_root_if_needed(source: &Path, destination: &Path) -> io::Result<bool> {
+    if source == destination
+        || destination.join("schema.json").exists()
+        || destination
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false)
+        || !source.join("schema.json").is_file()
+    {
+        return Ok(false);
+    }
+    if destination.exists() {
+        fs::remove_dir_all(destination)?;
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if fs::rename(source, destination).is_err() {
+        copy_dir_all(source, destination)?;
+    }
+    Ok(destination.join("schema.json").is_file())
+}
+
+fn redacted_app_name(category: Option<&str>) -> &'static str {
+    match category {
+        Some("work") => "工作工具",
+        Some("entertainment") => "容易分心",
+        Some("ignore") => "不参与判断",
+        _ => "旧数据",
+    }
+}
+
+fn redact_snapshot(snapshot: &mut Value) {
+    let Some(root) = snapshot.as_object_mut() else {
+        return;
+    };
+    if let Some(privacy) = root
+        .get_mut("settings")
+        .and_then(Value::as_object_mut)
+        .and_then(|settings| settings.get_mut("privacy"))
+        .and_then(Value::as_object_mut)
+    {
+        privacy.insert("storeRawTitle".to_string(), json!(false));
+        privacy.insert("storeOnlyCategoryResult".to_string(), json!(true));
+    }
+    root.insert("classificationRules".to_string(), json!([]));
+    for (key, strip_title) in [("stateSegments", true), ("appUsage", false)] {
+        if let Some(items) = root.get_mut(key).and_then(Value::as_array_mut) {
+            for item in items {
+                if let Some(object) = item.as_object_mut() {
+                    let category = object
+                        .get("category")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    object.insert(
+                        "appName".to_string(),
+                        json!(redacted_app_name(category.as_deref())),
+                    );
+                    object.remove("bundleID");
+                    if strip_title {
+                        object.insert("titleStored".to_string(), json!(false));
+                        object.remove("titleDisplay");
+                    }
+                }
+            }
+        }
+    }
+    if let Some(items) = root.get_mut("focusSessions").and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("taskName".to_string(), json!("专注任务"));
+                object.remove("mainAppName");
+            }
+        }
+    }
+    if let Some(items) = root.get_mut("nudges").and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                let category = object
+                    .get("category")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                object.insert(
+                    "appName".to_string(),
+                    json!(redacted_app_name(category.as_deref())),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn migrate_store_contents_if_needed(source: &Path, destination: &Path) -> io::Result<bool> {
+    if source == destination
+        || destination.join("schema.json").exists()
+        || destination
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false)
+        || !source.join("schema.json").is_file()
+    {
+        return Ok(false);
+    }
+    fs::create_dir_all(destination)?;
+    for name in [
+        "schema.json",
+        "settings.json",
+        "classification-rules.json",
+        "state-segments.json",
+        "app-usage.json",
+        "input-activity.json",
+        "focus-sessions.json",
+        "nudges.json",
+        "PetPacks",
+        "Logs",
+    ] {
+        let source_entry = source.join(name);
+        if source_entry.is_dir() {
+            copy_dir_all(&source_entry, &destination.join(name))?;
+        } else if source_entry.is_file() {
+            fs::copy(&source_entry, destination.join(name))?;
+        }
+    }
+    Ok(destination.join("schema.json").is_file())
 }
 
 fn legacy_roots(parent: &Path, root: &Path) -> Vec<PathBuf> {
@@ -474,7 +776,7 @@ fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FocusPetStore, MetadataState, SCHEMA_VERSION};
+    use super::{migrate_store_root_if_needed, FocusPetStore, MetadataState, SCHEMA_VERSION};
     use serde_json::json;
     use std::fs;
 
@@ -514,6 +816,65 @@ mod tests {
     }
 
     #[test]
+    fn store_atomically_replaces_existing_snapshot_files() {
+        let root = temp_store_root("replace-existing-snapshot");
+        let store = FocusPetStore::from_root(root.clone());
+        store
+            .save_snapshot(&json!({ "settings": { "focusTargetMinutes": 25 } }))
+            .unwrap();
+        store
+            .save_snapshot(&json!({ "settings": { "focusTargetMinutes": 50 } }))
+            .unwrap();
+
+        let snapshot = store.load_snapshot().unwrap();
+        assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
+        assert!(!root.join("settings.json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_all_clears_activity_without_removing_settings_or_pet_packs() {
+        let root = temp_store_root("delete-activity-only");
+        let store = FocusPetStore::from_root(root.clone());
+        store
+            .save_snapshot(&json!({
+                "settings": { "focusTargetMinutes": 50 },
+                "classificationRules": [{ "pattern": "Editor" }],
+                "stateSegments": [{ "state": "focus" }],
+                "appUsage": [{ "appName": "Editor" }],
+                "inputActivity": [{ "keyboardCount": 3 }],
+                "focusSessions": [{ "taskName": "Write tests" }],
+                "nudges": [{ "reason": "distracted" }]
+            }))
+            .unwrap();
+        fs::create_dir_all(root.join("PetPacks/demo")).unwrap();
+        fs::write(root.join("PetPacks/demo/pet.json"), "{}").unwrap();
+        fs::create_dir_all(root.join("Logs")).unwrap();
+        fs::write(root.join("Logs/focus-pet.log"), "diagnostic").unwrap();
+        fs::write(root.join("focus-pet-export-1.json"), "{}").unwrap();
+
+        store.delete_all().unwrap();
+
+        let snapshot = store.load_snapshot().unwrap();
+        assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
+        assert_eq!(snapshot["classificationRules"][0]["pattern"], "Editor");
+        for key in [
+            "stateSegments",
+            "appUsage",
+            "inputActivity",
+            "focusSessions",
+            "nudges",
+        ] {
+            assert_eq!(snapshot[key], json!([]), "{key} was not cleared");
+        }
+        assert!(root.join("PetPacks/demo/pet.json").is_file());
+        assert!(root.join("Logs/focus-pet.log").is_file());
+        assert!(root.join("focus-pet-export-1.json").is_file());
+        assert!(root.join("schema.json").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn store_migrates_legacy_root_when_current_root_is_empty() {
         let parent = temp_store_root("legacy-parent");
         let root = parent.join("Focus Pet");
@@ -531,6 +892,111 @@ mod tests {
         assert!(root.join("settings.json").exists());
         assert!(!legacy.exists());
         let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn windows_store_location_migration_preserves_existing_data() {
+        let parent = temp_store_root("windows-location-migration");
+        let legacy = parent.join("Roaming/Focus Pet");
+        let destination = parent.join("Local/com.focuspet.FocusPet");
+        fs::create_dir_all(legacy.join("PetPacks/demo")).unwrap();
+        fs::write(
+            legacy.join("schema.json"),
+            format!(r#"{{"schemaVersion":"{}"}}"#, SCHEMA_VERSION),
+        )
+        .unwrap();
+        fs::write(legacy.join("PetPacks/demo/pet.json"), "{}").unwrap();
+
+        assert!(migrate_store_root_if_needed(&legacy, &destination).unwrap());
+        assert!(destination.join("schema.json").is_file());
+        assert!(destination.join("PetPacks/demo/pet.json").is_file());
+        assert!(!migrate_store_root_if_needed(&legacy, &destination).unwrap());
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_install_directory_migration_copies_only_user_data() {
+        let parent = temp_store_root("windows-install-dir-migration");
+        let old_install_dir = parent.join("Focus Pet");
+        let destination = parent.join("Focus Pet Data");
+        fs::create_dir_all(old_install_dir.join("PetPacks/demo")).unwrap();
+        fs::write(
+            old_install_dir.join("schema.json"),
+            format!(r#"{{"schemaVersion":"{}"}}"#, SCHEMA_VERSION),
+        )
+        .unwrap();
+        fs::write(old_install_dir.join("PetPacks/demo/pet.json"), "{}").unwrap();
+        fs::write(old_install_dir.join("focus-pet.exe"), "application").unwrap();
+        fs::write(old_install_dir.join("uninstall.exe"), "uninstaller").unwrap();
+
+        assert!(super::migrate_store_contents_if_needed(&old_install_dir, &destination).unwrap());
+        assert!(destination.join("schema.json").is_file());
+        assert!(destination.join("PetPacks/demo/pet.json").is_file());
+        assert!(!destination.join("focus-pet.exe").exists());
+        assert!(!destination.join("uninstall.exe").exists());
+        assert!(old_install_dir.join("schema.json").is_file());
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn diagnostic_log_entries_are_persisted_as_json_lines() {
+        let root = temp_store_root("diagnostic-log-entry");
+        let store = FocusPetStore::from_root(root.clone());
+        let path = store
+            .append_log_entry(&json!({
+                "time": "2026-07-18T09:00:00Z",
+                "state": "focus",
+                "app": "Editor"
+            }))
+            .unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(contents.contains(r#""state":"focus""#));
+        assert!(contents.ends_with('\n'));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn redacted_native_exports_strip_private_fields() {
+        let root = temp_store_root("redacted-native-export");
+        let store = FocusPetStore::from_root(root.clone());
+        let path = store
+            .export_snapshot(
+                &json!({
+                    "settings": { "privacy": { "storeRawTitle": true, "storeOnlyCategoryResult": false } },
+                    "classificationRules": [{ "pattern": "Secret" }],
+                    "stateSegments": [{
+                        "appName": "Secret Editor",
+                        "bundleID": "com.example.secret",
+                        "category": "work",
+                        "titleStored": true,
+                        "titleDisplay": "Secret project"
+                    }],
+                    "appUsage": [{ "appName": "Secret Editor", "bundleID": "com.example.secret", "category": "work" }],
+                    "focusSessions": [{ "taskName": "Secret project", "mainAppName": "Secret Editor" }],
+                    "nudges": [{ "appName": "Secret Game", "category": "entertainment" }]
+                }),
+                true,
+            )
+            .unwrap();
+        let exported: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(exported["classificationRules"], json!([]));
+        assert_eq!(exported["stateSegments"][0]["appName"], json!("工作工具"));
+        assert!(exported["stateSegments"][0].get("bundleID").is_none());
+        assert!(exported["stateSegments"][0].get("titleDisplay").is_none());
+        assert_eq!(exported["focusSessions"][0]["taskName"], json!("专注任务"));
+        assert!(exported["focusSessions"][0].get("mainAppName").is_none());
+        assert_eq!(exported["nudges"][0]["appName"], json!("容易分心"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_user_profile_is_stable_outside_package_local_cache() {
+        let profile = super::windows_user_profile_dir().expect("Windows user profile resolves");
+        assert!(profile.is_dir());
+        assert!(!profile.to_string_lossy().contains("LocalCache"));
+        assert!(!profile.to_string_lossy().contains("\\Packages\\"));
     }
 
     #[test]

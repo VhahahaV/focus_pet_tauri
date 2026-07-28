@@ -41,11 +41,11 @@ macOS:
 
 Windows:
 
-- `sample_activity` reads foreground window title/process through Win32/PowerShell.
+- `sample_activity` reads foreground window title/process, idle time, global input counters, and screen-lock state through direct Win32 APIs.
 - VBScript is enabled when building MSI packages because `bundle.targets` is `all`.
 - Privacy and notification settings open through `ms-settings:...`.
 - Test notification appears through BurntToast or tray balloon fallback.
-- Windows Forms picker imports folder, `pet.json`, single zip, and collection zip.
+- Tauri native dialogs import a folder, `pet.json`, single zip, and collection zip.
 - Taskbar-near companion placement uses the active monitor work area.
 
 Linux:
@@ -58,4 +58,4 @@ Linux:
 
 ## Current Workspace Status
 
-macOS automated checks and release bundle smoke have been run in this workspace. Windows and Linux must be validated on their own target OS or through the included GitHub Actions matrix, then followed by the visible desktop smoke items above before the migration can be called fully target-verified.
+macOS automated checks and release bundle smoke have been run in the original workspace. Windows direct adapter tests, release build, canonical data directory, and a XiaoDaiLocal import smoke have been run on a real Windows x86_64 machine; the remaining visible Windows and installer items are tracked in `docs/windows-compatibility-handoff-2026-07-18.md`. Linux still needs its own target OS or CI coverage followed by visible desktop smoke before the migration can be called fully target-verified.

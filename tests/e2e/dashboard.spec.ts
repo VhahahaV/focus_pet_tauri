@@ -279,7 +279,14 @@ test("desktop widget views render without the main runtime shell", async ({ page
   await expect(page.getByText("当前状态")).toBeVisible();
   await expect(page.getByText("专注", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "打开桌宠面板" })).toContainText("面板");
-  await expect(page.getByRole("button", { name: "桌宠切换动作" })).toContainText("动作");
+  const cyclePetAction = page.getByRole("button", { name: "桌宠切换动作" });
+  await expect(cyclePetAction).toContainText("动作");
+  await cyclePetAction.click();
+  await expect(page.getByText("已换 睡觉")).toBeVisible();
+  await cyclePetAction.click();
+  await expect(page.getByText("已换 轻提醒")).toBeVisible();
+  await cyclePetAction.click();
+  await expect(page.getByText("已换 待机")).toBeVisible();
   await expect(page.getByRole("button", { name: "打开桌宠设置" })).toContainText("设置");
   const hoverPanelStyle = await page.locator(".pet-hover-panel").evaluate((panel) => {
     const style = getComputedStyle(panel);
@@ -348,11 +355,15 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.locator(".settings-number-control")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /刷新诊断/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /清空例外/ })).toBeVisible();
+  await expect(page.getByText(/采样链路/)).toBeVisible();
+  for (const signal of ["空闲时间", "本轮键盘", "本轮鼠标", "本轮切换"]) {
+    await expect(page.getByText(signal, { exact: true })).toBeVisible();
+  }
 
   await expect(page.getByText("刷新于")).toBeVisible();
   await expect(page.getByRole("button", { name: "请求" }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "测试", exact: true })).toBeVisible();
-  await expect(page.getByText("隐私与安全")).toBeVisible();
+  await expect(page.getByText(/^(隐私与安全|Windows 隐私设置)$/)).toBeVisible();
 
   await expect(page.getByText("本机数据")).toBeVisible();
   await expect(page.getByText("启用日志")).toBeVisible();

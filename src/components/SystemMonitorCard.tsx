@@ -95,8 +95,8 @@ const MetricModule = ({ module, sample }: { module: SystemMonitorModule; sample:
     case "gpu":
       return (
         <article className="system-monitor-module module-gpu">
-          <header><Gauge size={15} /><span>GPU</span><strong>{sample.gpuUsage === undefined ? "—" : `${Math.round(sample.gpuUsage)}%`}</strong></header>
-          {sample.gpuUsage === undefined ? null : <UsageMeter value={sample.gpuUsage} label={`GPU 使用率 ${Math.round(sample.gpuUsage)}%`} />}
+          <header><Gauge size={15} /><span>GPU</span><strong>{sample.gpuUsage == null ? "—" : `${Math.round(sample.gpuUsage)}%`}</strong></header>
+          {sample.gpuUsage == null ? null : <UsageMeter value={sample.gpuUsage} label={`GPU 使用率 ${Math.round(sample.gpuUsage)}%`} />}
           <small>{sample.gpuName ?? "当前设备未提供 GPU 利用率"}</small>
         </article>
       );
