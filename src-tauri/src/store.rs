@@ -313,7 +313,8 @@ impl FocusPetStore {
         if settings_path.exists() {
             let bytes = fs::read(&settings_path)?;
             if let Ok(mut settings) = serde_json::from_slice::<Value>(&bytes) {
-                if let Some(reminder) = settings.get_mut("reminder").and_then(Value::as_object_mut) {
+                if let Some(reminder) = settings.get_mut("reminder").and_then(Value::as_object_mut)
+                {
                     reminder.remove("enableFocusRestNudges");
                     reminder.remove("longFocusMinutes");
                     reminder.remove("veryLongFocusMinutes");
@@ -563,7 +564,9 @@ mod tests {
         assert!(!root.join("break-sessions.json").exists());
         assert_eq!(snapshot["stateSegments"].as_array().unwrap().len(), 1);
         assert!(snapshot["focusSessions"][0].get("autoStartBreak").is_none());
-        assert!(snapshot["settings"]["reminder"].get("longFocusMinutes").is_none());
+        assert!(snapshot["settings"]["reminder"]
+            .get("longFocusMinutes")
+            .is_none());
         let _ = fs::remove_dir_all(root);
     }
 

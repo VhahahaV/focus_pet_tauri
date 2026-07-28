@@ -121,10 +121,12 @@ impl SystemMonitorState {
         let temperatures = Components::new_with_refreshed_list()
             .iter()
             .filter_map(|component| {
-                component.temperature().map(|celsius| SystemMonitorThermalSample {
-                    label: component.label().to_string(),
-                    celsius,
-                })
+                component
+                    .temperature()
+                    .map(|celsius| SystemMonitorThermalSample {
+                        label: component.label().to_string(),
+                        celsius,
+                    })
             })
             .collect::<Vec<_>>();
         let (gpu_name, gpu_usage) = apple_gpu_sample();
@@ -210,7 +212,10 @@ mod tests {
     fn parses_apple_gpu_statistics() {
         let sample = r#""MetalPluginClassName" = "AGXG16GDevice"
 "PerformanceStatistics" = {"Device Utilization %"=29,"Renderer Utilization %"=28}"#;
-        assert_eq!(parse_number_after(sample, "\"Device Utilization %\"="), Some(29.0));
+        assert_eq!(
+            parse_number_after(sample, "\"Device Utilization %\"="),
+            Some(29.0)
+        );
         assert_eq!(
             parse_quoted_value(sample, "\"MetalPluginClassName\" = \""),
             Some("AGXG16GDevice".to_string())

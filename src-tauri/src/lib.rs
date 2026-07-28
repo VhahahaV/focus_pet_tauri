@@ -5,8 +5,8 @@ mod pet_pack;
 mod store;
 mod system_monitor;
 
-use native::{NativeActivitySample, PermissionSnapshot};
 use agent_events::AgentCompletionEvent;
+use native::{NativeActivitySample, PermissionSnapshot};
 use pet_pack::ImportedPetPack;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,9 @@ fn perform_menu_bar_action(app: tauri::AppHandle, action: String) -> bool {
 }
 
 #[tauri::command]
-fn sample_system_metrics(state: tauri::State<'_, SystemMonitorState>) -> Result<SystemMetricsSample, String> {
+fn sample_system_metrics(
+    state: tauri::State<'_, SystemMonitorState>,
+) -> Result<SystemMetricsSample, String> {
     state.sample()
 }
 
@@ -457,14 +459,17 @@ fn sync_widget_windows(
     )?;
     let pet_window_width = pet_size.max((pet_size + 190.0).min(330.0));
     let pet_window_height = pet_size + 310.0;
-    let pet_origin = pet_origin_x.zip(pet_origin_y).or_else(|| {
-        default_pet_origin(
-            &app,
-            pet_placement.as_str(),
-            pet_window_width,
-            pet_window_height,
-        )
-    });
+    let requested_pet_origin = pet_origin_x.zip(pet_origin_y);
+    let pet_origin = requested_pet_origin
+        .filter(|(x, y)| pet_origin_is_visible(&app, *x, *y, pet_window_width, pet_window_height))
+        .or_else(|| {
+            default_pet_origin(
+                &app,
+                pet_placement.as_str(),
+                pet_window_width,
+                pet_window_height,
+            )
+        });
     sync_widget_window(
         &app,
         "widget-pet-companion",
@@ -568,6 +573,36 @@ fn default_pet_origin(
         screen_rect,
         work_rect,
     ))
+}
+
+/// A saved custom location can point at a disconnected monitor. Do not restore a
+/// completely off-screen window: fall back to the selected placement instead.
+fn pet_origin_is_visible(app: &tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) -> bool {
+    let right = x + width;
+    let bottom = y + height;
+    app.available_monitors()
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .any(|monitor| {
+            let work_area = monitor.work_area();
+            window_intersects_rect(
+                x,
+                y,
+                right,
+                bottom,
+                Rect {
+                    x: f64::from(work_area.position.x),
+                    y: f64::from(work_area.position.y),
+                    width: f64::from(work_area.size.width),
+                    height: f64::from(work_area.size.height),
+                },
+            )
+        })
+}
+
+fn window_intersects_rect(left: f64, top: f64, right: f64, bottom: f64, rect: Rect) -> bool {
+    left < rect.x + rect.width && right > rect.x && top < rect.y + rect.height && bottom > rect.y
 }
 
 #[derive(Clone, Copy)]
@@ -755,7 +790,7 @@ fn emit_menu_action(app: &tauri::AppHandle, action: &str) {
             action: action.to_string(),
         },
     )
-        .ok();
+    .ok();
 }
 
 fn handle_native_menu_action(app: &tauri::AppHandle, action: &str) {
@@ -834,9 +869,8 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
             }
         });
 
-    let status_icon = tauri::image::Image::from_bytes(include_bytes!(
-        "../../public/assets/StatusIcon.png"
-    ))?;
+    let status_icon =
+        tauri::image::Image::from_bytes(include_bytes!("../../public/assets/StatusIcon.png"))?;
     tray = tray.icon(status_icon);
 
     #[cfg(target_os = "macos")]
@@ -923,6 +957,22 @@ mod tests {
             default_pet_origin_for_rects("bottomRight", 240.0, 240.0, SCREEN, work),
             (1136.0, 580.0)
         );
+    }
+
+    #[test]
+    fn offscreen_custom_pet_origin_is_rejected() {
+        let work = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 860.0,
+        };
+        assert!(!super::window_intersects_rect(
+            1964.0, 1592.0, 2277.0, 2019.0, work
+        ));
+        assert!(super::window_intersects_rect(
+            1200.0, 600.0, 1513.0, 1027.0, work
+        ));
     }
 
     #[test]

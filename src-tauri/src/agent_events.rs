@@ -22,7 +22,10 @@ pub struct AgentCompletionEvent {
 
 pub fn maybe_ingest_from_process_args() -> bool {
     let arguments = env::args().collect::<Vec<_>>();
-    let Some(flag_index) = arguments.iter().position(|argument| argument == "--agent-notify") else {
+    let Some(flag_index) = arguments
+        .iter()
+        .position(|argument| argument == "--agent-notify")
+    else {
         return false;
     };
     let provider_hint = arguments.get(flag_index + 1).map(String::as_str);
@@ -49,10 +52,12 @@ pub fn maybe_ingest_from_process_args() -> bool {
     }
 }
 
-pub fn ingest_payload(provider_hint: Option<&str>, payload_text: &str) -> Result<AgentCompletionEvent, String> {
-    let payload = serde_json::from_str::<Value>(payload_text.trim()).unwrap_or_else(|_| {
-        serde_json::json!({ "message": payload_text.trim() })
-    });
+pub fn ingest_payload(
+    provider_hint: Option<&str>,
+    payload_text: &str,
+) -> Result<AgentCompletionEvent, String> {
+    let payload = serde_json::from_str::<Value>(payload_text.trim())
+        .unwrap_or_else(|_| serde_json::json!({ "message": payload_text.trim() }));
     let provider = detect_provider(provider_hint, &payload);
     let status = detect_status(&payload);
     let provider_title = match provider.as_str() {
@@ -75,15 +80,27 @@ pub fn ingest_payload(provider_hint: Option<&str>, payload_text: &str) -> Result
     )
     .unwrap_or_else(|| "后台任务已结束".to_string());
     let message = if status == "failed" {
-        format!("{provider_title} 任务未成功：{}", compact_text(&subject, 160))
+        format!(
+            "{provider_title} 任务未成功：{}",
+            compact_text(&subject, 160)
+        )
     } else {
         format!("{provider_title} 已完成：{}", compact_text(&subject, 160))
     };
     let event = AgentCompletionEvent {
-        id: format!("agent-{}-{}", std::process::id(), chrono::Utc::now().timestamp_micros()),
+        id: format!(
+            "agent-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_micros()
+        ),
         provider,
         status: status.to_string(),
-        title: if status == "failed" { "任务执行失败" } else { "任务已完成" }.to_string(),
+        title: if status == "failed" {
+            "任务执行失败"
+        } else {
+            "任务已完成"
+        }
+        .to_string(),
         message,
         occurred_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -98,7 +115,11 @@ pub fn drain_events() -> Result<Vec<AgentCompletionEvent>, String> {
     if !inbox.exists() {
         return Ok(Vec::new());
     }
-    let processing = root.join(format!("agent-events-{}-{}.processing", std::process::id(), chrono::Utc::now().timestamp_micros()));
+    let processing = root.join(format!(
+        "agent-events-{}-{}.processing",
+        std::process::id(),
+        chrono::Utc::now().timestamp_micros()
+    ));
     fs::rename(&inbox, &processing).map_err(|error| error.to_string())?;
     let text = fs::read_to_string(&processing).map_err(|error| error.to_string())?;
     let _ = fs::remove_file(&processing);
@@ -109,7 +130,10 @@ pub fn drain_events() -> Result<Vec<AgentCompletionEvent>, String> {
 }
 
 pub fn inbox_path() -> String {
-    app_data_root().join(INBOX_FILE).to_string_lossy().to_string()
+    app_data_root()
+        .join(INBOX_FILE)
+        .to_string_lossy()
+        .to_string()
 }
 
 fn append_event(event: &AgentCompletionEvent) -> Result<(), String> {
@@ -128,7 +152,10 @@ fn detect_provider(provider_hint: Option<&str>, payload: &Value) -> String {
     let hint = provider_hint.unwrap_or_default().trim().to_lowercase();
     if hint.contains("claude") || payload.get("hook_event_name").is_some() {
         "claude".to_string()
-    } else if hint.contains("codex") || payload.get("turn-id").is_some() || payload.get("turn_id").is_some() {
+    } else if hint.contains("codex")
+        || payload.get("turn-id").is_some()
+        || payload.get("turn_id").is_some()
+    {
         "codex".to_string()
     } else if hint.is_empty() {
         "agent".to_string()
@@ -138,9 +165,12 @@ fn detect_provider(provider_hint: Option<&str>, payload: &Value) -> String {
 }
 
 fn detect_status(payload: &Value) -> &'static str {
-    let event_name = first_text(payload, &["hook_event_name", "hookEventName", "status", "type"])
-        .unwrap_or_default()
-        .to_lowercase();
+    let event_name = first_text(
+        payload,
+        &["hook_event_name", "hookEventName", "status", "type"],
+    )
+    .unwrap_or_default()
+    .to_lowercase();
     if event_name.contains("fail") || event_name.contains("error") {
         "failed"
     } else {
@@ -164,7 +194,10 @@ fn compact_text(value: &str, limit: usize) -> String {
     if normalized.chars().count() <= limit {
         return normalized;
     }
-    let mut compact = normalized.chars().take(limit.saturating_sub(1)).collect::<String>();
+    let mut compact = normalized
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
     compact.push('…');
     compact
 }
