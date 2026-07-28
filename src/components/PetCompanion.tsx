@@ -13,7 +13,8 @@ import {
 import { emptyRuntime } from "../app/runtime";
 import { makePetCompanionViewState, type PetCompanionViewState } from "../app/petCompanionPayload";
 import { petIntentLabels } from "../core/labels";
-import type { PetPlacementMode } from "../core/types";
+import { makePetIntent } from "../core/pet";
+import type { PetIntent, PetPlacementMode } from "../core/types";
 import { formatCompactDuration, formatCount } from "../core/formatters";
 import {
   demoPetPackRecords,
@@ -83,11 +84,14 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   const dragSessionRef = useRef<PetDragSession | undefined>(undefined);
   const suppressClickRef = useRef(false);
   const clickTimerRef = useRef<number | undefined>(undefined);
+  const interactionTimerRef = useRef<number | undefined>(undefined);
   const [randomState, setRandomState] = useState<RandomSourceActionState>({});
   const [manualBubble, setManualBubble] = useState<string | undefined>();
+  const [localPhysicalIntent, setLocalPhysicalIntent] = useState<PetIntent | undefined>();
   const selectedPack = petPacks.find((record) => record.id === settings.selectedPackID) ?? petPacks[0];
+  const effectivePetIntent = localPhysicalIntent ?? state.currentPetIntent;
   const resolvedSourceAction = resolveDisplaySourceAction(
-    state.currentPetIntent,
+    effectivePetIntent,
     selectedPack,
     settings,
     randomState,
@@ -98,11 +102,11 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   const sourceFps = sourceAction?.fps ?? 8;
   const effectiveFps = isHovering
     ? Math.min(sourceFps, 8)
-    : state.currentPetIntent.source === "state"
+    : effectivePetIntent.source === "state"
       ? Math.min(sourceFps, 2)
       : Math.min(sourceFps, 6);
   const frameDelay = animationFrameDelay(effectiveFps);
-  const animationKey = `${selectedPack?.id ?? "fallback"}:${sourceAction?.id ?? "preview"}:${state.currentPetIntent.id}`;
+  const animationKey = `${selectedPack?.id ?? "fallback"}:${sourceAction?.id ?? "preview"}:${effectivePetIntent.id}`;
   const [frameIndex, setFrameIndex] = useState(0);
   const visibleBubble = manualBubble ?? (windowMode ? undefined : state.latestPetBubble);
   const hoverItems = useMemo(
@@ -130,6 +134,31 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
     return () => window.clearTimeout(timer);
   }, [manualBubble]);
 
+  const setPhysicalIntentImmediately = useCallback((kind: PetIntent["kind"], visibleMs: number) => {
+    if (interactionTimerRef.current !== undefined) window.clearTimeout(interactionTimerRef.current);
+    setLocalPhysicalIntent(makePetIntent(kind, "physicalInteraction", { interruptible: false }));
+    interactionTimerRef.current = window.setTimeout(() => {
+      interactionTimerRef.current = undefined;
+      setLocalPhysicalIntent(undefined);
+    }, visibleMs);
+  }, []);
+
+  useEffect(() => () => {
+    if (interactionTimerRef.current !== undefined) window.clearTimeout(interactionTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (
+      localPhysicalIntent &&
+      state.currentPetIntent.source === "physicalInteraction" &&
+      state.currentPetIntent.kind === localPhysicalIntent.kind
+    ) {
+      if (interactionTimerRef.current !== undefined) window.clearTimeout(interactionTimerRef.current);
+      interactionTimerRef.current = undefined;
+      setLocalPhysicalIntent(undefined);
+    }
+  }, [localPhysicalIntent, state.currentPetIntent.kind, state.currentPetIntent.source]);
+
   useEffect(() => {
     const nextState = resolvedSourceAction.randomState;
     if (
@@ -148,14 +177,14 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   ]);
 
   useEffect(() => {
-    if (!settings.randomActionSwitchEnabled || !selectedPack || state.currentPetIntent.source === "physicalInteraction") return undefined;
+    if (!settings.randomActionSwitchEnabled || !selectedPack || effectivePetIntent.source === "physicalInteraction") return undefined;
     const delay = Math.max(15, settings.randomActionSwitchSeconds) * 1000;
     const timer = window.setInterval(() => {
       setRandomState((state) => ({ ...state, switchedAt: state.switchedAt === undefined ? undefined : 0 }));
     }, delay);
     return () => window.clearInterval(timer);
   }, [
-    state.currentPetIntent.source,
+    effectivePetIntent.source,
     selectedPack,
     settings.randomActionSwitchEnabled,
     settings.randomActionSwitchSeconds,
@@ -194,6 +223,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
       session.moved = true;
       draggingRef.current = true;
       suppressClickRef.current = true;
+      setPhysicalIntentImmediately("dragged", 2_500);
       updateHovering(false);
       void getCurrentWindow().emitTo("main", "focus-pet-companion-moved", {
         x: session.origin.x,
@@ -214,7 +244,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
       session.pendingPosition = undefined;
       if (position) void getCurrentWindow().setPosition(new PhysicalPosition(position.x, position.y)).catch(() => undefined);
     });
-  }, [updateHovering]);
+  }, [setPhysicalIntentImmediately, updateHovering]);
 
   const finishPetDrag = useCallback(async (pointerID: number) => {
     const session = dragSessionRef.current;
@@ -226,6 +256,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
       await currentWindow.setPosition(new PhysicalPosition(session.pendingPosition.x, session.pendingPosition.y)).catch(() => undefined);
     }
     if (session.moved) {
+      setPhysicalIntentImmediately("landing", 1_800);
       const position = await currentWindow.outerPosition().catch(() => session.pendingPosition ?? session.origin);
       if (position) {
         await currentWindow.emitTo("main", "focus-pet-companion-moved", {
@@ -239,7 +270,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
     window.setTimeout(() => {
       suppressClickRef.current = false;
     }, 0);
-  }, []);
+  }, [setPhysicalIntentImmediately]);
 
   useEffect(() => {
     if (!windowMode || !("__TAURI_INTERNALS__" in window)) return undefined;
@@ -340,7 +371,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
         ref={hitTargetRef}
         className="pet-avatar-button"
         type="button"
-        title={`${petIntentLabels[state.currentPetIntent.kind]} · 拖动桌宠`}
+        title={`${petIntentLabels[effectivePetIntent.kind]} · 拖动桌宠`}
         onClick={(event) => {
           if (!windowMode) return;
           if (suppressClickRef.current) {
@@ -353,7 +384,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
             return;
           }
           clickTimerRef.current = window.setTimeout(() => {
-            setManualBubble(`${petIntentLabels[state.currentPetIntent.kind]} · 专注 ${formatCompactDuration(state.summary.focusSeconds)}`);
+            setManualBubble(`${petIntentLabels[effectivePetIntent.kind]} · 专注 ${formatCompactDuration(state.summary.focusSeconds)}`);
           }, 220);
         }}
         onPointerDown={(event) => {
@@ -366,6 +397,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
             scaleFactor: 1,
             moved: false,
           };
+          setPhysicalIntentImmediately("mouseSummon", 750);
           updateHovering(true);
           void currentWindow.setIgnoreCursorEvents(false).catch(() => undefined);
           void Promise.all([
@@ -417,7 +449,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
             <span aria-hidden />
             <div>
               <small>当前状态</small>
-              <strong>{petIntentLabels[state.currentPetIntent.kind]}</strong>
+              <strong>{petIntentLabels[effectivePetIntent.kind]}</strong>
             </div>
           </div>
           <div className="pet-hover-metrics">

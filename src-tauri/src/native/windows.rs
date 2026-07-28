@@ -400,10 +400,25 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
 }
 
 unsafe extern "system" fn pointer_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && (0x0200..=0x020e).contains(&(wparam as u32)) {
+    if code >= 0 && is_pointer_action_message(wparam as u32) {
         saturating_increment(&POINTER_EVENTS);
     }
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+}
+
+fn is_pointer_action_message(message: u32) -> bool {
+    // WM_MOUSEMOVE can fire thousands of times per second. The timeline is an
+    // interaction counter, so count deliberate button presses and wheel
+    // gestures instead of every physical pixel crossed by the pointer.
+    matches!(
+        message,
+        0x0201 // WM_LBUTTONDOWN
+            | 0x0204 // WM_RBUTTONDOWN
+            | 0x0207 // WM_MBUTTONDOWN
+            | 0x020a // WM_MOUSEWHEEL
+            | 0x020b // WM_XBUTTONDOWN
+            | 0x020e // WM_MOUSEHWHEEL
+    )
 }
 
 fn saturating_increment(counter: &AtomicU32) {
@@ -415,8 +430,9 @@ fn saturating_increment(counter: &AtomicU32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        input_monitor_retry_due, locked_activity_sample, monitor_hooks_ready, permission_snapshot,
-        process_name_from_snapshot, sample_activity, saturating_increment, INPUT_MONITOR_RETRY_MS,
+        input_monitor_retry_due, is_pointer_action_message, locked_activity_sample,
+        monitor_hooks_ready, permission_snapshot, process_name_from_snapshot, sample_activity,
+        saturating_increment, INPUT_MONITOR_RETRY_MS,
     };
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -425,6 +441,14 @@ mod tests {
         let counter = AtomicU32::new(u32::MAX);
         saturating_increment(&counter);
         assert_eq!(counter.load(Ordering::Relaxed), u32::MAX);
+    }
+
+    #[test]
+    fn pointer_counter_ignores_high_frequency_mouse_moves() {
+        assert!(!is_pointer_action_message(0x0200)); // WM_MOUSEMOVE
+        assert!(is_pointer_action_message(0x0201)); // WM_LBUTTONDOWN
+        assert!(is_pointer_action_message(0x020a)); // WM_MOUSEWHEEL
+        assert!(!is_pointer_action_message(0x0202)); // WM_LBUTTONUP
     }
 
     #[test]

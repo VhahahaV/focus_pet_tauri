@@ -22,7 +22,7 @@ import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWin
 import { cyclePlayableSourceAction, nextPetFrameIndex, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
 import { activitySampleForRuntime } from "../app/activitySampling";
-import { emptySnapshot, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
+import { emptySnapshot, maximumPointerActionsPerMinute, normalizeInputActivityBucket, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -622,6 +622,19 @@ describe("Focus Pet migrated core", () => {
     const focusing = runtimeActions.startFocusSession(runtime, "Tray action", 25);
     const focusFinished = applyRequiredMenuAction("finish-focus", focusing);
     expect(focusFinished.focusSessions.at(-1)?.status).toBe("completed");
+  });
+
+  it("clamps historical pointer-motion storms to a usable interaction count", () => {
+    expect(normalizeInputActivityBucket({
+      start: "2026-07-07T10:00:00.000Z",
+      end: "2026-07-07T10:01:00.000Z",
+      pointerCount: 90_000,
+    }).pointerCount).toBe(0);
+    expect(normalizeInputActivityBucket({
+      start: "2026-07-07T10:00:00.000Z",
+      end: "2026-07-07T10:01:00.000Z",
+      pointerCount: maximumPointerActionsPerMinute - 1,
+    }).pointerCount).toBe(maximumPointerActionsPerMinute - 1);
   });
 
   it("persists desktop widget window positions for later native sync", () => {

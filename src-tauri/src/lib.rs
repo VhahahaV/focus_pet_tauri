@@ -299,6 +299,12 @@ fn export_app_icon(
     std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
+    let store_packaged_app = is_windows_store_package_path(&source);
+    if store_packaged_app {
+        // Bump the cache identity when choosing the AppX light-background logo
+        // so existing white-on-transparent cache files are not reused.
+        "appx-light-logo-v2".hash(&mut hasher);
+    }
     let safe_name = app_name
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
@@ -315,6 +321,18 @@ fn export_app_icon(
     ));
     if output_path.is_file() {
         return Ok(Some(output_path.to_string_lossy().to_string()));
+    }
+
+    // Packaged Windows apps commonly expose only a generic executable icon.
+    // Prefer their AppX manifest logo when the foreground executable lives in
+    // WindowsApps, which covers ChatGPT/Codex and other Store-distributed apps.
+    if store_packaged_app {
+        if let Some(store_logo) = windows_store_logo_source(&source) {
+            if std::fs::copy(&store_logo, &output_path).is_ok() && output_path.is_file() {
+                return Ok(Some(output_path.to_string_lossy().to_string()));
+            }
+            let _ = std::fs::remove_file(&output_path);
+        }
     }
 
     let script = r#"
@@ -358,6 +376,84 @@ fn windows_icon_source(bundle_id: Option<&str>) -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .filter(|path| path.is_file())
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_STORE_LOGO_SCRIPT: &str = r#"
+$source = $env:FOCUS_PET_ICON_SOURCE
+$package = Get-AppxPackage | Where-Object {
+  $source.StartsWith($_.InstallLocation, [StringComparison]::OrdinalIgnoreCase)
+} | Select-Object -First 1
+if ($null -eq $package) { exit 1 }
+$manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+$application = @($manifest.Package.Applications.Application | Where-Object {
+  $executable = Join-Path $package.InstallLocation $_.Executable.Replace('/', '\')
+  [string]::Equals($executable, $source, [StringComparison]::OrdinalIgnoreCase)
+} | Select-Object -First 1)
+$visual = $application.VisualElements
+$relative = [string]$visual.Square44x44Logo
+if ([string]::IsNullOrWhiteSpace($relative)) { $relative = [string]$visual.Square150x150Logo }
+if ([string]::IsNullOrWhiteSpace($relative)) { $relative = [string]$manifest.Package.Properties.Logo }
+if ([string]::IsNullOrWhiteSpace($relative)) { exit 2 }
+$logo = Join-Path $package.InstallLocation $relative.Replace('/', '\')
+$directory = Split-Path -Parent $logo
+$stem = [IO.Path]::GetFileNameWithoutExtension($logo)
+$extension = [IO.Path]::GetExtension($logo)
+$candidates = @(
+  (Join-Path $directory ($stem + '.targetsize-256_altform-lightunplated' + $extension)),
+  (Join-Path $directory ($stem + '.targetsize-256_altform-unplated' + $extension)),
+  (Join-Path $directory ($stem + '.targetsize-256' + $extension)),
+  (Join-Path $directory ($stem + '.scale-200' + $extension)),
+  $logo
+)
+foreach ($candidate in $candidates) {
+  if ((Test-Path -LiteralPath $candidate) -and [IO.Path]::GetExtension($candidate) -ieq '.png') {
+    $candidate
+    exit 0
+  }
+}
+exit 3
+"#;
+
+#[cfg(target_os = "windows")]
+fn windows_store_logo_source(source: &Path) -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+
+    if !is_windows_store_package_path(source) {
+        return None;
+    }
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            WINDOWS_STORE_LOGO_SCRIPT,
+        ])
+        .env("FOCUS_PET_ICON_SOURCE", source)
+        .creation_flags(0x0800_0000)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let logo = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+    logo.is_file().then_some(logo)
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_store_package_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+        .contains("\\program files\\windowsapps\\")
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1288,6 +1384,17 @@ mod tests {
         );
         assert!(super::windows_icon_source(None).is_none());
         assert!(super::windows_icon_source(Some(r"C:\missing\focus-pet.exe")).is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_store_package_paths_are_detected_without_matching_similar_paths() {
+        assert!(super::is_windows_store_package_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1\app\ChatGPT.exe"
+        )));
+        assert!(!super::is_windows_store_package_path(Path::new(
+            r"C:\Program Files\WindowsAppsBackup\OpenAI.Codex\ChatGPT.exe"
+        )));
     }
 }
 

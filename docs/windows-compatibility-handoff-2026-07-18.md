@@ -245,4 +245,19 @@ Loader 校验：
 
 ## 继续开发建议
 
+## 2026-07-28 最终安装版补丁与实机验收
+
+本次补丁针对最终用户实际看到的三个问题完成修复并重新构建、覆盖安装和实机验证：
+
+- Microsoft Store 版 ChatGPT 现在从 AppX 清单解析 `Square44x44Logo`，优先使用 light-unplated 高分辨率资源并缓存为 PNG；最终 Today 截图中 ChatGPT 已显示为黑色 OpenAI 图标，不再是字母占位。
+- Windows 低级鼠标钩子只统计按下和滚轮事件，不再把 `WM_MOUSEMOVE` 记为一次操作。旧版本中每分钟达到 600 的异常桶会在读取时丢弃，避免把历史移动风暴显示为几千次鼠标操作。最终安装版界面显示鼠标 `64` 次，历史文件中没有 `>=600` 的异常桶。
+- 桌宠组件在指针按下、拖动和松手时先在本地立即切换 `mouseSummon`、`dragged`、`landing` 意图，再与主窗口状态同步，消除了等待 Tauri IPC 往返才更新姿态的可感知延迟。Computer Use 实机点击后，同一次刷新从“安静陪伴”变为“鼠标召回”。
+
+最终 gnullvm 产物：
+
+- NSIS：`src-tauri/target-gnullvm/x86_64-pc-windows-gnullvm/release/bundle/nsis/Focus Pet_0.1.0_x64-setup.exe`，SHA-256 `35F4279F82A055533812A623C8B8C9258FAA618744374239E3C6CD63C5952526`。
+- MSI：`src-tauri/target-gnullvm/x86_64-pc-windows-gnullvm/release/bundle/msi/Focus Pet_0.1.0_x64_en-US.msi`，SHA-256 `A7DECEF6BA5210B75FCC2A57E17AFE40DF42DF6055F5AD65E6AB9C0055148676`。
+
+安装版使用 NSIS 静默覆盖安装返回 `0`，运行路径为 `C:\\Users\\crush\\AppData\\Local\\Focus Pet\\focus-pet.exe`。Computer Use 已逐屏查看 Today、历史、桌宠和设置：四页均正常渲染；设置页显示 Win32 原生钩子、输入监控“已允许”、权限入口和本机数据目录；桌宠导入的 XiaoDai 包仍可显示，实时状态、键盘和鼠标计数均可见。MSI 的管理员安装、托盘物理点击、勿扰关闭后的通知横幅、锁屏长程回归仍按上文 P0 项目继续。
+
 下一轮从无系统遮罩状态下的托盘物理点击、关闭勿扰模式后的通知回归开始，再做小组件拖动持久化、锁屏长稳与 23 个桌宠动作目视验收。桌宠不显示、IPC 停滞、输入信号缺失、GPU 假 0、数据目录与安装目录冲突、NSIS 缺 WebView2Loader、原生脱敏泄露、诊断日志空写和清理数据误删资源已不再是阻塞项。

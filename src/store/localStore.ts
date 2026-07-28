@@ -3,6 +3,22 @@ import { defaultAppSettings, normalizeAppSettings } from "../core/settings";
 import { nativeDeleteAllData, nativeExportSnapshot, nativeLoadSnapshot, nativeSaveSnapshot } from "./native";
 
 const browserStorageKey = "focus-pet-tauri-snapshot";
+export const maximumPointerActionsPerMinute = 600;
+
+export const normalizeInputActivityBucket = <T extends { start: string; end: string; pointerCount: number }>(bucket: T): T => {
+  const start = new Date(bucket.start).getTime();
+  const end = new Date(bucket.end).getTime();
+  const durationMinutes = Number.isFinite(start) && Number.isFinite(end) && end > start
+    ? Math.max(1, Math.ceil((end - start) / 60_000))
+    : 1;
+  const maximum = maximumPointerActionsPerMinute * durationMinutes;
+  const rawPointerCount = Math.max(0, Math.round(bucket.pointerCount) || 0);
+  // A bucket at or above the ceiling came from the old WM_MOUSEMOVE hook,
+  // not a plausible count of deliberate mouse actions. Discard it instead of
+  // preserving a misleading capped number in the user's timeline.
+  const pointerCount = rawPointerCount >= maximum ? 0 : rawPointerCount;
+  return pointerCount === bucket.pointerCount ? bucket : { ...bucket, pointerCount };
+};
 
 export const emptySnapshot = (): LocalStoreSnapshot => ({
   settings: defaultAppSettings(),
@@ -19,7 +35,10 @@ export const normalizeSnapshot = (snapshot: Partial<LocalStoreSnapshot> = {}): L
   classificationRules: snapshot.classificationRules ?? [],
   stateSegments: (snapshot.stateSegments ?? []).filter((segment) => (segment as { state: string }).state !== "break"),
   appUsage: snapshot.appUsage ?? [],
-  inputActivity: snapshot.inputActivity ?? [],
+  // Older Windows builds counted every WM_MOUSEMOVE, creating unusable
+  // five-figure "mouse action" values. Normalize those historical buckets as
+  // the snapshot is loaded; current builds count only presses and wheel gestures.
+  inputActivity: (snapshot.inputActivity ?? []).map(normalizeInputActivityBucket),
   focusSessions: (snapshot.focusSessions ?? []).map((session) => {
     const { autoStartBreak: _autoStartBreak, breakDurationSeconds: _breakDurationSeconds, ...current } = session as typeof session & {
       autoStartBreak?: boolean;
