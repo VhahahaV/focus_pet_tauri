@@ -523,10 +523,13 @@ fn default_menu_bar_origin(app: &tauri::AppHandle, width: f64, height: f64) -> O
         return Some((1280.0 - width - 18.0, 28.0));
     };
     let work_area = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
+    let physical_width = width * scale_factor;
+    let physical_height = height * scale_factor;
     Some((
-        f64::from(work_area.position.x) + f64::from(work_area.size.width) - width - 18.0,
+        f64::from(work_area.position.x) + f64::from(work_area.size.width) - physical_width - 18.0,
         f64::from(work_area.position.y)
-            + 12.0_f64.min((f64::from(work_area.size.height) - height).max(12.0)),
+            + 12.0_f64.min((f64::from(work_area.size.height) - physical_height).max(12.0)),
     ))
 }
 
@@ -554,6 +557,7 @@ fn default_pet_origin(
     let screen = monitor.size();
     let screen_pos = monitor.position();
     let work_area = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
     let screen_rect = Rect {
         x: f64::from(screen_pos.x),
         y: f64::from(screen_pos.y),
@@ -568,8 +572,8 @@ fn default_pet_origin(
     };
     Some(default_pet_origin_for_rects(
         placement,
-        width,
-        height,
+        width * scale_factor,
+        height * scale_factor,
         screen_rect,
         work_rect,
     ))
@@ -578,19 +582,18 @@ fn default_pet_origin(
 /// A saved custom location can point at a disconnected monitor. Do not restore a
 /// completely off-screen window: fall back to the selected placement instead.
 fn pet_origin_is_visible(app: &tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) -> bool {
-    let right = x + width;
-    let bottom = y + height;
     app.available_monitors()
         .ok()
         .unwrap_or_default()
         .into_iter()
         .any(|monitor| {
             let work_area = monitor.work_area();
+            let scale_factor = monitor.scale_factor();
             window_intersects_rect(
                 x,
                 y,
-                right,
-                bottom,
+                x + width * scale_factor,
+                y + height * scale_factor,
                 Rect {
                     x: f64::from(work_area.position.x),
                     y: f64::from(work_area.position.y),
