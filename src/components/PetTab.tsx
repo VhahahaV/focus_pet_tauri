@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusPet } from "../app/AppContext";
+import { loopingPetFrameIndex, petPreviewAnimationKey } from "../app/petCompanionLogic";
 import { petIntentLabels, petPlacementLabels } from "../core/labels";
 import { advancedMappingIntents, userMappingIntents } from "../core/pet";
 import type { PetIntentKind } from "../core/types";
@@ -82,18 +83,23 @@ const PetPreviewStage = ({ record, action }: { record: PetPackRecord; action?: P
   const frames = usePetFrames(sourceFrames, record.previewURL ?? fallbackPetPreviewURL);
   const [frameIndex, setFrameIndex] = useState(0);
   const previewFPS = Math.min(6, Math.max(1, action?.fps ?? 6));
+  const previewAnimationKey = petPreviewAnimationKey(record.id, action?.id, frames);
 
   useEffect(() => {
     setFrameIndex(0);
-  }, [action?.id, frames.length]);
+  }, [previewAnimationKey]);
 
   useEffect(() => {
-    if (!action || frames.length <= 1) return;
-    const timer = window.setInterval(() => {
-      setFrameIndex((current) => (current + 1) % frames.length);
-    }, 1000 / previewFPS);
-    return () => window.clearInterval(timer);
-  }, [action, frames.length, previewFPS]);
+    if (frames.length <= 1) return;
+    const startedAt = performance.now();
+    let frameID = 0;
+    const render = (now: number) => {
+      setFrameIndex(loopingPetFrameIndex(now - startedAt, frames.length, previewFPS));
+      frameID = window.requestAnimationFrame(render);
+    };
+    frameID = window.requestAnimationFrame(render);
+    return () => window.cancelAnimationFrame(frameID);
+  }, [frames.length, previewAnimationKey, previewFPS]);
 
   const frameURL = frames[frameIndex % Math.max(1, frames.length)] ?? record.previewURL ?? fallbackPetPreviewURL;
 
@@ -344,9 +350,6 @@ export const PetTab = () => {
             <TogglePill status="pet" checked={!bundle.state.settings.pet.hidden} disabled={petPacks.length === 0} onCheckedChange={actions.togglePetHidden}>
               <Eye size={16} /> 显示桌宠
             </TogglePill>
-            <TogglePill status="pet" checked={bundle.state.settings.pet.animationEnabled} onCheckedChange={(checked) => actions.updateSettings((settings) => ({ ...settings, pet: { ...settings.pet, animationEnabled: checked } }))}>
-              <Shuffle size={16} /> 动画
-            </TogglePill>
             <TogglePill status="pet" checked={bundle.state.settings.pet.audioEnabled} onCheckedChange={(checked) => actions.updateSettings((settings) => ({ ...settings, pet: { ...settings.pet, audioEnabled: checked } }))}>
               <Volume2 size={16} /> 音效
             </TogglePill>
@@ -373,12 +376,12 @@ export const PetTab = () => {
           </div>
         </section>
 
-        <section className="pet-settings-section status-privacy">
+        <section className="pet-settings-section status-info">
           <h3><SlidersHorizontal size={15} /> 位置外观</h3>
           <SegmentedControl
             className="pet-placement-row"
             label="桌宠位置"
-            status="privacy"
+            status="info"
             value={bundle.state.settings.pet.placement}
             options={(["bottomRight", "bottomLeft", "topRight", "topLeft", "dock", "custom"] as const).map((placement) => ({ value: placement, label: petPlacementLabels[placement] }))}
             onChange={(placement) => actions.updateSettings((settings) => ({ ...settings, pet: { ...settings.pet, placement } }))}

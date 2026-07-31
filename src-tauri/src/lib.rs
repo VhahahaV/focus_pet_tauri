@@ -3,6 +3,7 @@ mod codex_sessions;
 mod native;
 mod notifications;
 mod pet_pack;
+mod runtime_service;
 mod ssh_sessions;
 mod store;
 mod system_monitor;
@@ -12,8 +13,9 @@ use codex_sessions::{
     CodexEventEnvelope, CodexHookConfigurationResult, CodexIntegrationStatus, CodexSessionManager,
     CodexSessionSnapshot, CodexSyncPreferences,
 };
-use native::{NativeActivitySample, PermissionSnapshot};
+use native::NativeActivitySample;
 use pet_pack::ImportedPetPack;
+use runtime_service::{NativeRuntimeEnvelope, NativeRuntimeService};
 use serde_json::Value;
 use ssh_sessions::{
     SshConnectionStatus, SshHostCandidate, SshHostDiagnostic, SshProvisionResult,
@@ -33,6 +35,67 @@ const TRAY_PAUSE_REMINDERS: &str = "pause-reminders";
 const TRAY_RESUME_REMINDERS: &str = "resume-reminders";
 const TRAY_FINISH_FOCUS: &str = "finish-focus";
 const TRAY_QUIT: &str = "quit";
+
+#[derive(Clone, Debug, Default)]
+struct PetWindowTrackingConfig {
+    visible: bool,
+    size: f64,
+    placement: String,
+}
+
+#[derive(Clone, Default)]
+struct PetWindowTracker {
+    config: std::sync::Arc<std::sync::Mutex<PetWindowTrackingConfig>>,
+    paused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    main_thread_tick_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetWindowFollowEvent {
+    x: f64,
+    y: f64,
+    phase: &'static str,
+}
+
+#[tauri::command]
+fn set_pet_window_tracking_paused(
+    paused: bool,
+    tracker: tauri::State<'_, PetWindowTracker>,
+) -> bool {
+    tracker
+        .paused
+        .store(paused, std::sync::atomic::Ordering::Release);
+    true
+}
+
+#[tauri::command]
+fn set_pet_panel_position(app: tauri::AppHandle, x: f64, y: f64) -> Result<bool, String> {
+    use tauri::{Manager, PhysicalPosition};
+
+    let Some(window) = app.get_webview_window("widget-pet-companion") else {
+        return Ok(false);
+    };
+    window
+        .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+        .map_err(|error| error.to_string())?;
+    sync_native_pet_panel_from_host(&window, true);
+    Ok(true)
+}
+
+#[tauri::command]
+fn set_pet_panel_ignores_mouse_events(
+    app: tauri::AppHandle,
+    ignores: bool,
+) -> Result<bool, String> {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("widget-pet-companion") else {
+        return Ok(false);
+    };
+    set_native_pet_panel_ignores_mouse_events(&window, ignores);
+    Ok(true)
+}
 
 #[derive(Clone, serde::Serialize)]
 struct NativeMenuAction {
@@ -102,15 +165,9 @@ fn codex_integration_status() -> CodexIntegrationStatus {
 #[tauri::command]
 fn set_codex_sync_preferences(
     preferences: CodexSyncPreferences,
-    state: tauri::State<'_, CodexSessionManager>,
+    _state: tauri::State<'_, CodexSessionManager>,
 ) -> Result<CodexSyncPreferences, String> {
-    let previous = codex_sessions::sync_preferences();
-    let preferences = codex_sessions::set_sync_preferences(preferences)?;
-    if previous.content_mode != preferences.content_mode && preferences.content_mode == "statusOnly"
-    {
-        state.redact_visible_content()?;
-    }
-    Ok(preferences)
+    codex_sessions::set_sync_preferences(preferences)
 }
 
 #[tauri::command]
@@ -226,58 +283,30 @@ struct InstallationSnapshot {
 }
 
 #[tauri::command]
-async fn load_snapshot(app: tauri::AppHandle) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        FocusPetStore::new(&app)
-            .map_err(|error| error.to_string())?
-            .load_snapshot()
-            .map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())?
+fn load_snapshot(runtime: tauri::State<'_, NativeRuntimeService>) -> Result<Value, String> {
+    Ok(runtime.snapshot())
 }
 
 #[tauri::command]
-async fn save_snapshot(app: tauri::AppHandle, snapshot: Value) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        FocusPetStore::new(&app)
-            .map_err(|error| error.to_string())?
-            .save_snapshot(&snapshot)
-            .map(|_| true)
-            .map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-async fn export_snapshot(
+async fn save_snapshot(
     app: tauri::AppHandle,
     snapshot: Value,
-    redacted: bool,
-) -> Result<String, String> {
+    runtime: tauri::State<'_, NativeRuntimeService>,
+) -> Result<bool, String> {
+    let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        FocusPetStore::new(&app)
-            .map_err(|error| error.to_string())?
-            .export_snapshot(&snapshot, redacted)
-            .map(|path| path.to_string_lossy().to_string())
-            .map_err(|error| error.to_string())
+        runtime.persist_snapshot(&app, snapshot)?;
+        Ok(true)
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-async fn delete_all_data(app: tauri::AppHandle) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        FocusPetStore::new(&app)
-            .map_err(|error| error.to_string())?
-            .delete_all()
-            .map(|_| true)
-            .map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())?
+fn native_runtime_snapshot(
+    runtime: tauri::State<'_, NativeRuntimeService>,
+) -> NativeRuntimeEnvelope {
+    runtime.envelope()
 }
 
 #[tauri::command]
@@ -288,25 +317,8 @@ fn quit_app(app: tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
-async fn data_size(app: tauri::AppHandle) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        FocusPetStore::new(&app)
-            .map_err(|error| error.to_string())?
-            .data_size()
-            .map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
 fn sample_activity() -> NativeActivitySample {
     native::sample_activity()
-}
-
-#[tauri::command]
-fn permission_snapshot() -> PermissionSnapshot {
-    native::permission_snapshot()
 }
 
 #[tauri::command]
@@ -619,53 +631,6 @@ fn installation_snapshot(app: tauri::AppHandle) -> InstallationSnapshot {
 }
 
 #[tauri::command]
-fn open_system_settings(destination: String) -> bool {
-    native::open_system_settings(&destination)
-}
-
-#[tauri::command]
-fn open_log_folder(app: tauri::AppHandle) -> bool {
-    FocusPetStore::new(&app)
-        .map(|store| native::open_path(&store.logs_dir()))
-        .unwrap_or(false)
-}
-
-#[tauri::command]
-fn data_storage_path(app: tauri::AppHandle) -> Result<String, String> {
-    FocusPetStore::new(&app)
-        .map(|store| store.root_dir().to_string_lossy().to_string())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn open_data_folder(app: tauri::AppHandle) -> bool {
-    FocusPetStore::new(&app)
-        .map(|store| native::open_path(store.root_dir()))
-        .unwrap_or(false)
-}
-
-#[tauri::command]
-fn current_log_file(app: tauri::AppHandle, open_file: bool) -> Result<String, String> {
-    let path = FocusPetStore::new(&app)
-        .map_err(|error| error.to_string())?
-        .current_log_file()
-        .map_err(|error| error.to_string())?;
-    if open_file {
-        native::open_path(&path);
-    }
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn append_log_entry(app: tauri::AppHandle, entry: Value) -> Result<String, String> {
-    FocusPetStore::new(&app)
-        .map_err(|error| error.to_string())?
-        .append_log_entry(&entry)
-        .map(|path| path.to_string_lossy().to_string())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 async fn choose_and_import_pet_pack(
     app: tauri::AppHandle,
 ) -> Result<Option<Vec<ImportedPetPack>>, String> {
@@ -802,9 +767,11 @@ fn normalize_windows_path(path: &Path) -> String {
         .to_lowercase()
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-async fn sync_widget_windows(
+fn sync_widget_windows(
     app: tauri::AppHandle,
+    tracker: tauri::State<'_, PetWindowTracker>,
     current_status_visible: bool,
     recent_rhythm_visible: bool,
     current_status_origin_x: Option<f64>,
@@ -817,6 +784,13 @@ async fn sync_widget_windows(
     pet_origin_x: Option<f64>,
     pet_origin_y: Option<f64>,
 ) -> Result<bool, String> {
+    if let Ok(mut config) = tracker.config.lock() {
+        *config = PetWindowTrackingConfig {
+            visible: pet_companion_visible,
+            size: pet_size,
+            placement: pet_placement.clone(),
+        };
+    }
     sync_widget_window(
         &app,
         "widget-current-status",
@@ -835,8 +809,8 @@ async fn sync_widget_windows(
         204.0,
         recent_rhythm_origin_x.zip(recent_rhythm_origin_y),
     )?;
-    let pet_window_width = pet_size.max((pet_size + 190.0).min(330.0));
-    let pet_window_height = pet_size + 310.0;
+    let pet_window_width = pet_size.max((pet_size + 280.0).min(420.0));
+    let pet_window_height = pet_size + 390.0;
     let requested_pet_origin = pet_origin_x.zip(pet_origin_y);
     let pet_origin = requested_pet_origin
         .filter(|(x, y)| pet_origin_is_visible(&app, *x, *y, pet_window_width, pet_window_height))
@@ -910,7 +884,7 @@ fn default_menu_bar_origin(app: &tauri::AppHandle, width: f64, height: f64) -> O
     Some((
         f64::from(work_area.position.x) + f64::from(work_area.size.width) - physical_width - 18.0,
         f64::from(work_area.position.y)
-            + 12.0_f64.min((f64::from(work_area.size.height) - physical_height).max(12.0)),
+            + 12.0_f64.min((f64::from(work_area.size.height) - physical_height).max(0.0)),
     ))
 }
 
@@ -922,9 +896,11 @@ fn default_pet_origin(
 ) -> Option<(f64, f64)> {
     use tauri::Manager;
 
-    let monitor = app
-        .get_webview_window("main")
-        .and_then(|window| window.current_monitor().ok().flatten())
+    let monitor = frontmost_monitor(app)
+        .or_else(|| {
+            app.get_webview_window("main")
+                .and_then(|window| window.current_monitor().ok().flatten())
+        })
         .or_else(|| app.primary_monitor().ok().flatten())
         .or_else(|| app.available_monitors().ok()?.into_iter().next());
     let Some(monitor) = monitor else {
@@ -935,6 +911,17 @@ fn default_pet_origin(
             _ => Some((1280.0 - width - 24.0, 720.0 - height - 24.0)),
         };
     };
+    Some(default_pet_origin_for_monitor(
+        placement, width, height, &monitor,
+    ))
+}
+
+fn default_pet_origin_for_monitor(
+    placement: &str,
+    width: f64,
+    height: f64,
+    monitor: &tauri::Monitor,
+) -> (f64, f64) {
     let screen = monitor.size();
     let screen_pos = monitor.position();
     let work_area = monitor.work_area();
@@ -951,13 +938,302 @@ fn default_pet_origin(
         height: f64::from(work_area.size.height),
     };
     let scale_factor = monitor.scale_factor();
-    Some(default_pet_origin_for_rects(
+    default_pet_origin_for_rects(
         placement,
         width * scale_factor,
         height * scale_factor,
         screen_rect,
         work_rect,
-    ))
+    )
+}
+
+fn frontmost_monitor(app: &tauri::AppHandle) -> Option<tauri::Monitor> {
+    let (x, y) = native::frontmost_window_center().or_else(native::cursor_position)?;
+    app.available_monitors().ok()?.into_iter().find(|monitor| {
+        let scale_factor = monitor.scale_factor();
+        let position = monitor.position().to_logical::<f64>(scale_factor);
+        let size = monitor.size().to_logical::<f64>(scale_factor);
+        x >= position.x
+            && x < position.x + size.width
+            && y >= position.y
+            && y < position.y + size.height
+    })
+}
+
+fn monitors_match(left: &tauri::Monitor, right: &tauri::Monitor) -> bool {
+    left.position() == right.position() && left.size() == right.size()
+}
+
+fn remap_pet_origin_between_monitors(
+    origin: (f64, f64),
+    source_size: (f64, f64),
+    target_size: (f64, f64),
+    source: &tauri::Monitor,
+    target: &tauri::Monitor,
+) -> (f64, f64) {
+    let source_work = source.work_area();
+    let target_work = target.work_area();
+    let source_max_x =
+        f64::from(source_work.position.x) + f64::from(source_work.size.width) - source_size.0;
+    let source_max_y =
+        f64::from(source_work.position.y) + f64::from(source_work.size.height) - source_size.1;
+    let x_ratio = normalized_position(origin.0, f64::from(source_work.position.x), source_max_x);
+    let y_ratio = normalized_position(origin.1, f64::from(source_work.position.y), source_max_y);
+    (
+        mapped_position(
+            x_ratio,
+            f64::from(target_work.position.x),
+            f64::from(target_work.position.x) + f64::from(target_work.size.width) - target_size.0,
+        ),
+        mapped_position(
+            y_ratio,
+            f64::from(target_work.position.y),
+            f64::from(target_work.position.y) + f64::from(target_work.size.height) - target_size.1,
+        ),
+    )
+}
+
+fn normalized_position(value: f64, lower: f64, upper: f64) -> f64 {
+    if upper <= lower {
+        0.5
+    } else {
+        ((value - lower) / (upper - lower)).clamp(0.0, 1.0)
+    }
+}
+
+fn mapped_position(ratio: f64, lower: f64, upper: f64) -> f64 {
+    if upper <= lower {
+        lower
+    } else {
+        lower + ratio.clamp(0.0, 1.0) * (upper - lower)
+    }
+}
+
+fn schedule_pet_window_tracker_tick(app: &tauri::AppHandle, tracker: PetWindowTracker) {
+    let config = tracker
+        .config
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default();
+    if !config.visible
+        || tracker.paused.load(std::sync::atomic::Ordering::Acquire)
+        || tracker
+            .main_thread_tick_pending
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+    {
+        return;
+    }
+
+    let tick_app = app.clone();
+    let tick_tracker = tracker.clone();
+    if app
+        .run_on_main_thread(move || {
+            let mut moved_between_monitors = false;
+            if let Some(window) = tick_app.get_webview_window("widget-pet-companion") {
+                if !tick_tracker
+                    .paused
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    if let (Some(target), Some(current)) = (
+                        frontmost_monitor(&tick_app),
+                        window.current_monitor().ok().flatten(),
+                    ) {
+                        if !monitors_match(&current, &target) {
+                            let width = config.size.max((config.size + 280.0).min(420.0));
+                            let height = config.size + 390.0;
+                            let source_scale = current.scale_factor();
+                            let target_scale = target.scale_factor();
+                            let next_origin = if config.placement == "custom" {
+                                window.outer_position().ok().map(|position| {
+                                    remap_pet_origin_between_monitors(
+                                        (f64::from(position.x), f64::from(position.y)),
+                                        (width * source_scale, height * source_scale),
+                                        (width * target_scale, height * target_scale),
+                                        &current,
+                                        &target,
+                                    )
+                                })
+                            } else {
+                                Some(default_pet_origin_for_monitor(
+                                    &config.placement,
+                                    width,
+                                    height,
+                                    &target,
+                                ))
+                            };
+                            if let Some((x, y)) = next_origin {
+                                moved_between_monitors = window
+                                    .set_position(tauri::PhysicalPosition::new(
+                                        x.round() as i32,
+                                        y.round() as i32,
+                                    ))
+                                    .is_ok();
+                                if moved_between_monitors {
+                                    // Move the hidden lifecycle host first, copy the final
+                                    // frame without drawing an intermediate position, then
+                                    // reveal the NSPanel once on the target Space.
+                                    sync_native_pet_panel_from_host(&window, false);
+                                }
+                                if moved_between_monitors && config.placement == "custom" {
+                                    let _ = tick_app.emit_to(
+                                        "main",
+                                        "focus-pet-companion-moved",
+                                        PetWindowFollowEvent {
+                                            x,
+                                            y,
+                                            phase: "follow",
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    recover_pet_window_active_space(&window, moved_between_monitors);
+                }
+            }
+            tick_tracker
+                .main_thread_tick_pending
+                .store(false, std::sync::atomic::Ordering::Release);
+        })
+        .is_err()
+    {
+        tracker
+            .main_thread_tick_pending
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn start_pet_window_tracker(app: &tauri::AppHandle, tracker: PetWindowTracker) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        schedule_pet_window_tracker_tick(&app, tracker.clone());
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_workspace_observers(
+    app: &tauri::AppHandle,
+    runtime: NativeRuntimeService,
+    tracker: PetWindowTracker,
+) {
+    use block2::RcBlock;
+    use objc2_app_kit::{
+        NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification,
+        NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidWakeNotification,
+        NSWorkspaceScreensDidSleepNotification, NSWorkspaceScreensDidWakeNotification,
+        NSWorkspaceSessionDidBecomeActiveNotification,
+        NSWorkspaceSessionDidResignActiveNotification, NSWorkspaceWillSleepNotification,
+    };
+    use objc2_foundation::NSNotification;
+    use std::ptr::NonNull;
+
+    let workspace = NSWorkspace::sharedWorkspace();
+    let center = workspace.notificationCenter();
+    let notifications = unsafe {
+        [
+            (
+                NSWorkspaceDidActivateApplicationNotification,
+                "applicationActivated",
+            ),
+            (
+                NSWorkspaceActiveSpaceDidChangeNotification,
+                "activeSpaceChanged",
+            ),
+            (NSWorkspaceWillSleepNotification, "willSleep"),
+            (NSWorkspaceDidWakeNotification, "didWake"),
+            (NSWorkspaceScreensDidSleepNotification, "screensDidSleep"),
+            (NSWorkspaceScreensDidWakeNotification, "screensDidWake"),
+            (
+                NSWorkspaceSessionDidResignActiveNotification,
+                "sessionInactive",
+            ),
+            (
+                NSWorkspaceSessionDidBecomeActiveNotification,
+                "sessionActive",
+            ),
+        ]
+    };
+    for (name, kind) in notifications {
+        let app = app.clone();
+        let runtime = runtime.clone();
+        let tracker = tracker.clone();
+        let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
+            let monitor_handoff = app
+                .get_webview_window("widget-pet-companion")
+                .and_then(|window| {
+                    let current = window.current_monitor().ok().flatten()?;
+                    let target = frontmost_monitor(&app)?;
+                    Some(!monitors_match(&current, &target))
+                })
+                .unwrap_or(false);
+            if kind == "activeSpaceChanged" || monitor_handoff {
+                if let Some(window) = app.get_webview_window("widget-pet-companion") {
+                    // An all-Spaces panel otherwise appears at its old coordinates
+                    // before the frontmost display has settled. Keep it hidden for
+                    // the short coordinate handoff and reveal only the final frame.
+                    hide_native_pet_panel(&window);
+                }
+                let follow_app = app.clone();
+                let follow_tracker = tracker.clone();
+                let settle_delay = if kind == "activeSpaceChanged" { 80 } else { 0 };
+                std::thread::spawn(move || {
+                    if settle_delay > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(settle_delay));
+                    }
+                    schedule_pet_window_tracker_tick(&follow_app, follow_tracker);
+                });
+            } else {
+                schedule_pet_window_tracker_tick(&app, tracker.clone());
+            }
+            match kind {
+                "willSleep" | "screensDidSleep" => {
+                    if let Err(error) = runtime.handle_system_sleep(&app) {
+                        log::warn!("macOS {kind} runtime update failed: {error}");
+                    }
+                }
+                "didWake" | "screensDidWake" => {
+                    let app = app.clone();
+                    let runtime = runtime.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = runtime.handle_system_wake(&app) {
+                            log::warn!("macOS wake runtime refresh failed: {error}");
+                        }
+                    });
+                }
+                _ => {
+                    let app = app.clone();
+                    let runtime = runtime.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = runtime.refresh_now(&app) {
+                            log::warn!("macOS workspace runtime refresh failed: {error}");
+                        }
+                    });
+                }
+            }
+        });
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
+        };
+        // NSNotificationCenter owns the observer for the lifetime of this
+        // resident process. Keeping our retain prevents an accidental teardown
+        // when setup returns.
+        std::mem::forget(observer);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_macos_workspace_observers(
+    _app: &tauri::AppHandle,
+    _runtime: NativeRuntimeService,
+    _tracker: PetWindowTracker,
+) {
 }
 
 /// A saved custom location can point at a disconnected monitor. Do not restore a
@@ -1113,6 +1389,10 @@ fn sync_widget_window(
 ) -> Result<(), String> {
     use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
+    if label == "widget-pet-companion" {
+        return sync_pet_companion_window(app, url, visible, width, height, origin);
+    }
+
     if visible {
         let origin = origin.map(|value| visible_widget_origin(app, value, width, height));
         if let Some(window) = app.get_webview_window(label) {
@@ -1162,6 +1442,267 @@ fn sync_widget_window(
     }
     Ok(())
 }
+
+fn sync_pet_companion_window(
+    app: &tauri::AppHandle,
+    url: &str,
+    visible: bool,
+    width: f64,
+    height: f64,
+    origin: Option<(f64, f64)>,
+) -> Result<(), String> {
+    use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+
+    let origin = origin.map(|value| visible_widget_origin(app, value, width, height));
+    let window = match app.get_webview_window("widget-pet-companion") {
+        Some(window) => window,
+        None => {
+            let mut builder =
+                WebviewWindowBuilder::new(app, "widget-pet-companion", WebviewUrl::App(url.into()))
+                    .title("Focus Pet Companion Host")
+                    .inner_size(width, height)
+                    .resizable(false)
+                    .decorations(false)
+                    .transparent(true)
+                    .shadow(false)
+                    .skip_taskbar(true)
+                    // This NSWindow is only a Tauri/WKWebView lifecycle host.
+                    // A genuine nonactivating NSPanel owns the WebView on macOS.
+                    .visible(cfg!(not(target_os = "macos")));
+            if let Some((x, y)) = origin {
+                builder = builder.position(x, y);
+            }
+            builder.build().map_err(|error| error.to_string())?
+        }
+    };
+
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    if let Some((x, y)) = origin {
+        window
+            .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+            .map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if visible {
+            configure_widget_macos_window(&window);
+        } else {
+            hide_native_pet_panel(&window);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.set_always_on_top(true).ok();
+        window.set_visible_on_all_workspaces(true).ok();
+        window.set_shadow(false).ok();
+        if visible {
+            window.show().map_err(|error| error.to_string())?;
+        } else {
+            window.hide().map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn configure_widget_macos_window(window: &tauri::WebviewWindow) {
+    if window.label() != "widget-pet-companion" {
+        return;
+    }
+    let target = window.clone();
+    let _ = window.with_webview(move |webview| {
+        create_or_update_native_pet_panel(&target, webview.inner());
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_widget_macos_window(_window: &tauri::WebviewWindow) {}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// AppKit windows are main-thread confined. Keeping the strong reference in
+    /// main-thread local storage makes that invariant explicit and avoids
+    /// smuggling an NSPanel through a Send/Sync Rust state container.
+    static NATIVE_PET_PANEL: std::cell::RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSPanel>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn pet_panel_collection_behavior() -> objc2_app_kit::NSWindowCollectionBehavior {
+    use objc2_app_kit::NSWindowCollectionBehavior;
+    NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::FullScreenAuxiliary
+}
+
+#[cfg(target_os = "macos")]
+fn create_or_update_native_pet_panel(
+    host: &tauri::WebviewWindow,
+    webview_ptr: *mut std::ffi::c_void,
+) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSPanel,
+        NSView, NSWindow, NSWindowStyleMask,
+    };
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::error!("refused to create pet NSPanel away from the AppKit main thread");
+        return;
+    };
+    let Ok(host_ptr) = host.ns_window() else {
+        return;
+    };
+    if host_ptr.is_null() || webview_ptr.is_null() {
+        return;
+    }
+    let host_window: &NSWindow = unsafe { &*host_ptr.cast() };
+
+    NATIVE_PET_PANEL.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            let frame = host_window.frame();
+            let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+                mtm.alloc(),
+                frame,
+                NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+                NSBackingStoreType::Buffered,
+                false,
+            );
+            panel.setCollectionBehavior(pet_panel_collection_behavior());
+            panel.setFloatingPanel(true);
+            panel.setHidesOnDeactivate(false);
+            panel.setBecomesKeyOnlyIfNeeded(true);
+            panel.setHasShadow(false);
+            panel.setOpaque(false);
+            panel.setBackgroundColor(Some(&NSColor::clearColor()));
+            panel.setLevel(NSFloatingWindowLevel);
+            panel.setExcludedFromWindowsMenu(true);
+            panel.setMovable(false);
+            panel.setMovableByWindowBackground(false);
+            panel.setAcceptsMouseMovedEvents(true);
+            unsafe {
+                panel.setReleasedWhenClosed(false);
+            }
+
+            let webview: &NSView = unsafe { &*webview_ptr.cast() };
+            webview.removeFromSuperview();
+            panel.setContentView(Some(webview));
+            webview.setFrame(panel.contentLayoutRect());
+            webview.setAutoresizingMask(
+                NSAutoresizingMaskOptions::ViewWidthSizable
+                    | NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
+            host_window.orderOut(None);
+            log::info!(
+                "created native desktop pet panel: class=NSPanel, nonactivating=true, all_spaces=true"
+            );
+            *slot = Some(panel);
+        }
+
+        if let Some(panel) = slot.as_ref() {
+            panel.setFrame_display(host_window.frame(), true);
+            panel.setCollectionBehavior(pet_panel_collection_behavior());
+            panel.orderFrontRegardless();
+            host_window.orderOut(None);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn sync_native_pet_panel_from_host(window: &tauri::WebviewWindow, display: bool) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        use objc2_app_kit::NSWindow;
+
+        let Ok(host_ptr) = target.ns_window() else {
+            return;
+        };
+        if host_ptr.is_null() {
+            return;
+        }
+        let host: &NSWindow = unsafe { &*host_ptr.cast() };
+        let updated = NATIVE_PET_PANEL.with(|slot| {
+            if let Some(panel) = slot.borrow().as_ref() {
+                panel.setFrame_display(host.frame(), display);
+                host.orderOut(None);
+                true
+            } else {
+                false
+            }
+        });
+        if !updated {
+            configure_widget_macos_window(&target);
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_native_pet_panel_from_host(_window: &tauri::WebviewWindow, _display: bool) {}
+
+#[cfg(target_os = "macos")]
+fn hide_native_pet_panel(window: &tauri::WebviewWindow) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        use objc2_app_kit::NSWindow;
+
+        NATIVE_PET_PANEL.with(|slot| {
+            if let Some(panel) = slot.borrow().as_ref() {
+                panel.orderOut(None);
+            }
+        });
+        if let Ok(host_ptr) = target.ns_window() {
+            if !host_ptr.is_null() {
+                let host: &NSWindow = unsafe { &*host_ptr.cast() };
+                host.orderOut(None);
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn set_native_pet_panel_ignores_mouse_events(window: &tauri::WebviewWindow, ignores: bool) {
+    let target = window.clone();
+    let _ = window.with_webview(move |webview| {
+        create_or_update_native_pet_panel(&target, webview.inner());
+        NATIVE_PET_PANEL.with(|slot| {
+            if let Some(panel) = slot.borrow().as_ref() {
+                panel.setIgnoresMouseEvents(ignores);
+            }
+        });
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_pet_panel_ignores_mouse_events(window: &tauri::WebviewWindow, ignores: bool) {
+    window.set_ignore_cursor_events(ignores).ok();
+}
+
+#[cfg(target_os = "macos")]
+fn recover_pet_window_active_space(window: &tauri::WebviewWindow, emit_wake: bool) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let recovered = NATIVE_PET_PANEL.with(|slot| {
+            if let Some(panel) = slot.borrow().as_ref() {
+                panel.setCollectionBehavior(pet_panel_collection_behavior());
+                panel.orderFrontRegardless();
+                true
+            } else {
+                false
+            }
+        });
+        if !recovered {
+            configure_widget_macos_window(&target);
+        }
+        if emit_wake {
+            let _ = target.emit("focus-pet-companion-wake", ());
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn recover_pet_window_active_space(_window: &tauri::WebviewWindow, _emit_wake: bool) {}
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -1357,10 +1898,12 @@ fn install_tray(_app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         clamp_origin_to_work_area, default_pet_origin_for_rects, installation_snapshot_for_path,
-        is_native_menu_action, is_running_from_mounted_volume_path, rect_contains_origin, Rect,
+        is_native_menu_action, is_running_from_mounted_volume_path, mapped_position,
+        normalized_position, rect_contains_origin, Rect,
     };
     use std::path::Path;
     #[cfg(target_os = "windows")]
@@ -1416,6 +1959,19 @@ mod tests {
             clamp_origin_to_work_area((-1800.0, 120.0), 450.0, 300.0, left_monitor_work),
             (-1800.0, 120.0)
         );
+    }
+
+    #[test]
+    fn pet_screen_follow_preserves_relative_position() {
+        let ratio = normalized_position(370.0, 100.0, 1000.0);
+        assert!((ratio - 0.3).abs() < f64::EPSILON);
+        assert!((mapped_position(ratio, -1920.0, -420.0) - (-1470.0)).abs() < f64::EPSILON);
+        let reverse_ratio = normalized_position(-1470.0, -1920.0, -420.0);
+        assert!((reverse_ratio - ratio).abs() < f64::EPSILON);
+        assert!((mapped_position(reverse_ratio, 100.0, 1000.0) - 370.0).abs() < f64::EPSILON);
+        assert_eq!(mapped_position(-1.0, 100.0, 1000.0), 100.0);
+        assert_eq!(mapped_position(2.0, 100.0, 1000.0), 1000.0);
+        assert_eq!(normalized_position(50.0, 100.0, 100.0), 0.5);
     }
 
     #[test]
@@ -1605,6 +2161,16 @@ pub fn run() {
         )
         .setup(|app| {
             app.manage(SystemMonitorState::new());
+            let pet_window_tracker = PetWindowTracker::default();
+            let native_runtime =
+                NativeRuntimeService::new(app.handle()).map_err(std::io::Error::other)?;
+            native_runtime.start(app.handle().clone());
+            install_macos_workspace_observers(
+                app.handle(),
+                native_runtime.clone(),
+                pet_window_tracker.clone(),
+            );
+            app.manage(native_runtime);
             let codex_sessions = CodexSessionManager::new();
             let ssh_sessions = SshSessionManager::new();
             start_codex_session_event_bridges(
@@ -1612,8 +2178,11 @@ pub fn run() {
                 codex_sessions.clone(),
                 ssh_sessions.clone(),
             );
+            start_default_codex_integrations(codex_sessions.clone(), ssh_sessions.clone());
             app.manage(codex_sessions);
             app.manage(ssh_sessions);
+            start_pet_window_tracker(app.handle(), pet_window_tracker.clone());
+            app.manage(pet_window_tracker);
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(desktop)]
@@ -1643,11 +2212,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_snapshot,
             save_snapshot,
-            export_snapshot,
-            delete_all_data,
+            native_runtime_snapshot,
             perform_menu_bar_action,
             quit_app,
-            data_size,
             sample_activity,
             sample_system_metrics,
             drain_agent_events,
@@ -1669,21 +2236,17 @@ pub fn run() {
             connect_codex_ssh_host,
             drain_codex_ssh_events,
             codex_ssh_connection_status,
-            permission_snapshot,
             app_icon,
             installation_snapshot,
-            open_system_settings,
-            open_log_folder,
-            data_storage_path,
-            open_data_folder,
-            current_log_file,
-            append_log_entry,
             choose_and_import_pet_pack,
             import_pet_pack_from_path,
             list_pet_packs,
             pet_pack_assets,
             delete_pet_pack,
             deliver_notification,
+            set_pet_window_tracking_paused,
+            set_pet_panel_position,
+            set_pet_panel_ignores_mouse_events,
             sync_widget_windows
         ])
         .run(tauri::generate_context!())
@@ -1707,7 +2270,7 @@ fn start_codex_session_event_bridges(
                 let _ = local_app.emit("codex-session-events", events);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(std::time::Duration::from_millis(500));
     });
 
     let ssh_app = app.clone();
@@ -1717,6 +2280,45 @@ fn start_codex_session_event_bridges(
                 let _ = ssh_app.emit("codex-session-events", events);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    });
+}
+
+/// Configure the privacy-preserving Codex integration on every app launch.
+/// All operations are idempotent and run away from the UI thread. SSH hosts
+/// are connected independently so one offline alias cannot delay a live host.
+fn start_default_codex_integrations(codex: CodexSessionManager, ssh: SshSessionManager) {
+    std::thread::spawn(move || {
+        let _ = codex_sessions::set_sync_preferences(CodexSyncPreferences::default());
+        if let Err(error) = codex_sessions::install_hooks() {
+            log::warn!("Codex Hook automatic setup skipped: {error}");
+        }
+        match codex_sessions::start_managed_daemon() {
+            Ok(true) => codex_sessions::start_managed_event_stream(codex),
+            Ok(false) => {}
+            Err(error) => log::warn!("Codex App Server automatic setup unavailable: {error}"),
+        }
+
+        let hosts = match ssh_sessions::discover_hosts() {
+            Ok(hosts) => hosts,
+            Err(error) => {
+                log::warn!("Codex SSH host discovery failed: {error}");
+                return;
+            }
+        };
+        for host in hosts {
+            let manager = ssh.clone();
+            std::thread::spawn(move || {
+                loop {
+                    if let Err(error) = manager.connect(&host.alias) {
+                        log::info!("Codex SSH host {} is unavailable: {error}", host.alias);
+                    }
+                    // `connect` is idempotent while a live/reconnecting worker
+                    // owns the host. This supervisor only retries failures that
+                    // happened before a worker could be established.
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                }
+            });
+        }
     });
 }

@@ -5,8 +5,6 @@
 
 @media (prefers-reduced-transparency:reduce){.settings-content-panel{background:var(--card)!important;backdrop-filter:none!important}}
 
-.permission-list button{min-height:56px;border:1px solid var(--border-soft);border-radius:14px;background:var(--card-soft);display:grid;align-items:center;gap:12px;padding:10px 12px;text-align:left}
-
 .command-button{border:1px solid transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;color:var(--text-primary)}
 
 .command-button{min-height:38px;padding:0 13px;border-radius:12px}
@@ -18,8 +16,6 @@
 .command-button.primary{background:var(--focus-500);color:var(--card)}
 
 .command-button.danger{background:var(--error-bg);color:var(--error);border-color:color-mix(in oklab,var(--error),white 70%)}
-
-.permission-list em{color:var(--text-tertiary);font-style:normal;font-size:13px}
 
 @media (max-width:980px){.rule-form{grid-template-columns:1fr}}
 
@@ -75,13 +71,13 @@
 
 .pet-settings-shell>.status-success{grid-column:2}
 
-.pet-settings-shell>.status-privacy{grid-column:2}
+.pet-settings-shell>.status-info{grid-column:2}
 
 .pet-settings-shell:has(>.status-focus)>.status-focus{grid-column:2}
 
 .pet-settings-shell:has(>.status-focus)>.status-success{grid-column:2}
 
-.pet-settings-shell:has(>.status-focus)>.status-privacy{grid-column:2}
+.pet-settings-shell:has(>.status-focus)>.status-info{grid-column:2}
 
 .settings-subcard h3{color:var(--text-primary);font-weight:700}
 
@@ -147,8 +143,6 @@
 
 .action-select-list{display:grid;gap:9px}
 
-.permission-list{display:grid;gap:9px}
-
 .session-input-row{display:grid;grid-template-columns:minmax(0,1fr) 130px;gap:10px;margin-bottom:12px}
 
 .rule-form{display:grid;grid-template-columns:minmax(0,1fr) 130px;gap:10px;margin-bottom:12px}
@@ -174,8 +168,6 @@
 .settings-subsection{display:grid;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border-soft)}
 
 .settings-subsection>strong{font-size:13px;color:var(--text-secondary)}
-
-.permission-list button{grid-template-columns:24px minmax(0,1fr) auto}
 
 .export-link{display:inline-flex;margin-top:10px;color:var(--focus-600);text-decoration:none}
 
@@ -211,33 +203,25 @@
 
 .recognition-diagnostic-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 
-.permission-refresh-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-
 .settings-right-actions{display:flex;align-items:center;justify-content:space-between;gap:10px}
 
 .settings-icon-button{width:27px;height:25px;display:inline-grid;place-items:center;border:1px solid var(--border-default);border-radius:8px;background:rgba(255,255,255,0.66);color:var(--text-secondary)}
 
 .recognition-summary-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin-top:9px;padding:9px;border:1px solid rgba(213,226,238,0.9);border-radius:9px;background:rgba(255,255,255,0.58)}
 
-.data-summary-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin-top:9px;padding:9px;border:1px solid rgba(213,226,238,0.9);border-radius:9px;background:rgba(255,255,255,0.58)}
-
 .settings-list-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin-top:9px;padding:9px;border:1px solid rgba(213,226,238,0.9);border-radius:9px;background:rgba(255,255,255,0.58)}
 
 .settings-list-row{grid-template-columns:auto minmax(0,1fr) auto auto auto;margin-top:0}
 
-.recognition-summary-row strong{display:block;color:var(--text-primary);font-size:12px;font-weight:780}
+.settings-list-row .settings-toggle-pill{min-height:34px;white-space:nowrap}
 
-.data-summary-row strong{display:block;color:var(--text-primary);font-size:12px;font-weight:780}
+.recognition-summary-row strong{display:block;color:var(--text-primary);font-size:12px;font-weight:780}
 
 .settings-list-row strong{display:block;color:var(--text-primary);font-size:12px;font-weight:780}
 
 .recognition-summary-row small{display:block;color:var(--away-500);font-size:11px;font-weight:620}
 
-.data-summary-row small{display:block;color:var(--away-500);font-size:11px;font-weight:620}
-
 .settings-list-row small{display:block;color:var(--away-500);font-size:11px;font-weight:620}
-
-.permission-refresh-row small{display:block;color:var(--away-500);font-size:11px;font-weight:620}
 
 .recognition-category-dot{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:9px;background:rgba(90,166,248,0.12);color:var(--focus-500);font-size:12px;font-weight:850}
 
@@ -266,6 +250,12 @@
 .recognition-window-title{margin:8px 0 0;padding:8px;border-radius:8px;background:rgba(255,255,255,0.6);color:var(--text-secondary);font-size:11px;font-weight:620}
 
 .settings-warning-line{margin:8px 0 0;padding:8px;border-radius:8px;background:rgba(255,255,255,0.6);color:var(--text-secondary);font-size:11px;font-weight:620}
+
+.settings-advanced-toggle{justify-self:start;padding:4px 0;border:0;background:transparent;color:var(--focus-600);font-size:11px;font-weight:740;cursor:pointer}
+
+.settings-advanced-toggle:active{transform:scale(.98)}
+
+.codex-advanced-settings{padding-top:2px}
 
 .settings-warning-line{color:var(--distracted-600);background:rgba(222,127,105,0.1)}
 
@@ -317,10 +307,6 @@
 
 .settings-list-stack{display:grid;gap:8px}
 
-.data-summary-row{margin-top:0}
-
-.data-summary-row em{color:var(--text-primary);font-size:15px;font-style:normal;font-weight:820}
-
 .swift-about-copy{padding:0}
 
 .swift-about-copy small{color:var(--text-tertiary);font-size:11px;font-weight:650}
@@ -329,13 +315,9 @@
 
 @media (max-width:760px){.recognition-summary-row{grid-template-columns:auto minmax(0,1fr)}}
 
-@media (max-width:760px){.data-summary-row{grid-template-columns:auto minmax(0,1fr)}}
-
 @media (max-width:760px){.settings-list-row .command-button{grid-column:2;justify-self:start}}
 
 @media (max-width:760px){.settings-status-badge{grid-column:2;justify-self:start}}
-
-@media (max-width:760px){.data-summary-row em{grid-column:2;justify-self:start}}
 
 @media (max-width:760px){.settings-number-stepper{grid-template-columns:1fr}}
 
@@ -379,8 +361,6 @@
 
 .recognition-summary-row{border-color:var(--border-soft);border-radius:9px;background:var(--card);box-shadow:none}
 
-.data-summary-row{border-color:var(--border-soft);border-radius:9px;background:var(--card);box-shadow:none}
-
 .settings-list-row{border-color:var(--border-soft);border-radius:9px;background:var(--card);box-shadow:none}
 
 .settings-toggle-pill{border-color:var(--border-soft);border-radius:9px;background:var(--card);box-shadow:none}
@@ -418,8 +398,6 @@
 .recognition-diagnostic-panel{padding:14px}
 
 .recognition-summary-row{background:rgba(255,255,255,0.94)}
-
-.data-summary-row{background:rgba(255,255,255,0.94)}
 
 .settings-list-row{background:rgba(255,255,255,0.94)}
 
@@ -473,9 +451,8 @@
 
 .settings-subcard.danger{border-color:var(--error);background:var(--error-bg)}
 
-/* Codex is configured as an explicit local integration, not a hidden
-   notification source. Keep the lifecycle, privacy and SSH controls readable
-   at a glance on both wide and narrow Settings layouts. */
+/* Codex lifecycle and SSH controls remain readable at a glance on both wide
+   and narrow Settings layouts. */
 .codex-sync-panel{display:grid;gap:11px;padding:13px;border:1px solid color-mix(in srgb,var(--pet-500,var(--focus-500)) 28%,var(--border-soft));border-radius:var(--radius-large);background:linear-gradient(135deg,color-mix(in srgb,var(--pet-100,var(--focus-100)) 54%,var(--card)),var(--card));box-shadow:inset 0 1px 0 rgb(255 255 255/0.76)}
 
 .codex-sync-panel>header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px}
@@ -524,10 +501,6 @@
 
 .codex-daemon-prerequisite.status-warning svg{color:var(--distracted-600)}
 
-.codex-sync-privacy-note{display:flex;align-items:flex-start;gap:7px;padding:8px 9px;border-radius:9px;background:color-mix(in srgb,var(--card) 74%,transparent);color:var(--text-secondary);font-size:10px;font-weight:650;line-height:1.5}
-
-.codex-sync-privacy-note svg{flex:0 0 auto;margin-top:1px;color:var(--pet-600,var(--focus-600))}
-
 .settings-inline-action>span{display:inline-flex;align-items:center;gap:6px;min-width:0}
 
 .codex-ssh-add-form{display:grid;grid-template-columns:minmax(170px,1.4fr) repeat(4,minmax(88px,1fr)) auto;align-items:center;gap:7px;padding:9px;border:1px dashed color-mix(in srgb,var(--focus-500) 38%,var(--border-soft));border-radius:var(--radius-large);background:color-mix(in srgb,var(--focus-100) 30%,var(--card));font-size:10px;font-weight:720;color:var(--text-secondary)}
@@ -565,11 +538,11 @@
 /* Settings are a continuous page; there is no secondary navigation rail. */
 .swift-settings-page{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
 
-.settings-content-panel.settings-module-recognition,.settings-content-panel.settings-module-data{grid-column:1/-1}
+.settings-content-panel.settings-module-recognition{grid-column:1/-1}
 
 @media (max-width:900px){.swift-settings-page{grid-template-columns:1fr}}
 
-@media (max-width:900px){.settings-content-panel.settings-module-recognition,.settings-content-panel.settings-module-data{grid-column:auto}}
+@media (max-width:900px){.settings-content-panel.settings-module-recognition{grid-column:auto}}
 
 /* Resource packs lead the pet page as a horizontal shelf. */
 .pet-settings-shell{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
@@ -580,16 +553,16 @@
 
 .pet-settings-shell>.status-success{grid-column:1}
 
-.pet-settings-shell>.status-privacy{grid-column:2}
+.pet-settings-shell>.status-info{grid-column:2}
 
 @media (max-width:760px){.pet-settings-shell{grid-template-columns:1fr}}
 
-@media (max-width:760px){.pet-settings-shell>.status-success,.pet-settings-shell>.status-privacy{grid-column:1}}
+@media (max-width:760px){.pet-settings-shell>.status-success,.pet-settings-shell>.status-info{grid-column:1}}
 
 /* Each settings module is a full-width reading row; avoid half-empty desktop cards. */
 .swift-settings-page{grid-template-columns:minmax(0,1fr);gap:14px}
 
-.settings-content-panel,.settings-content-panel.settings-module-recognition,.settings-content-panel.settings-module-data{grid-column:1}
+.settings-content-panel,.settings-content-panel.settings-module-recognition{grid-column:1}
 
 /* Display behavior and appearance follow the same full-width rhythm as pack settings. */
 .pet-settings-shell{grid-template-columns:minmax(0,1fr)}
@@ -597,6 +570,11 @@
 .pet-settings-shell>.status-pet,
 .pet-settings-shell:has(>.status-focus)>.status-focus,
 .pet-settings-shell:has(>.status-focus)>.status-success,
-.pet-settings-shell:has(>.status-focus)>.status-privacy,
+.pet-settings-shell:has(>.status-focus)>.status-info,
 .pet-settings-shell>.status-success,
-.pet-settings-shell>.status-privacy{grid-column:1/-1;grid-row:auto;position:static}
+.pet-settings-shell>.status-info{grid-column:1/-1;grid-row:auto;position:static}
+
+.pet-settings-shell,
+.pet-settings-section,
+.settings-module-nav,
+.settings-content-panel{backdrop-filter:none}

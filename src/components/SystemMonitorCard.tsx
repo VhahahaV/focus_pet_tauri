@@ -161,7 +161,7 @@ export const SystemMonitorCard = () => {
   };
 
   return (
-    <SemanticCard status="privacy" className="system-monitor-card">
+    <SemanticCard status="info" className="system-monitor-card">
       <div className="system-monitor-header">
         <div>
           <span><Gauge size={16} /></span>

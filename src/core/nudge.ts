@@ -22,7 +22,12 @@ export const defaultPetIntentForNudgeReason = (reason: NudgeReason): PetIntentKi
     case "distractedStrong":
     case "frequentSwitching":
       return "nudgeStrong";
+    case "longFocusRest":
+    case "veryLongFocusRest":
+      return "taskCompleted";
     case "focusSessionCompleted":
+      return "taskCompleted";
+    case "breakEnding":
       return "taskCompleted";
     case "welcomeBack":
       return "welcomeBack";
@@ -35,8 +40,13 @@ const cooldownReasons = (reason: NudgeReason): NudgeReason[] => {
     case "distractedStrong":
     case "frequentSwitching":
       return ["distractedOverThreshold", "distractedStrong", "frequentSwitching"];
+    case "longFocusRest":
+    case "veryLongFocusRest":
+      return ["longFocusRest", "veryLongFocusRest"];
     case "focusSessionCompleted":
       return ["focusSessionCompleted"];
+    case "breakEnding":
+      return ["breakEnding"];
     case "welcomeBack":
       return ["welcomeBack"];
   }
@@ -44,6 +54,9 @@ const cooldownReasons = (reason: NudgeReason): NudgeReason[] => {
 
 const cooldownSeconds = (reason: NudgeReason, thresholds: NudgePolicyThresholds): number => {
   switch (reason) {
+    case "longFocusRest":
+    case "veryLongFocusRest":
+      return Math.max(thresholds.cooldownSeconds, 30 * 60);
     case "welcomeBack":
       return Math.max(thresholds.cooldownSeconds, 2 * 60 * 60);
     default:
@@ -108,6 +121,7 @@ export const evaluateNudge = (
         return event("distractedOverThreshold", state, now, "nudgeGentle", "回到任务 2 分钟", lastTriggeredAt, thresholds);
       }
       return undefined;
+    case "break":
     case "away":
       return undefined;
   }
@@ -125,6 +139,10 @@ export const reminderAllowsReason = (
     case "distractedStrong":
     case "frequentSwitching":
       return flags.enableDistractedNudges;
+    case "longFocusRest":
+    case "veryLongFocusRest":
+    case "breakEnding":
+      return false;
     case "focusSessionCompleted":
       return true;
     case "welcomeBack":

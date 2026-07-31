@@ -8,6 +8,7 @@ import type {
   InstallationSnapshot,
   LocalStoreSnapshot,
   NativeActivitySample,
+  NativeRuntimeEnvelope,
 } from "../core/types";
 import { sanitizeWindowTitle } from "../core/activity";
 import { ActivityClassifier, loadCatalogEntries } from "../core/classification";
@@ -15,10 +16,10 @@ import { activeFocusSession } from "../core/sessions";
 import { buildDailySummary } from "../core/summary";
 import { inputWorkloadSummary, makeInputTimelineSnapshot } from "../core/timeline";
 import { dayBounds } from "../core/utils";
-import { makePetIntent } from "../core/pet";
-import { codexBubble, reduceCodexEvents, type CodexIntegrationStatus, type CodexSessionSnapshot, type CodexSyncPreferences, type SshConnectionStatus, type SshHostCandidate, type SshHostDiagnostic } from "../core/codexSessions";
+import { intentKindForState, makePetIntent } from "../core/pet";
+import { codexBubble, onlyActiveCodexSessions, reduceActiveCodexEvents, reduceCodexEvents, type CodexIntegrationStatus, type CodexSessionSnapshot, type CodexSyncPreferences, type SshConnectionStatus, type SshHostCandidate, type SshHostDiagnostic } from "../core/codexSessions";
 import type { PetPackRecord } from "../resources/petPack";
-import { deleteAllData, emptySnapshot, exportSnapshot, loadSnapshot, pruneSnapshotForRetention, saveSnapshot } from "../store/localStore";
+import { emptySnapshot, loadSnapshot, normalizeSnapshot, pruneSnapshotForRetention, saveSnapshot } from "../store/localStore";
 import {
   nativeActivitySample,
   nativeConnectCodexSshHost,
@@ -26,8 +27,6 @@ import {
   nativeCodexIntegrationStatus,
   nativeSetCodexSyncPreferences,
   nativeCodexSessionSnapshot,
-  nativeDrainCodexSessionEvents,
-  nativeDrainCodexSshEvents,
   nativeDiscoverCodexSshHosts,
   nativeForgetCodexSshHost,
   nativeDiagnoseCodexSshHost,
@@ -38,32 +37,23 @@ import {
   nativeStartCodexManagedDaemon,
   nativeUninstallCodexSshHost,
   nativeUninstallCodexHooks,
-  nativeAppendLogEntry,
   nativeDrainAgentEvents,
-  nativeDataSize,
-  nativeDataStoragePath,
   nativeDeletePetPack,
   nativeDeliverNotification,
-  nativeCurrentLogFile,
   nativeImportPetPack,
   nativeImportPetPackFromPath,
   nativeInstallationSnapshot,
   nativeListPetPacks,
-  nativeOpenLogFolder,
-  nativeOpenDataFolder,
-  nativeOpenSystemSettings,
   nativePetPackAssets,
-  nativePermissionSnapshot,
+  nativeRuntimeSnapshot,
   nativeSyncWidgetWindows,
   isTauriRuntime,
 } from "../store/native";
-import { mockPermissionSnapshot } from "./mockNative";
 import { activitySampleForRuntime } from "./activitySampling";
 import {
   advanceRuntime,
   emptyRuntime,
   inputMonitoringPermissionTitle,
-  permissionSnapshotForDisplay,
   runtimeActions,
   runtimeFromSnapshot,
   runtimeSnapshot,
@@ -103,19 +93,7 @@ export interface FocusPetAppController {
     refreshRecognitionDiagnostics: () => Promise<void>;
     togglePetHidden: () => void;
     selectPetPack: (packID: string) => void;
-    exportData: (redacted?: boolean) => Promise<string>;
-    deleteAllData: () => Promise<void>;
     dismissInstallationNotice: () => void;
-    openSystemSettings: (destination: string) => Promise<void>;
-    requestSystemPermission: (destination: string) => Promise<void>;
-    refreshPermissions: () => Promise<void>;
-    sendTestNotification: () => Promise<void>;
-    openLogFolder: () => Promise<void>;
-    openDataFolder: () => Promise<void>;
-    copyDataPath: () => Promise<void>;
-    openCurrentLogFile: () => Promise<void>;
-    copyLogPath: () => Promise<void>;
-    writeDiagnosticsLogSnapshot: () => Promise<void>;
     refreshPetPacks: () => Promise<void>;
     importPetPack: () => Promise<void>;
     importPetPackFromPath: (path: string) => Promise<void>;
@@ -155,6 +133,7 @@ const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
     appUsage: retained.appUsage,
     inputActivity: retained.inputActivity,
     focusSessions: retained.focusSessions,
+    breakSessions: retained.breakSessions,
     nudges: retained.nudges,
   };
   return {
@@ -170,8 +149,61 @@ const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
       retainedState.appUsage,
       retainedState.focusSessions,
       retainedState.nudges,
+      retainedState.breakSessions,
     ),
     todayWorkload: inputWorkloadSummary(retainedState.inputActivity, bounds.start, bounds.end),
+  };
+};
+
+const applyNativeRuntimeEnvelope = (
+  current: RuntimeBundle,
+  envelope: NativeRuntimeEnvelope,
+): RuntimeBundle => {
+  const normalized = normalizeSnapshot(envelope.snapshot);
+  const now = new Date(envelope.currentDecision.timestamp);
+  const stateChanged = current.state.currentDecision.state !== envelope.currentDecision.state;
+  const intentExpired = current.state.currentPetIntent.expiresAt
+    ? new Date(current.state.currentPetIntent.expiresAt) <= now
+    : false;
+  let currentPetIntent = intentExpired
+    ? makePetIntent(intentKindForState(envelope.currentDecision.state), "state", {
+        startedAt: envelope.currentDecision.timestamp,
+      })
+    : current.state.currentPetIntent;
+  let latestPetBubble = intentExpired ? undefined : current.state.latestPetBubble;
+  const isNewNudge = envelope.latestNudge && envelope.latestNudge.id !== current.latestNudge?.id;
+  const protectedIntentActive = !intentExpired
+    && (currentPetIntent.source === "physicalInteraction" || currentPetIntent.source === "agent");
+  if (isNewNudge && envelope.latestNudge && !protectedIntentActive) {
+    const visibleMilliseconds = envelope.latestNudge.reason === "breakEnding" ? 6_000 : 22_000;
+    currentPetIntent = makePetIntent(envelope.latestNudge.petIntent, "nudge", {
+      startedAt: envelope.latestNudge.time,
+      expiresAt: new Date(new Date(envelope.latestNudge.time).getTime() + visibleMilliseconds).toISOString(),
+      message: envelope.latestNudge.message,
+    });
+    latestPetBubble = envelope.latestNudge.message;
+  } else if (currentPetIntent.source === "state") {
+    currentPetIntent = makePetIntent(intentKindForState(envelope.currentDecision.state), "state", {
+      startedAt: stateChanged ? envelope.currentDecision.timestamp : currentPetIntent.startedAt,
+    });
+  }
+  return {
+    ...current,
+    latestNudge: envelope.latestNudge ?? current.latestNudge,
+    state: recomputeDerived({
+      ...current.state,
+      ...normalized,
+      // Settings and classification edits are owned by this WebView. Native
+      // runtime envelopes may have been sampled before the debounced save
+      // reached Rust, so accepting their stale copy would visibly undo a
+      // just-selected theme or toggle.
+      settings: current.state.settings,
+      classificationRules: current.state.classificationRules,
+      currentSnapshot: envelope.currentSnapshot,
+      currentDecision: envelope.currentDecision,
+      currentPetIntent,
+      latestPetBubble,
+    }),
   };
 };
 
@@ -254,6 +286,8 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const [codexSshConnections, setCodexSshConnections] = useState<SshConnectionStatus[]>([]);
   const [codexSshDiagnostics, setCodexSshDiagnostics] = useState<Record<string, SshHostDiagnostic>>({});
   const [ready, setReady] = useState(false);
+  const codexDashboardEnabled = selectedTab === "settings"
+    || bundle.state.settings.codex.showInToday;
   const catalogRef = useRef<ClassificationCatalogEntry[]>([]);
   const saveTimer = useRef<number | undefined>(undefined);
   const pendingSnapshot = useRef<LocalStoreSnapshot | undefined>(undefined);
@@ -261,10 +295,18 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const lastPersistedAt = useRef(0);
   const lastRetentionPruneAt = useRef(Date.now());
   const tickInFlight = useRef<Promise<void> | undefined>(undefined);
+  const lastNativeRuntimeGeneration = useRef(-1);
   const nativeSampleUnavailable = useRef(false);
   const lastNotificationID = useRef<string | undefined>(undefined);
+  const physicalIntentResetTimer = useRef<number | undefined>(undefined);
   const hydratingPetPackIDs = useRef<Set<string>>(new Set());
   const hydratedPetPackIDs = useRef<Set<string>>(new Set());
+
+  const acceptNativeRuntimeEnvelope = useCallback((envelope: NativeRuntimeEnvelope | undefined) => {
+    if (!envelope || envelope.generation <= lastNativeRuntimeGeneration.current) return;
+    lastNativeRuntimeGeneration.current = envelope.generation;
+    setBundle((current) => applyNativeRuntimeEnvelope(current, envelope));
+  }, []);
 
   const flushPersist = useCallback(async (): Promise<void> => {
     window.clearTimeout(saveTimer.current);
@@ -345,19 +387,18 @@ export const useFocusPetApp = (): FocusPetAppController => {
         const initial = runtimeFromSnapshot(loadedSnapshot ?? emptySnapshot(), entries);
         const availablePetPacks = visiblePetPacks(importedPacks, initial.state.settings.pet.hiddenPackIDs);
         setPetPacks(availablePetPacks);
-        const [permissionSnapshot, dataSizeBytes, installationSnapshot] = await Promise.all([
-          startupTimeout(nativePermissionSnapshot(), 900, undefined, () => undefined).catch(() => undefined),
-          startupTimeout(nativeDataSize(), 900, 0, () => undefined).catch(() => 0),
-          startupTimeout(nativeInstallationSnapshot(), 900, undefined, () => undefined).catch(() => undefined),
-        ]);
+        const installationSnapshot = await startupTimeout(
+          nativeInstallationSnapshot(),
+          900,
+          undefined,
+          () => undefined,
+        ).catch(() => undefined);
         if (!cancelled && installationSnapshot && shouldShowInstallationNotice(installationSnapshot)) {
           setInstallationNotice(installationSnapshot);
         }
         const state = ensureSelectedPetPack(
           {
             ...initial.state,
-            permissionSnapshot: permissionSnapshotForDisplay(permissionSnapshot ?? mockPermissionSnapshot()),
-            dataSizeBytes,
             statusMessage: warnings[0] ?? initial.state.statusMessage,
           },
           availablePetPacks,
@@ -402,6 +443,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
   );
 
   const tick = useCallback((): Promise<void> => {
+    if (isTauriRuntime()) {
+      return nativeRuntimeSnapshot()
+        .then(acceptNativeRuntimeEnvelope)
+        .catch(() => undefined);
+    }
     if (tickInFlight.current) return tickInFlight.current;
     const request = (async () => {
       const sample = await sampleActivity();
@@ -437,7 +483,29 @@ export const useFocusPetApp = (): FocusPetAppController => {
       if (tickInFlight.current === request) tickInFlight.current = undefined;
     });
     return request;
-  }, [persist]);
+  }, [acceptNativeRuntimeEnvelope, persist]);
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return undefined;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<NativeRuntimeEnvelope>("focus-pet-native-runtime", (event) => {
+      acceptNativeRuntimeEnvelope(event.payload);
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+        return;
+      }
+      unlisten = dispose;
+      void nativeRuntimeSnapshot()
+        .then(acceptNativeRuntimeEnvelope)
+        .catch(() => undefined);
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [acceptNativeRuntimeEnvelope, ready]);
 
   const refreshRecognitionDiagnostics = useCallback(async () => {
     const sample = await sampleActivity();
@@ -451,7 +519,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
     mutate((state) => {
       const classifier = new ActivityClassifier(state.classificationRules, catalogRef.current);
       const category = classifier.classify(sample.appName, sample.bundleID, sample.windowTitle);
-      const sanitizedTitle = sanitizeWindowTitle(sample.windowTitle, state.settings.privacy);
+      const sanitizedTitle = sanitizeWindowTitle(sample.windowTitle);
       return {
         ...state,
         recognitionDiagnostic: {
@@ -470,28 +538,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
           defaultRuleCount: classifier.defaultRules.length,
           userRuleCount: state.classificationRules.length,
           inputMonitoringStatus: inputMonitoringPermissionTitle(sample.inputMonitoringStatus),
-          recordingPaused: state.settings.privacy.pauseActivityRecording,
         },
         statusMessage: "识别诊断已刷新。",
       };
     });
   }, [mutate]);
-
-  const refreshPermissionStatus = useCallback(
-    async (statusMessage = "权限状态已刷新。") => {
-      const [permissionSnapshot, dataSizeBytes] = await Promise.all([
-        nativePermissionSnapshot().catch(() => undefined),
-        nativeDataSize().catch(() => 0),
-      ]);
-      mutate((state) => ({
-        ...state,
-        permissionSnapshot: permissionSnapshotForDisplay(permissionSnapshot ?? mockPermissionSnapshot()),
-        dataSizeBytes,
-        statusMessage,
-      }));
-    },
-    [mutate],
-  );
 
   const refreshPetPacks = useCallback(async () => {
     try {
@@ -608,98 +659,75 @@ export const useFocusPetApp = (): FocusPetAppController => {
   }, [mutate, ready]);
 
   useEffect(() => {
-    if (!ready || !isTauriRuntime()) return undefined;
+    if (!ready || !isTauriRuntime() || !codexDashboardEnabled) return undefined;
     let disposed = false;
-    let polling = false;
-    const refreshCodex = async (hydrate = false) => {
-      if (disposed || polling) return;
-      polling = true;
+    let refreshing = false;
+    const refreshCodexSnapshot = async () => {
+      if (disposed || refreshing) return;
+      refreshing = true;
       try {
-        if (hydrate) {
-          const [snapshot, status] = await Promise.all([
-            nativeCodexSessionSnapshot(),
-            nativeCodexIntegrationStatus(),
-          ]);
-          if (disposed) return;
-          setCodexSessions(snapshot);
+        const [snapshot, status] = await Promise.all([
+          nativeCodexSessionSnapshot(),
+          selectedTab === "settings" ? nativeCodexIntegrationStatus() : Promise.resolve(undefined),
+        ]);
+        if (disposed) return;
+        setCodexSessions(onlyActiveCodexSessions(snapshot));
+        if (status) {
           setCodexIntegration(status);
-          return;
+          if (
+            ["running", "available", "ephemeralAvailable"].includes(status.managedDaemonStatus)
+          ) {
+            void nativeStartCodexManagedDaemon()
+              .then((started) => setCodexManagedStatusEnabled(started))
+              .catch(() => setCodexManagedStatusEnabled(false));
+          }
         }
-        const events = await nativeDrainCodexSessionEvents();
-        if (disposed || events.length === 0) return;
-        setCodexSessions((current) => reduceCodexEvents(current, events));
       } catch {
-        // Codex integration is optional. A missing CLI or a malformed third-party
-        // hook must never disturb the primary focus-tracking loop.
+        // Codex is optional and must not disturb the focus runtime.
       } finally {
-        polling = false;
+        refreshing = false;
       }
     };
-    void refreshCodex(true);
     let unlisten: (() => void) | undefined;
     void listen<import("../core/codexSessions").CodexEventEnvelope[]>("codex-session-events", (event) => {
       if (!disposed && event.payload.length > 0) {
-        setCodexSessions((current) => reduceCodexEvents(current, event.payload));
+        setCodexSessions((current) => reduceActiveCodexEvents(current, event.payload));
       }
     }).then((dispose) => {
       unlisten = dispose;
+      void refreshCodexSnapshot();
     });
-    const interval = window.setInterval(() => void refreshCodex(), 500);
+    // Native events are primary. This slow snapshot only recovers a listener
+    // setup race or an older runtime that cannot deliver event batches.
+    const interval = window.setInterval(() => void refreshCodexSnapshot(), 10_000);
     return () => {
       disposed = true;
       unlisten?.();
       window.clearInterval(interval);
     };
-  }, [ready]);
+  }, [codexDashboardEnabled, ready, selectedTab]);
 
   useEffect(() => {
-    if (!ready || !isTauriRuntime() || !codexManagedStatusEnabled) return undefined;
+    if (!ready || !isTauriRuntime() || selectedTab !== "settings") return undefined;
     let disposed = false;
-    let polling = false;
-    const pollManagedStatus = async () => {
-      if (disposed || polling) return;
-      polling = true;
+    const refreshSshStatus = async () => {
       try {
-        const events = await nativePollCodexManagedStatus();
-        if (!disposed && events.length > 0) setCodexSessions((current) => reduceCodexEvents(current, events));
-      } catch {
-        // Hook/transcript tracking remains available when the experimental App
-        // Server proxy disappears or has a schema incompatibility.
-        if (!disposed) setCodexManagedStatusEnabled(false);
-      } finally {
-        polling = false;
-      }
-    };
-    void pollManagedStatus();
-    const interval = window.setInterval(() => void pollManagedStatus(), 2000);
-    return () => {
-      disposed = true;
-      window.clearInterval(interval);
-    };
-  }, [codexManagedStatusEnabled, ready]);
-
-  useEffect(() => {
-    if (!ready || !isTauriRuntime()) return undefined;
-    let disposed = false;
-    const pollSshEvents = async () => {
-      try {
-        const [events, connections] = await Promise.all([nativeDrainCodexSshEvents(), nativeCodexSshConnectionStatus()]);
+        const connections = await nativeCodexSshConnectionStatus();
         if (!disposed) setCodexSshConnections(connections);
-        if (!disposed && events.length > 0) setCodexSessions((current) => reduceCodexEvents(current, events));
       } catch {
-        // SSH reconnects happen in the native manager and do not alter local
-        // Codex lifecycle state when a remote host becomes unavailable.
+        // SSH reconnects happen in the native manager.
       }
     };
     void nativeDiscoverCodexSshHosts().then((hosts) => {
       if (!disposed) setCodexSshHosts(hosts);
     }).catch(() => undefined);
-    const interval = window.setInterval(() => void pollSshEvents(), 500);
+    void refreshSshStatus();
+    const interval = window.setInterval(() => void refreshSshStatus(), 5_000);
     return () => {
       disposed = true;
       window.clearInterval(interval);
     };
-  }, [ready]);
+  }, [ready, selectedTab]);
 
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return undefined;
@@ -717,7 +745,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return undefined;
     let unlisten: (() => void) | undefined;
-    void listen<{ x: number; y: number; phase?: "dragging" | "landing" }>("focus-pet-companion-moved", (event) => {
+    void listen<{ x: number; y: number; phase?: "dragging" | "landing" | "follow" }>("focus-pet-companion-moved", (event) => {
+      if (event.payload.phase !== "follow") {
+        window.clearTimeout(physicalIntentResetTimer.current);
+        physicalIntentResetTimer.current = undefined;
+      }
       mutate((state) => {
         if (event.payload.phase === "dragging") {
           return {
@@ -727,6 +759,17 @@ export const useFocusPetApp = (): FocusPetAppController => {
               interruptible: false,
             }),
           };
+        }
+        if (event.payload.phase === "follow") {
+          if (state.settings.pet.placement !== "custom") return state;
+          return runtimeActions.updateSettings(state, (settings) => ({
+            ...settings,
+            pet: {
+              ...settings.pet,
+              customOriginX: event.payload.x,
+              customOriginY: event.payload.y,
+            },
+          }));
         }
         return runtimeActions.transientPetIntent(
           runtimeActions.updateSettings(state, (settings) => ({
@@ -744,15 +787,39 @@ export const useFocusPetApp = (): FocusPetAppController => {
           1500,
         );
       });
+      if (event.payload.phase === "landing" || event.payload.phase === undefined) {
+        physicalIntentResetTimer.current = window.setTimeout(() => {
+          physicalIntentResetTimer.current = undefined;
+          mutate((state) => {
+            if (
+              state.currentPetIntent.source !== "physicalInteraction"
+              || state.currentPetIntent.kind !== "landing"
+            ) {
+              return state;
+            }
+            return {
+              ...state,
+              currentPetIntent: makePetIntent(
+                intentKindForState(state.currentDecision.state),
+                "state",
+              ),
+            };
+          });
+        }, 1_600);
+      }
     }).then((dispose) => {
       unlisten = dispose;
     });
-    return () => unlisten?.();
+    return () => {
+      unlisten?.();
+      window.clearTimeout(physicalIntentResetTimer.current);
+      physicalIntentResetTimer.current = undefined;
+    };
   }, [mutate, ready]);
 
   const desktopWidgetSettings = bundle.state.settings.desktopWidget;
   const petSettings = bundle.state.settings.pet;
-  const petCompanionStateRef = useRef(makePetCompanionViewState(bundle.state));
+  const petCompanionStateRef = useRef(makePetCompanionViewState(bundle.state, undefined, codexSessions));
   const petPacksRef = useRef(petPacks);
   const petHiddenRef = useRef(petSettings.hidden);
   const widgetWindowSyncArgsRef = useRef<Parameters<typeof nativeSyncWidgetWindows>>([
@@ -765,7 +832,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
     petSettings.placement,
     undefined,
   ]);
-  petCompanionStateRef.current = makePetCompanionViewState(bundle.state);
+  petCompanionStateRef.current = makePetCompanionViewState(bundle.state, codexBubble(codexSessions), codexSessions);
   petPacksRef.current = petPacks;
   petHiddenRef.current = petSettings.hidden;
   widgetWindowSyncArgsRef.current = [
@@ -845,7 +912,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   ]);
 
   useEffect(() => {
-    if (!ready) return undefined;
+    if (!ready || isTauriRuntime()) return undefined;
     void tick();
     const interval = window.setInterval(() => {
       void tick();
@@ -927,7 +994,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
       void emitTo(
         "widget-pet-companion",
         "focus-pet-companion-state",
-        makePetCompanionViewState(bundle.state, codexBubbleText),
+        makePetCompanionViewState(bundle.state, codexBubbleText, codexSessions),
       );
     }
     void emitTo("widget-menu-bar", "focus-pet-menu-bar-state", menuBarPayload);
@@ -988,81 +1055,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
       selectPetPack(packID) {
         mutate((state) => runtimeActions.setSelectedPetPack(state, packID));
       },
-      async exportData(redacted = false) {
-        const url = await exportSnapshot(runtimeSnapshot(bundle.state), redacted);
-        mutate((state) => ({ ...state, statusMessage: redacted ? "已导出脱敏数据。" : "已导出完整数据。" }));
-        return url;
-      },
-      async deleteAllData() {
-        await deleteAllData();
-        mutate(runtimeActions.clearDataState);
-      },
       dismissInstallationNotice() {
         if (installationNotice) {
           markInstallationNoticeShown(installationNotice.buildIdentifier);
         }
         setInstallationNotice(undefined);
-      },
-      async openSystemSettings(destination) {
-        await nativeOpenSystemSettings(destination);
-      },
-      async requestSystemPermission(destination) {
-        if (destination === "notifications") {
-          const delivered = await nativeDeliverNotification("Focus Pet", "这是一条 Focus Pet 权限测试通知。");
-          await refreshPermissionStatus(delivered ? "已请求通知权限。" : "通知权限请求失败，请检查系统通知权限。");
-          return;
-        }
-        await nativeOpenSystemSettings(destination);
-        await refreshPermissionStatus(destination === "inputMonitoring" ? "已打开系统输入监控设置。" : "已打开系统设置。");
-      },
-      async refreshPermissions() {
-        await refreshPermissionStatus();
-      },
-      async sendTestNotification() {
-        const delivered = await nativeDeliverNotification("Focus Pet", "这是一条 Focus Pet 测试通知。");
-        await refreshPermissionStatus(delivered ? "测试通知已发送。" : "测试通知发送失败，请检查系统通知权限。");
-      },
-      async openLogFolder() {
-        await nativeOpenLogFolder();
-      },
-      async openDataFolder() {
-        const opened = await nativeOpenDataFolder();
-        mutate((state) => ({ ...state, statusMessage: opened ? "已打开本机数据目录。" : "当前环境无法打开数据目录。" }));
-      },
-      async copyDataPath() {
-        const path = await nativeDataStoragePath();
-        if (path) {
-          await navigator.clipboard?.writeText(path).catch(() => undefined);
-        }
-        mutate((state) => ({ ...state, statusMessage: path ? `已复制数据目录：${path}` : "浏览器预览使用浏览器本地存储。" }));
-      },
-      async openCurrentLogFile() {
-        const path = await nativeCurrentLogFile(true);
-        mutate((state) => ({ ...state, statusMessage: path ? "已打开当前日志文件。" : "当前环境无法打开日志文件。" }));
-      },
-      async copyLogPath() {
-        const path = await nativeCurrentLogFile(false);
-        if (path) {
-          await navigator.clipboard?.writeText(path).catch(() => undefined);
-        }
-        mutate((state) => ({ ...state, statusMessage: path ? "已复制日志文件路径。" : "当前环境无法复制日志路径。" }));
-      },
-      async writeDiagnosticsLogSnapshot() {
-        const state = bundle.state;
-        mutate(runtimeActions.writeDiagnosticSnapshot);
-        if (!state.settings.logging.isEnabled) return;
-        const path = await nativeAppendLogEntry({
-          kind: "diagnostic",
-          time: new Date().toISOString(),
-          state: state.currentDecision.state,
-          app: state.currentSnapshot.appName,
-          reason: state.currentDecision.reason,
-          inputMonitoringStatus: state.permissionSnapshot.inputMonitoring,
-        }).catch(() => undefined);
-        mutate((current) => ({
-          ...current,
-          statusMessage: path ? "诊断快照已写入本机日志。" : "诊断日志写入失败，请检查数据目录权限。",
-        }));
       },
       async refreshPetPacks() {
         await refreshPetPacks();
@@ -1148,6 +1145,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
           const events = await nativePollCodexManagedStatus();
           setCodexSessions((current) => reduceCodexEvents(current, events));
           setCodexManagedStatusEnabled(true);
+          setCodexIntegration(await nativeCodexIntegrationStatus());
           mutate((state) => ({ ...state, statusMessage: "Codex 精确状态已启用。" }));
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1243,7 +1241,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
           const diagnostic = await nativeDiagnoseCodexSshHost(alias);
           const result = await nativeProvisionCodexSshHost(alias);
           const connected = await nativeConnectCodexSshHost(alias);
-          if (!connected) throw new Error("远端官方 App Server 已启用，但无法建立 SSH proxy 事件流。");
+          if (!connected) throw new Error("无法建立远端 Codex 只读同步通道。");
           mutate((state) => ({ ...state, statusMessage: `${result.message}（${diagnostic.operatingSystem} ${diagnostic.architecture}）` }));
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1268,13 +1266,11 @@ export const useFocusPetApp = (): FocusPetAppController => {
       },
     }),
     [
-      bundle.state,
       flushPersist,
       installationNotice,
       mutate,
       persist,
       petPacks,
-      refreshPermissionStatus,
       refreshRecognitionDiagnostics,
       refreshPetPacks,
       tick,

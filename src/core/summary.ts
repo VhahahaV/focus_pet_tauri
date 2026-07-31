@@ -2,6 +2,7 @@ import type {
   ActivityCategory,
   AppUsageSegment,
   AppUsageSummary,
+  BreakSession,
   CategoryUsageSummary,
   DailySummary,
   FocusSession,
@@ -105,18 +106,24 @@ export const buildDailySummary = (
   appUsage: AppUsageSegment[],
   focusSessions: FocusSession[],
   nudges: NudgeEvent[],
+  breakSessions: BreakSession[] = [],
 ): DailySummary => {
   const bounds = dayBounds(date);
   const clipped = clippedStateSegments(segments, bounds);
-  const durations: Record<FocusState, number> = { focus: 0, distracted: 0, away: 0 };
+  const durations: Record<FocusState, number> = { focus: 0, distracted: 0, break: 0, away: 0 };
   for (const segment of clipped) {
     durations[segment.state] += stateDurationSeconds(segment);
   }
   const appUsageInDay = appUsage.filter((usage) => overlaps(usage.start, usage.end, bounds));
+  const breakSessionSeconds = breakSessions.reduce(
+    (total, session) => total + overlapSeconds(session.start, session.end ?? date, bounds),
+    0,
+  );
   return {
     date: dateKey(date),
     focusSeconds: durations.focus,
     distractedSeconds: durations.distracted,
+    breakSeconds: Math.max(durations.break, breakSessionSeconds),
     awaySeconds: durations.away,
     longestFocusSeconds: Math.max(0, ...clipped.filter((segment) => segment.state === "focus").map(stateDurationSeconds)),
     focusSessionCount: focusSessions.filter((session) => overlaps(session.start, session.end ?? bounds.end, bounds)).length,
@@ -130,4 +137,4 @@ export const buildDailySummary = (
 };
 
 export const summaryTotalSeconds = (summary: DailySummary): number =>
-  summary.focusSeconds + summary.distractedSeconds + summary.awaySeconds;
+  summary.focusSeconds + summary.distractedSeconds + summary.breakSeconds + summary.awaySeconds;

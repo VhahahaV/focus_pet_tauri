@@ -1,6 +1,6 @@
 import type { LocalStoreSnapshot } from "../core/types";
 import { defaultAppSettings, normalizeAppSettings } from "../core/settings";
-import { nativeDeleteAllData, nativeExportSnapshot, nativeLoadSnapshot, nativeSaveSnapshot } from "./native";
+import { nativeLoadSnapshot, nativeSaveSnapshot } from "./native";
 
 const browserStorageKey = "focus-pet-tauri-snapshot";
 export const maximumPointerActionsPerMinute = 600;
@@ -27,28 +27,22 @@ export const emptySnapshot = (): LocalStoreSnapshot => ({
   appUsage: [],
   inputActivity: [],
   focusSessions: [],
+  breakSessions: [],
   nudges: [],
 });
 
 export const normalizeSnapshot = (snapshot: Partial<LocalStoreSnapshot> = {}): LocalStoreSnapshot => ({
   settings: normalizeAppSettings(snapshot.settings),
   classificationRules: snapshot.classificationRules ?? [],
-  stateSegments: (snapshot.stateSegments ?? []).filter((segment) => (segment as { state: string }).state !== "break"),
+  stateSegments: snapshot.stateSegments ?? [],
   appUsage: snapshot.appUsage ?? [],
   // Older Windows builds counted every WM_MOUSEMOVE, creating unusable
   // five-figure "mouse action" values. Normalize those historical buckets as
   // the snapshot is loaded; current builds count only presses and wheel gestures.
   inputActivity: (snapshot.inputActivity ?? []).map(normalizeInputActivityBucket),
-  focusSessions: (snapshot.focusSessions ?? []).map((session) => {
-    const { autoStartBreak: _autoStartBreak, breakDurationSeconds: _breakDurationSeconds, ...current } = session as typeof session & {
-      autoStartBreak?: boolean;
-      breakDurationSeconds?: number;
-    };
-    return current;
-  }),
-  nudges: (snapshot.nudges ?? []).filter((nudge) =>
-    !["longFocusRest", "veryLongFocusRest", "breakEnding"].includes(nudge.reason as string),
-  ),
+  focusSessions: snapshot.focusSessions ?? [],
+  breakSessions: snapshot.breakSessions ?? [],
+  nudges: snapshot.nudges ?? [],
 });
 
 export interface RetentionResult {
@@ -56,6 +50,7 @@ export interface RetentionResult {
   removedAppUsageSegments: number;
   removedInputActivityBuckets: number;
   removedFocusSessions: number;
+  removedBreakSessions: number;
   removedNudges: number;
   totalRemoved: number;
 }
@@ -78,12 +73,14 @@ export const pruneSnapshotForRetention = (
   const appUsage = normalized.appUsage.filter((segment) => new Date(segment.end).getTime() >= appUsageCutoff);
   const inputActivity = normalized.inputActivity.filter((bucket) => new Date(bucket.end).getTime() >= inputCutoff);
   const focusSessions = normalized.focusSessions.filter((session) => new Date(session.end ?? session.start).getTime() >= sessionCutoff);
+  const breakSessions = normalized.breakSessions.filter((session) => new Date(session.end ?? session.start).getTime() >= sessionCutoff);
   const nudges = normalized.nudges.filter((nudge) => new Date(nudge.time).getTime() >= nudgeCutoff);
   const result = {
     removedStateSegments: normalized.stateSegments.length - stateSegments.length,
     removedAppUsageSegments: normalized.appUsage.length - appUsage.length,
     removedInputActivityBuckets: normalized.inputActivity.length - inputActivity.length,
     removedFocusSessions: normalized.focusSessions.length - focusSessions.length,
+    removedBreakSessions: normalized.breakSessions.length - breakSessions.length,
     removedNudges: normalized.nudges.length - nudges.length,
     totalRemoved: 0,
   };
@@ -92,6 +89,7 @@ export const pruneSnapshotForRetention = (
     result.removedAppUsageSegments +
     result.removedInputActivityBuckets +
     result.removedFocusSessions +
+    result.removedBreakSessions +
     result.removedNudges;
 
   return {
@@ -101,6 +99,7 @@ export const pruneSnapshotForRetention = (
       appUsage,
       inputActivity,
       focusSessions,
+      breakSessions,
       nudges,
     },
     result,
@@ -135,71 +134,4 @@ export const saveSnapshot = async (snapshot: LocalStoreSnapshot): Promise<boolea
     }
   }
   return true;
-};
-
-export const exportSnapshot = async (snapshot: LocalStoreSnapshot, redacted: boolean): Promise<string> => {
-  const retained = pruneSnapshotForRetention(snapshot).snapshot;
-  // Redact before crossing the native boundary so every caller gets identical
-  // browser/native semantics; Rust repeats the transform as defense in depth.
-  const exported = redacted ? redactedSnapshot(retained) : retained;
-  const nativeURL = await nativeExportSnapshot(exported, redacted).catch(() => undefined);
-  if (nativeURL) return nativeURL;
-  const blob = new Blob([JSON.stringify(exported, null, 2)], {
-    type: "application/json",
-  });
-  return URL.createObjectURL(blob);
-};
-
-export const deleteAllData = async (): Promise<void> => {
-  await nativeDeleteAllData().catch(() => false);
-  try {
-    localStorage.removeItem(browserStorageKey);
-  } catch {
-    // Storage can be unavailable in file/about test contexts.
-  }
-};
-
-const redactedAppName = (category: string): string => {
-  switch (category) {
-    case "work":
-      return "工作工具";
-    case "entertainment":
-      return "容易分心";
-    case "ignore":
-      return "不参与判断";
-    default:
-      return "旧数据";
-  }
-};
-
-export const redactedSnapshot = (snapshot: LocalStoreSnapshot): LocalStoreSnapshot => {
-  const copy = normalizeSnapshot(snapshot);
-  copy.settings.privacy = {
-    ...copy.settings.privacy,
-    storeRawTitle: false,
-    storeOnlyCategoryResult: true,
-  };
-  copy.classificationRules = [];
-  copy.stateSegments = copy.stateSegments.map((segment) => ({
-    ...segment,
-    appName: redactedAppName(segment.category),
-    bundleID: undefined,
-    titleStored: false,
-    titleDisplay: undefined,
-  }));
-  copy.appUsage = copy.appUsage.map((usage) => ({
-    ...usage,
-    appName: redactedAppName(usage.category),
-    bundleID: undefined,
-  }));
-  copy.focusSessions = copy.focusSessions.map((session) => ({
-    ...session,
-    taskName: "专注任务",
-    mainAppName: undefined,
-  }));
-  copy.nudges = copy.nudges.map((nudge) => ({
-    ...nudge,
-    appName: redactedAppName(nudge.category),
-  }));
-  return copy;
 };

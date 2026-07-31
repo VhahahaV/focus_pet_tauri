@@ -98,7 +98,7 @@ const legacyAction = (key: string): PetAction | undefined => {
     case "welcomeBack":
       return "welcomeBack";
     case "idleSpecial":
-      return "idle";
+      return "breakRelax";
     case "playfulIdle":
       return "run";
     default:
@@ -115,6 +115,8 @@ const petActionValues: PetAction[] = [
   "focusStart",
   "focusStable",
   "stretch",
+  "breakRelax",
+  "breakEnd",
   "distractedLook",
   "nudgeGentle",
   "nudgeStrong",
@@ -203,6 +205,8 @@ export const semanticAnimationKey = (action: PetAction, pack: PetPack): PetActio
     focusStart: ["idle", "breath", "blink"],
     focusStable: ["breath", "idle", "blink"],
     stretch: ["blink", "idle"],
+    breakRelax: ["idle"],
+    breakEnd: ["welcomeBack", "idle"],
     distractedLook: ["nudgeGentle", "idle"],
     nudgeGentle: ["distractedLook", "blink", "idle"],
     nudgeStrong: ["nudgeGentle", "distractedLook", "idle"],

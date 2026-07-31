@@ -5,6 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SegmentedControl, Stepper, TogglePill } from "../components/ui";
 import { durationColorStep, timeToProgress } from "../components/charts/scale";
+import { CodexSessionPanel } from "../components/CodexSessionPanel";
+import type { CodexSessionSnapshot } from "../core/codexSessions";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -67,5 +69,48 @@ describe("frontend design-system primitives", () => {
     const container = render(<Stepper label="阈值" value={1} min={1} max={3} onChange={() => undefined} />);
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="阈值 减少"]')?.disabled).toBe(true);
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="阈值 增加"]')?.disabled).toBe(false);
+  });
+
+  it("renders only active Codex sessions, Markdown, and a working collapse control", () => {
+    const session = (
+      sessionId: string,
+      hostId: string,
+      runtime: string,
+      text: string,
+    ): CodexSessionSnapshot => ({
+      hostId,
+      hostKind: hostId === "local" ? "local" : "ssh",
+      sessionId,
+      title: sessionId,
+      lifecycle: "open",
+      runtime,
+      activeFlags: [],
+      currentTurn: { turnId: `${sessionId}-turn`, status: runtime === "active" ? "inProgress" : "completed" },
+      latestVisibleMessage: {
+        role: "assistant",
+        text,
+        isFinal: runtime !== "active",
+        updatedAt: "2026-07-30T12:00:00.000Z",
+      },
+      capabilityMode: "managed",
+      updatedAt: "2026-07-30T12:00:00.000Z",
+    });
+    const container = render(
+      <CodexSessionPanel sessions={[
+        session("local-task", "local", "active", "**实时更新**\n\n- 第一项\n- 第二项"),
+        session("remote-task", "build-server", "idle", "远程任务完成"),
+      ]} />,
+    );
+
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(container.textContent).toContain("1 个任务运行中");
+    expect(container.textContent).not.toContain("远程任务完成");
+    expect(container.querySelector(".codex-markdown strong")?.textContent).toBe("实时更新");
+    expect(container.querySelectorAll(".codex-markdown li")).toHaveLength(2);
+
+    const collapse = container.querySelector<HTMLButtonElement>('[aria-label="收起 Codex 会话"]');
+    act(() => collapse?.click());
+    expect(container.textContent).toContain("1 个任务运行中");
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(0);
   });
 });

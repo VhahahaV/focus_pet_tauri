@@ -6,24 +6,35 @@ import { finishFocusSession, makeFocusSession, remainingFocusSeconds } from "../
 import { evaluateNudge } from "../core/nudge";
 import { makeActivityHistorySnapshot, makeAttentionHistorySnapshot, recordInputActivity, recordStateSegment } from "../core/timeline";
 import { buildDailySummary } from "../core/summary";
-import { defaultAppSettings, judgmentPresetSettings, matchingJudgmentPreset } from "../core/settings";
+import { defaultAppSettings, judgmentPresetSettings, matchingJudgmentPreset, normalizePetSettings } from "../core/settings";
 import type { ActivitySnapshot, FocusStateSnapshot, StateDecision } from "../core/types";
 import { importedPetPackRecord, normalizePetPack, validatePetPack } from "../resources/petPack";
 import {
   advanceRuntime,
   emptyRuntime,
   inputMonitoringPermissionTitle,
-  notificationPermissionTitle,
-  permissionSnapshotForDisplay,
   runtimeActions,
 } from "../app/runtime";
 import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
 import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWindows";
-import { cyclePlayableSourceAction, nextPetFrameIndex, resolveDisplaySourceAction } from "../app/petCompanionLogic";
+import {
+  cyclePlayableSourceAction,
+  loopingPetFrameIndex,
+  nextPetFrameIndex,
+  petAnimationClockNeedsWake,
+  petPreviewAnimationKey,
+  resolveDisplaySourceAction,
+} from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
-import { codexBubble, reduceCodexEvents } from "../core/codexSessions";
+import {
+  codexBubble,
+  codexSessionIsActive,
+  codexSessionIsOpen,
+  codexStatusLabel,
+  reduceCodexEvents,
+} from "../core/codexSessions";
 import { activitySampleForRuntime } from "../app/activitySampling";
-import { emptySnapshot, maximumPointerActionsPerMinute, normalizeInputActivityBucket, pruneSnapshotForRetention, redactedSnapshot } from "../store/localStore";
+import { maximumPointerActionsPerMinute, normalizeInputActivityBucket, pruneSnapshotForRetention } from "../store/localStore";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -61,6 +72,65 @@ describe("Focus Pet migrated core", () => {
     expect(nextPetFrameIndex(1, 3, false, true)).toBe(1);
     expect(nextPetFrameIndex(99, 3, true, false)).toBe(2);
     expect(nextPetFrameIndex(0, 0, true, true)).toBe(0);
+    expect(loopingPetFrameIndex(0, 4, 10)).toBe(0);
+    expect(loopingPetFrameIndex(399, 4, 10)).toBe(3);
+    expect(loopingPetFrameIndex(400, 4, 10)).toBe(0);
+    expect(loopingPetFrameIndex(10_450, 4, 10)).toBe(0);
+    expect(loopingPetFrameIndex(Number.NaN, 4, 10)).toBe(0);
+  });
+
+  it("wakes a stale pet animation clock at the 750 ms boundary", () => {
+    expect(petAnimationClockNeedsWake(1_749, 1_000)).toBe(false);
+    expect(petAnimationClockNeedsWake(1_750, 1_000)).toBe(true);
+    expect(petAnimationClockNeedsWake(2_000, 1_000, 1_001)).toBe(false);
+    expect(petAnimationClockNeedsWake(2_001, 1_000, 1_001)).toBe(true);
+  });
+
+  it("keeps preview animation identity stable across equivalent runtime intents", () => {
+    const frames = ["asset://pet/idle/001.png", "asset://pet/idle/002.png"];
+    const firstIntentID = "intent-native-generation-10";
+    const secondIntentID = "intent-native-generation-11";
+    expect(firstIntentID).not.toBe(secondIntentID);
+    expect(petPreviewAnimationKey("pet", "idle", frames)).toBe(
+      petPreviewAnimationKey("pet", "idle", frames),
+    );
+    expect(petPreviewAnimationKey("pet", "idle", [...frames, "asset://pet/idle/003.png"]))
+      .not.toBe(petPreviewAnimationKey("pet", "idle", frames));
+  });
+
+  it("distinguishes an open idle Codex session from an ended session", () => {
+    const open = reduceCodexEvents([], [{
+      schemaVersion: 1,
+      eventId: "open-idle",
+      sequence: 1,
+      hostId: "ssh:5080",
+      sessionId: "session-open",
+      occurredAt: "2026-07-31T04:00:00.000Z",
+      receivedAt: "2026-07-31T04:00:00.000Z",
+      kind: "turn.statusChanged",
+      source: "rollout",
+      confidence: "exact",
+      payload: { runtime: "idle", lifecycle: "open", cwd: "/work/project" },
+    }])[0];
+    expect(codexSessionIsOpen(open)).toBe(true);
+    expect(codexSessionIsActive(open)).toBe(false);
+    expect(codexStatusLabel(open)).toBe("待命");
+
+    const ended = { ...open, lifecycle: "closed" };
+    expect(codexSessionIsOpen(ended)).toBe(false);
+    expect(codexStatusLabel(ended)).toBe("已结束");
+  });
+
+  it("does not wake a pet animation clock for invalid or backwards time", () => {
+    expect(petAnimationClockNeedsWake(Number.NaN, 1_000)).toBe(false);
+    expect(petAnimationClockNeedsWake(2_000, Number.POSITIVE_INFINITY)).toBe(false);
+    expect(petAnimationClockNeedsWake(999, 1_000)).toBe(false);
+    expect(petAnimationClockNeedsWake(2_000, 1_000, Number.NaN)).toBe(false);
+    expect(petAnimationClockNeedsWake(2_000, 1_000, -1)).toBe(false);
+  });
+
+  it("normalizes legacy animation-off settings to an always-moving desktop pet", () => {
+    expect(normalizePetSettings({ animationEnabled: false }).animationEnabled).toBe(true);
   });
 
   it("normalizes native input monitoring states to Swift permission titles", () => {
@@ -68,20 +138,6 @@ describe("Focus Pet migrated core", () => {
     expect(inputMonitoringPermissionTitle("frontmost-app-window-cg-event-tap · available")).toBe("已允许");
     expect(inputMonitoringPermissionTitle("needs-input-monitoring-permission")).toBe("待开启");
     expect(inputMonitoringPermissionTitle("检查中")).toBe("检查中");
-  });
-
-  it("normalizes Windows native permission adapter details for display", () => {
-    expect(notificationPermissionTitle("windows-notification-runtime-available")).toBe("已允许");
-    expect(notificationPermissionTitle("denied")).toBe("待开启");
-    expect(permissionSnapshotForDisplay({
-      refreshedAt: "2026-07-18T00:00:00.000Z",
-      inputMonitoring: "windows-low-level-hooks-available",
-      notifications: "windows-notification-runtime-available",
-    })).toEqual({
-      refreshedAt: "2026-07-18T00:00:00.000Z",
-      inputMonitoring: "已允许",
-      notifications: "已允许",
-    });
   });
 
   it("classifies work and entertainment with user rules taking priority", () => {
@@ -92,9 +148,8 @@ describe("Focus Pet migrated core", () => {
     expect(classifier.classify("Safari", undefined, "YouTube 首页")).toBe("entertainment");
   });
 
-  it("redacts window titles unless raw-title storage is enabled", () => {
-    const privacy = defaultAppSettings().privacy;
-    const sanitized = sanitizeWindowTitle("Project_Secret_123 - Draft", privacy);
+  it("stores only redacted window-title display data", () => {
+    const sanitized = sanitizeWindowTitle("Project_Secret_123 - Draft");
     expect(sanitized.rawTitle).toBeUndefined();
     expect(sanitized.titleStored).toBe(false);
     expect(sanitized.titleDisplay).toContain("•");
@@ -742,6 +797,14 @@ describe("Focus Pet migrated core", () => {
     const next = cyclePlayableSourceAction(record, "idle", 12_000);
     expect(next.action?.id).toBe("stretch");
     expect(next.randomState).toEqual({ packID: "pet", sourceActionID: "stretch", switchedAt: 12_000 });
+
+    const manualOverride = resolveDisplaySourceAction(
+      emptyRuntime([]).state.currentPetIntent,
+      record,
+      { ...defaultAppSettings().pet, randomActionSwitchEnabled: false },
+      next.randomState,
+    );
+    expect(manualOverride.action?.id).toBe("stretch");
   });
 
   it("marks companion drag and landing as physical pet interactions", () => {
@@ -834,6 +897,7 @@ describe("Focus Pet migrated core", () => {
           { start: recentStart, end: recentEnd, keyboardCount: 2, pointerCount: 2, switchCount: 2 },
         ],
         focusSessions: [oldFocus, recentFocus],
+        breakSessions: [],
         nudges: [
           { id: "old-nudge", time: oldEnd, reason: "distractedOverThreshold", state: "distracted", appName: "Old", category: "entertainment", petIntent: "nudgeGentle", channel: "desktop", cooldownSeconds: 600, message: "old" },
           { id: "recent-nudge", time: recentEnd, reason: "distractedOverThreshold", state: "distracted", appName: "Recent", category: "entertainment", petIntent: "nudgeGentle", channel: "desktop", cooldownSeconds: 600, message: "recent" },
@@ -847,64 +911,6 @@ describe("Focus Pet migrated core", () => {
     expect(pruned.snapshot.inputActivity[0].keyboardCount).toBe(2);
     expect(pruned.snapshot.focusSessions.map((session) => session.taskName)).toEqual(["recent"]);
     expect(pruned.snapshot.nudges.map((nudge) => nudge.id)).toEqual(["recent-nudge"]);
-  });
-
-  it("removes private app and task metadata before a redacted native export", () => {
-    const start = "2026-07-18T09:00:00.000Z";
-    const end = "2026-07-18T09:10:00.000Z";
-    const session = {
-      ...finishFocusSession(makeFocusSession("Secret project", 25, new Date(start)), "completed", new Date(end)),
-      mainAppName: "Secret Editor",
-    };
-    const redacted = redactedSnapshot({
-      ...emptySnapshot(),
-      classificationRules: [
-        { id: "secret-rule", matchKind: "windowTitle", pattern: "Secret project", category: "work", priority: 0 },
-      ],
-      stateSegments: [
-        {
-          id: "secret-state",
-          start,
-          end,
-          state: "focus",
-          appName: "Secret Editor",
-          bundleID: "com.example.secret",
-          category: "work",
-          titleStored: true,
-          titleDisplay: "Secret project - Draft",
-          source: ["frontmostApplication"],
-        },
-      ],
-      appUsage: [
-        { id: "secret-usage", start, end, appName: "Secret Editor", bundleID: "com.example.secret", category: "work" },
-      ],
-      focusSessions: [session],
-      nudges: [
-        {
-          id: "secret-nudge",
-          time: end,
-          reason: "distractedOverThreshold",
-          state: "distracted",
-          appName: "Secret Game",
-          category: "entertainment",
-          petIntent: "nudgeGentle",
-          channel: "desktop",
-          cooldownSeconds: 600,
-          message: "return to focus",
-        },
-      ],
-    });
-
-    expect(redacted.classificationRules).toEqual([]);
-    expect(redacted.stateSegments[0]).toMatchObject({
-      appName: "工作工具",
-      titleStored: false,
-      bundleID: undefined,
-      titleDisplay: undefined,
-    });
-    expect(redacted.appUsage[0]).toMatchObject({ appName: "工作工具", bundleID: undefined });
-    expect(redacted.focusSessions[0]).toMatchObject({ taskName: "专注任务", mainAppName: undefined });
-    expect(redacted.nudges[0].appName).toBe("容易分心");
   });
 
   it("builds a compact desktop pet payload without persisted history", () => {
@@ -996,5 +1002,57 @@ describe("Focus Pet migrated core", () => {
     expect(sessions[0].runtime).toBe("active");
     expect(sessions[0].latestVisibleMessage?.text).toBe("正在整理会话同步。");
     expect(codexBubble(sessions)).toContain("正在整理会话同步。");
+  });
+
+  it("appends live assistant deltas for one App Server message item", () => {
+    const sessions = reduceCodexEvents([], [
+      {
+        schemaVersion: 1, eventId: "delta-1", sequence: 1, hostId: "local", sessionId: "thread-1",
+        occurredAt: "2026-07-28T12:00:00.000Z", receivedAt: "2026-07-28T12:00:00.000Z", kind: "message.updated", source: "appServer", confidence: "exact",
+        payload: { itemId: "assistant-1", role: "assistant", text: "第一段", isDelta: true, isFinal: false },
+      },
+      {
+        schemaVersion: 1, eventId: "delta-2", sequence: 2, hostId: "local", sessionId: "thread-1",
+        occurredAt: "2026-07-28T12:00:01.000Z", receivedAt: "2026-07-28T12:00:01.000Z", kind: "message.updated", source: "appServer", confidence: "exact",
+        payload: { itemId: "assistant-1", role: "assistant", text: "第二段", isDelta: true, isFinal: false },
+      },
+    ]);
+    expect(sessions[0].latestVisibleMessage?.text).toBe("第一段第二段");
+  });
+
+  it("keeps exact App Server status when a later rollout inference arrives in another batch", () => {
+    const exact = reduceCodexEvents([], [{
+      schemaVersion: 1, eventId: "managed-active", sequence: 1, hostId: "local", sessionId: "thread-1",
+      occurredAt: "2026-07-30T12:00:00.000Z", receivedAt: "2026-07-30T12:00:00.000Z",
+      kind: "turn.statusChanged", source: "appServer", confidence: "exact",
+      payload: { runtime: "active", activeFlags: ["waitingOnApproval"] },
+    }]);
+    expect(exact[0].lifecycle).toBe("open");
+    expect(codexSessionIsActive(exact[0])).toBe(true);
+    const afterInference = reduceCodexEvents(exact, [{
+      schemaVersion: 1, eventId: "rollout-idle", sequence: 2, hostId: "local", sessionId: "thread-1",
+      occurredAt: "2026-07-30T12:00:01.000Z", receivedAt: "2026-07-30T12:00:01.000Z",
+      kind: "turn.statusChanged", source: "rollout", confidence: "inferred",
+      payload: { runtime: "idle", activeFlags: [] },
+    }]);
+    expect(afterInference[0].runtime).toBe("active");
+    expect(afterInference[0].activeFlags).toEqual(["waitingOnApproval"]);
+  });
+
+  it("lets rollout status recover after an exact App Server source has gone stale", () => {
+    const exact = reduceCodexEvents([], [{
+      schemaVersion: 1, eventId: "managed-active", sequence: 1, hostId: "local", sessionId: "thread-stale",
+      occurredAt: "2026-07-30T12:00:00.000Z", receivedAt: "2026-07-30T12:00:00.000Z",
+      kind: "turn.statusChanged", source: "appServer", confidence: "exact",
+      payload: { runtime: "active", activeFlags: [] },
+    }]);
+    const recovered = reduceCodexEvents(exact, [{
+      schemaVersion: 1, eventId: "rollout-idle", sequence: 2, hostId: "local", sessionId: "thread-stale",
+      occurredAt: "2026-07-30T12:00:00.000Z", receivedAt: "2026-07-30T12:00:12.000Z",
+      kind: "turn.statusChanged", source: "rolloutInventory", confidence: "inferred",
+      payload: { runtime: "idle", activeFlags: [] },
+    }]);
+    expect(recovered[0].runtime).toBe("idle");
+    expect(recovered[0].statusSourcePriority).toBe(3);
   });
 });

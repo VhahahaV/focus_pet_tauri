@@ -187,7 +187,7 @@
   --status-border: var(--pet-300);
 }
 
-:where(.is-privacy, .state-privacy, .status-privacy) {
+:where(.is-info, .state-info, .status-info) {
   --status-primary: var(--cyan-500);
   --status-strong: var(--cyan-500);
   --status-soft: var(--cyan-100);

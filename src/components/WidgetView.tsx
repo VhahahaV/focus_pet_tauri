@@ -60,6 +60,8 @@ const stateHeadline = (state: FocusState): string => {
       return "专注中";
     case "distracted":
       return "走神中";
+    case "break":
+      return "暂离中";
     case "away":
       return "暂离中";
   }
@@ -71,6 +73,8 @@ const stateDuration = (summary: DailySummary, state: FocusState): number => {
       return summary.focusSeconds;
     case "distracted":
       return summary.distractedSeconds;
+    case "break":
+      return 0;
     case "away":
       return summary.awaySeconds;
   }
@@ -115,6 +119,7 @@ const fallbackPayload = (): WidgetPayload => {
       date: now.slice(0, 10),
       focusSeconds: 0,
       distractedSeconds: 0,
+      breakSeconds: 0,
       awaySeconds: 0,
       nudgeCount: 0,
       longestFocusSeconds: 0,

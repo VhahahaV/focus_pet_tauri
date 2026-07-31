@@ -1,9 +1,10 @@
-import { AppWindow, Clock3, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
+import { AppWindow, Bot, ChevronDown, ChevronRight, Clock3, Globe2, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useFocusPet } from "../app/AppContext";
-import { resolveDisplaySourceAction } from "../app/petCompanionLogic";
-import { categoryLabels, focusStateLabels, petIntentLabels } from "../core/labels";
+import { loopingPetFrameIndex, petPreviewAnimationKey, resolveDisplaySourceAction } from "../app/petCompanionLogic";
+import { focusStateLabels, petIntentLabels } from "../core/labels";
 import { formatClock, formatCount, formatDuration, formatPercentage } from "../core/formatters";
+import { remainingFocusSeconds } from "../core/sessions";
 import { summaryTotalSeconds } from "../core/summary";
 import { makeInputTimelineSnapshot } from "../core/timeline";
 import type {
@@ -18,16 +19,24 @@ import type {
 } from "../core/types";
 import { secondsBetween } from "../core/utils";
 import { FilledPieChart } from "./charts";
-import { Badge, HoverCard, SegmentedControl, SemanticCard } from "./ui";
+import { Badge, HoverCard, SegmentedControl, SemanticCard, SoftButton } from "./ui";
 import { AppIcon } from "./AppIcon";
 import { SystemMonitorCard } from "./SystemMonitorCard";
 import { sourceActionAssetsForID } from "../resources/petPack";
+import { codexSessionIsActive, codexStatusLabel } from "../core/codexSessions";
 
 const timelineWindows = [2, 4, 6, 8, 12, 24] as const;
+
+const appCategoryOptions: Array<{ value: Exclude<ActivityCategory, "neutral">; label: string }> = [
+  { value: "work", label: "工作" },
+  { value: "entertainment", label: "娱乐" },
+  { value: "ignore", label: "不参与" },
+];
 
 const stateChartColors: Record<FocusState, string> = {
   focus: "var(--focus-500)",
   distracted: "var(--distracted-500)",
+  break: "var(--warning-500, #d97706)",
   away: "var(--away-500)",
 };
 
@@ -80,7 +89,7 @@ const normalizedCategory = (category: ActivityCategory): ActivityCategory => cat
 
 const appInsightKey = (appName: string, bundleID?: string): string => (bundleID?.trim() || appName.trim()).toLowerCase();
 
-const emptyStateBreakdown = (): Record<FocusState, number> => ({ focus: 0, distracted: 0, away: 0 });
+const emptyStateBreakdown = (): Record<FocusState, number> => ({ focus: 0, distracted: 0, break: 0, away: 0 });
 
 const emptyCategorySeconds = (): Record<ActivityCategory, number> => ({ work: 0, entertainment: 0, ignore: 0, neutral: 0 });
 
@@ -117,7 +126,7 @@ const makeTodayInsightSnapshot = (
   const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
   const startMs = start.getTime();
   const endMs = end.getTime();
-  const durations: Record<FocusState, number> = { focus: 0, distracted: 0, away: 0 };
+  const durations: Record<FocusState, number> = { focus: 0, distracted: 0, break: 0, away: 0 };
   const apps = new Map<string, TodayAppInsightAccumulator>();
   const indexedStateSegments = stateSegments
     .map((segment) => ({
@@ -223,6 +232,8 @@ const timelineHourTicks = (snapshot: InputTimelineSnapshot): TimelineHourTick[] 
   const cursor = new Date(start);
   cursor.setMinutes(0, 0, 0);
   if (cursor <= start) cursor.setHours(cursor.getHours() + 1);
+  const durationHours = (end.getTime() - start.getTime()) / 3_600_000;
+  const stepHours = durationHours >= 20 ? 2 : 1;
   const ticks: TimelineHourTick[] = [];
   while (cursor < end) {
     const progress = progressInTimeline(snapshot, cursor);
@@ -231,7 +242,7 @@ const timelineHourTicks = (snapshot: InputTimelineSnapshot): TimelineHourTick[] 
       label: formatClock(cursor),
       progress,
     });
-    cursor.setHours(cursor.getHours() + 1);
+    cursor.setHours(cursor.getHours() + stepHours);
   }
   return ticks;
 };
@@ -300,8 +311,15 @@ const TodayAppMiniMeter = ({ item, maxSeconds }: { item: TodayAppInsightItem; ma
   );
 };
 
-const TodayInsightsGrid = ({ snapshot }: { snapshot: TodayInsightSnapshot }) => {
+const TodayInsightsGrid = ({
+  snapshot,
+  onCategoryChange,
+}: {
+  snapshot: TodayInsightSnapshot;
+  onCategoryChange: (item: TodayAppInsightItem, category: Exclude<ActivityCategory, "neutral">) => void;
+}) => {
   const maxAppSeconds = Math.max(1, ...snapshot.appItems.map((item) => item.seconds));
+  const [openCategoryMenu, setOpenCategoryMenu] = useState<string | null>(null);
   const dominant = snapshot.rhythmItems
     .filter((item) => item.seconds > 0)
     .sort((lhs, rhs) => rhs.seconds - lhs.seconds)[0] ?? { state: "focus" as FocusState, seconds: 0 };
@@ -323,7 +341,42 @@ const TodayInsightsGrid = ({ snapshot }: { snapshot: TodayInsightSnapshot }) => 
                 <AppIcon className="today-app-icon" appName={item.appName} bundleID={item.bundleID} category={item.category} />
                 <div className="today-app-name">
                   <strong>{item.appName}</strong>
-                  <small>{categoryLabels[item.category].title}</small>
+                  <div className="today-app-category-picker">
+                    <button
+                      className="today-app-category-trigger"
+                      type="button"
+                      aria-expanded={openCategoryMenu === item.id}
+                      aria-haspopup="listbox"
+                      aria-label={`${item.appName}：${appCategoryOptions.find((option) => option.value === item.category)?.label ?? "不参与"}，更改分类`}
+                      onPointerDown={() => setOpenCategoryMenu((openMenu) => openMenu === item.id ? null : item.id)}
+                    >
+                      {appCategoryOptions.find((option) => option.value === item.category)?.label ?? "不参与"}
+                      <ChevronDown size={12} aria-hidden />
+                    </button>
+                    {openCategoryMenu === item.id ? (
+                      <div
+                        className="today-app-category-options"
+                        role="listbox"
+                        aria-label={`${item.appName} 的分类选项`}
+                      >
+                        {appCategoryOptions.map((option) => (
+                          <button
+                            className={item.category === option.value ? "active" : ""}
+                            key={option.value}
+                            type="button"
+                            role="option"
+                            aria-selected={item.category === option.value}
+                            onClick={() => {
+                              onCategoryChange(item, option.value);
+                              setOpenCategoryMenu(null);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
                 <TodayAppMiniMeter item={item} maxSeconds={maxAppSeconds} />
                 <strong className="today-app-duration">{formatDuration(item.seconds)}</strong>
@@ -344,10 +397,73 @@ const TodayInsightsGrid = ({ snapshot }: { snapshot: TodayInsightSnapshot }) => 
   );
 };
 
+const CodexLiveSessions = () => {
+  const { codexSessions } = useFocusPet();
+  const [expanded, setExpanded] = useState(true);
+  const [expandedSessionKeys, setExpandedSessionKeys] = useState<Set<string>>(new Set());
+  const activeSessions = useMemo(
+    () => codexSessions
+      .filter(codexSessionIsActive)
+      .sort((left, right) =>
+        `${left.hostId}:${left.sessionId}`.localeCompare(`${right.hostId}:${right.sessionId}`),
+      ),
+    [codexSessions],
+  );
+  if (activeSessions.length === 0) return null;
+  const activeCount = activeSessions.length;
+  const toggleSession = (key: string) => setExpandedSessionKeys((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+  return (
+    <section className={`codex-live-panel${expanded ? " is-expanded" : ""}`} aria-label="Codex 实时会话">
+      <button className="codex-live-panel-header" type="button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>
+        <span className="codex-live-panel-icon"><Bot size={17} /></span>
+        <span className="codex-live-panel-title"><strong>Codex 实时会话</strong><small>{`${activeCount} 个正在运行`}</small></span>
+        <span className="codex-live-panel-count">{activeCount}</span>
+        <ChevronDown size={17} aria-hidden />
+      </button>
+      {expanded ? (
+        <div className="codex-live-session-list" role="list" aria-label="可展开的 Codex 实时会话">
+          {activeSessions.map((session) => {
+            const key = `${session.hostId}:${session.sessionId}`;
+            const open = expandedSessionKeys.has(key);
+            const message = session.latestVisibleMessage?.text;
+            return (
+              <article className={`codex-live-session${open ? " is-open" : ""}`} key={key} role="listitem">
+                <button className="codex-live-session-summary" type="button" aria-expanded={open} onClick={() => toggleSession(key)}>
+                  <span className={`codex-live-session-source ${session.hostKind === "ssh" ? "is-remote" : ""}`}>{session.hostKind === "ssh" ? <Globe2 size={15} /> : <Bot size={15} />}</span>
+                  <span className="codex-live-session-copy"><strong>{session.title}</strong><small>{session.hostKind === "ssh" ? session.hostId.replace(/^ssh:/, "") : "本机 Codex"}</small></span>
+                  <em className={`codex-live-session-status status-${session.runtime}`}>{codexStatusLabel(session)}</em>
+                  <ChevronRight size={16} aria-hidden />
+                </button>
+                {open ? (
+                  <div className="codex-live-session-output">
+                    {message ? <pre>{message}</pre> : <span>{session.runtime === "active" ? "正在等待 Codex 输出…" : "此会话暂时没有可展示的 assistant 输出。"}</span>}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
 export const TodayTab = () => {
-  const { bundle, petPacks } = useFocusPet();
+  const { bundle, petPacks, actions, activeFocus } = useFocusPet();
   const [windowHours, setWindowHours] = useState<(typeof timelineWindows)[number]>(4);
   const [detailsReady, setDetailsReady] = useState(false);
+  const [sessionNow, setSessionNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!activeFocus) return undefined;
+    setSessionNow(new Date());
+    const timer = window.setInterval(() => setSessionNow(new Date()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [activeFocus]);
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setDetailsReady(true));
     return () => window.cancelAnimationFrame(frame);
@@ -386,34 +502,67 @@ export const TodayTab = () => {
     ).action;
     const fallback = selectedPet?.previewURL ?? `${import.meta.env.BASE_URL}assets/pet-pixel-cat.png`;
     const frames = sourceActionAssetsForID(selectedPet, action?.id)?.frameURLs ?? [];
+    const resolvedFrames = frames.length > 0 ? frames : [fallback];
     return {
-      frames: frames.length > 0 ? frames : [fallback],
+      frames: resolvedFrames,
       fps: Math.min(6, Math.max(1, action?.fps ?? 6)),
-      key: `${selectedPet?.id ?? "fallback"}:${action?.id ?? "preview"}:${bundle.state.currentPetIntent.id}`,
+      key: petPreviewAnimationKey(selectedPet?.id, action?.id, resolvedFrames),
     };
   }, [bundle.state.currentPetIntent, bundle.state.settings.pet, selectedPet]);
   const [miniPetFrameIndex, setMiniPetFrameIndex] = useState(0);
 
   useEffect(() => {
     setMiniPetFrameIndex(0);
+  }, [miniPetAnimation.key]);
+
+  useEffect(() => {
     miniPetAnimation.frames.forEach((source) => {
       const image = new Image();
       image.src = source;
     });
-  }, [miniPetAnimation.key, miniPetAnimation.frames]);
+  }, [miniPetAnimation.frames]);
 
   useEffect(() => {
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     if (!bundle.state.settings.pet.animationEnabled || reducedMotion || miniPetAnimation.frames.length <= 1) return undefined;
-    const timer = window.setInterval(() => {
-      setMiniPetFrameIndex((index) => (index + 1) % miniPetAnimation.frames.length);
-    }, 1000 / miniPetAnimation.fps);
-    return () => window.clearInterval(timer);
+    const startedAt = performance.now();
+    let frameID = 0;
+    let lastRenderedIndex = -1;
+    const render = (now: number) => {
+      const nextIndex = loopingPetFrameIndex(
+        now - startedAt,
+        miniPetAnimation.frames.length,
+        miniPetAnimation.fps,
+      );
+      if (nextIndex !== lastRenderedIndex) {
+        lastRenderedIndex = nextIndex;
+        setMiniPetFrameIndex(nextIndex);
+      }
+      frameID = window.requestAnimationFrame(render);
+    };
+    frameID = window.requestAnimationFrame(render);
+    return () => window.cancelAnimationFrame(frameID);
   }, [bundle.state.settings.pet.animationEnabled, miniPetAnimation.fps, miniPetAnimation.frames.length, miniPetAnimation.key]);
 
   const miniPetURL = miniPetAnimation.frames[miniPetFrameIndex % miniPetAnimation.frames.length];
   const hourTicks = useMemo(() => timelineHourTicks(inputTimeline), [inputTimeline]);
   const [timelineHover, setTimelineHover] = useState<TimelineHoverDetail | null>(null);
+
+  const classifiedInsightSnapshot = useMemo(() => {
+    const appItems = insightSnapshot.appItems.map((item) => {
+      const exactRule = bundle.state.classificationRules.find((rule) =>
+        rule.matchKind === (item.bundleID ? "bundleID" : "appName")
+        && rule.pattern.trim().toLowerCase() === (item.bundleID ?? item.appName).trim().toLowerCase(),
+      );
+      return exactRule ? { ...item, category: normalizedCategory(exactRule.category) } : item;
+    });
+    return { ...insightSnapshot, appItems };
+  }, [bundle.state.classificationRules, insightSnapshot]);
+
+  const handleAppCategoryChange = (item: TodayAppInsightItem, category: Exclude<ActivityCategory, "neutral">) => {
+    actions.addRule(item.bundleID ?? item.appName, item.bundleID ? "bundleID" : "appName", category);
+    void actions.tick();
+  };
 
   const stateHoverDetail = (range: InputTimelineStateRange): TimelineHoverDetail => {
     const start = dateAtProgress(inputTimeline, range.startProgress);
@@ -470,7 +619,18 @@ export const TodayTab = () => {
               <p className="swift-section-kicker">今日态势</p>
               <Badge compact status={decision.state} className="today-current-state">{focusStateLabels[decision.state].title}</Badge>
             </div>
-            <span>当前状态已持续 {formatDuration(decision.stableDuration)}</span>
+            <div className="today-session-controls">
+              <span>
+                {activeFocus
+                  ? `${activeFocus.taskName} · 剩余 ${formatDuration(remainingFocusSeconds(activeFocus, sessionNow))}`
+                  : `当前状态已持续 ${formatDuration(decision.stableDuration)}`}
+              </span>
+              {activeFocus ? (
+                <SoftButton size="small" status="focus" onClick={() => actions.finishFocusSession(true)}>
+                  完成专注
+                </SoftButton>
+              ) : null}
+            </div>
           </div>
           <div className="today-focus-dashboard">
             <div className="today-focus-hero">
@@ -513,6 +673,8 @@ export const TodayTab = () => {
         <SystemMonitorCard />
       </div>
 
+      {bundle.state.settings.codex.showInToday ? <CodexLiveSessions /> : null}
+
       <section className="swift-timeline-card">
         <div className="timeline-header">
           <div className="timeline-title-group">
@@ -535,8 +697,20 @@ export const TodayTab = () => {
             <span>{formatClock(inputTimeline.start)} - {formatClock(inputTimeline.end)}</span>
         </div>
         <div className="activity-chart" aria-label="活动时间窗" onPointerLeave={() => setTimelineHover(null)}>
-          <div className="axis-label state-label">状态</div>
-          <div className="axis-label input-label">输入</div>
+          <div className="axis-label timeline-state-label">
+            <span>状态</span>
+            <span className="timeline-color-legend state-color-legend" aria-label="状态颜色说明">
+              <i className="state-focus" />专注
+              <i className="state-distracted" />走神
+            </span>
+          </div>
+          <div className="axis-label timeline-input-label">
+            <span>输入</span>
+            <span className="timeline-color-legend input-color-legend" aria-label="输入颜色说明">
+              <i className="keyboard" />键盘
+              <i className="pointer" />鼠标
+            </span>
+          </div>
           <div className="timeline-hour-grid" aria-hidden>
             {hourTicks.map((tick) => (
               <span className="timeline-hour-grid-tick" key={tick.id} style={{ "--timeline-x": `${tick.progress * 100}%` } as CSSProperties} />
@@ -555,9 +729,7 @@ export const TodayTab = () => {
                   "--timeline-width": `${Math.max(0.8, (range.endProgress - range.startProgress) * 100)}%`,
                 } as CSSProperties}
                 tabIndex={0}
-              >
-                {range.endProgress - range.startProgress > 0.055 ? focusStateLabels[range.state].title : ""}
-              </span>
+              />
             ))}
           </div>
           <div className="input-bars">
@@ -616,7 +788,7 @@ export const TodayTab = () => {
         <div className="sr-only">状态分布总计 {formatDuration(total)}</div>
       </section>
 
-      <TodayInsightsGrid snapshot={insightSnapshot} />
+      <TodayInsightsGrid snapshot={classifiedInsightSnapshot} onCategoryChange={handleAppCategoryChange} />
     </div>
   );
 };

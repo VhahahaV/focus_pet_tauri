@@ -21,6 +21,7 @@ import { addSeconds, byStart, makeID, secondsBetween } from "./utils";
 export const emptyBreakdown = (): WorkTimelineBreakdown => ({
   focusSeconds: 0,
   distractedSeconds: 0,
+  breakSeconds: 0,
   awaySeconds: 0,
 });
 
@@ -31,6 +32,8 @@ export const addBreakdown = (breakdown: WorkTimelineBreakdown, state: FocusState
       return { ...breakdown, focusSeconds: breakdown.focusSeconds + safe };
     case "distracted":
       return { ...breakdown, distractedSeconds: breakdown.distractedSeconds + safe };
+    case "break":
+      return { ...breakdown, breakSeconds: breakdown.breakSeconds + safe };
     case "away":
       return { ...breakdown, awaySeconds: breakdown.awaySeconds + safe };
   }
@@ -445,6 +448,7 @@ export const makeAttentionHistorySnapshot = (
     const days: Array<AttentionDayBucket | null> = Array.from({ length: leadingBlankCount }, () => null);
     let focusSeconds = 0;
     let distractedSeconds = 0;
+    let breakSeconds = 0;
     let awaySeconds = 0;
     const cursor = new Date(start);
     while (cursor < nextMonth) {
@@ -452,6 +456,7 @@ export const makeAttentionHistorySnapshot = (
       days.push(bucket);
       focusSeconds += bucket.focusSeconds;
       distractedSeconds += bucket.distractedSeconds;
+      breakSeconds += bucket.breakSeconds;
       awaySeconds += bucket.awaySeconds;
       cursor.setDate(cursor.getDate() + 1);
     }
@@ -462,12 +467,14 @@ export const makeAttentionHistorySnapshot = (
       days,
       focusSeconds,
       distractedSeconds,
+      breakSeconds,
       awaySeconds,
     };
   });
   const totals = [...buckets.values()].reduce<WorkTimelineBreakdown>((breakdown, bucket) => ({
     focusSeconds: breakdown.focusSeconds + bucket.focusSeconds,
     distractedSeconds: breakdown.distractedSeconds + bucket.distractedSeconds,
+    breakSeconds: breakdown.breakSeconds + bucket.breakSeconds,
     awaySeconds: breakdown.awaySeconds + bucket.awaySeconds,
   }), emptyBreakdown());
 
@@ -478,6 +485,7 @@ export const makeAttentionHistorySnapshot = (
     months,
     focusSeconds: totals.focusSeconds,
     distractedSeconds: totals.distractedSeconds,
+    breakSeconds: totals.breakSeconds,
     awaySeconds: totals.awaySeconds,
   };
 };
@@ -509,6 +517,7 @@ export const makeActivityHistorySnapshot = (
     const next = addBreakdown(breakdown, segment.state, seconds);
     breakdown.focusSeconds = next.focusSeconds;
     breakdown.distractedSeconds = next.distractedSeconds;
+    breakdown.breakSeconds = next.breakSeconds;
     breakdown.awaySeconds = next.awaySeconds;
   }
 
@@ -557,9 +566,11 @@ export const makeActivityHistorySnapshot = (
     dayCount,
     focusSeconds: breakdown.focusSeconds,
     distractedSeconds: breakdown.distractedSeconds,
+    breakSeconds: breakdown.breakSeconds,
     awaySeconds: breakdown.awaySeconds,
     averageFocusSeconds: Math.round(breakdown.focusSeconds / dayCount),
     averageDistractedSeconds: Math.round(breakdown.distractedSeconds / dayCount),
+    averageBreakSeconds: Math.round(breakdown.breakSeconds / dayCount),
     averageAwaySeconds: Math.round(breakdown.awaySeconds / dayCount),
     appActiveSeconds,
     averageAppActiveSeconds: Math.round(appActiveSeconds / dayCount),

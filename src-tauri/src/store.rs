@@ -1,27 +1,20 @@
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::{
-    fs::{self, OpenOptions},
-    io::{self, Write},
+    collections::{HashMap, HashSet},
+    fs, io,
     path::{Path, PathBuf},
 };
 use tauri::{AppHandle, Manager};
 use walkdir::WalkDir;
 
 const SCHEMA_VERSION: &str = "focuspet-mvp-1";
+const DATA_MIGRATION_VERSION: u64 = 2;
 const COMPATIBLE_SCHEMA_VERSIONS: &[&str] = &["focuspet-tauri-1"];
 const APP_SUPPORT_FOLDER: &str = "Focus Pet";
 #[cfg(target_os = "windows")]
 const WINDOWS_APP_SUPPORT_FOLDER: &str = "Focus Pet Data";
 const LEGACY_APP_SUPPORT_FOLDERS: &[&str] = &["FocusPetMVP", "FocusPetV0", "FocusPetLegacy"];
-const ACTIVITY_DATA_FILES: &[&str] = &[
-    "state-segments.json",
-    "app-usage.json",
-    "input-activity.json",
-    "focus-sessions.json",
-    "nudges.json",
-];
-
 pub struct FocusPetStore {
     root: PathBuf,
 }
@@ -83,32 +76,6 @@ impl FocusPetStore {
         self.root.join("Logs")
     }
 
-    pub fn root_dir(&self) -> &Path {
-        &self.root
-    }
-
-    pub fn current_log_file(&self) -> io::Result<PathBuf> {
-        self.prepare_store_for_access(true)?;
-        let path = self
-            .logs_dir()
-            .join(format!("focus-pet-{}.log", Utc::now().format("%Y-%m-%d")));
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        writeln!(file, "[{}] log file prepared", Utc::now().to_rfc3339())?;
-        Ok(path)
-    }
-
-    pub fn append_log_entry(&self, entry: &Value) -> io::Result<PathBuf> {
-        self.prepare_store_for_access(true)?;
-        let path = self
-            .logs_dir()
-            .join(format!("focus-pet-{}.log", Utc::now().format("%Y-%m-%d")));
-        let serialized = serde_json::to_string(entry).map_err(io::Error::other)?;
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        writeln!(file, "{serialized}")?;
-        file.flush()?;
-        Ok(path)
-    }
-
     pub fn pet_packs_dir(&self) -> PathBuf {
         self.root.join("PetPacks")
     }
@@ -122,6 +89,7 @@ impl FocusPetStore {
             "appUsage": self.read_json("app-usage.json", json!([]))?,
             "inputActivity": self.read_json("input-activity.json", json!([]))?,
             "focusSessions": self.read_json("focus-sessions.json", json!([]))?,
+            "breakSessions": self.read_json("break-sessions.json", json!([]))?,
             "nudges": self.read_json("nudges.json", json!([]))?
         }))
     }
@@ -153,52 +121,12 @@ impl FocusPetStore {
             "focus-sessions.json",
             snapshot.get("focusSessions").unwrap_or(&json!([])),
         )?;
+        self.write_json(
+            "break-sessions.json",
+            snapshot.get("breakSessions").unwrap_or(&json!([])),
+        )?;
         self.write_json("nudges.json", snapshot.get("nudges").unwrap_or(&json!([])))?;
         Ok(())
-    }
-
-    pub fn export_snapshot(&self, snapshot: &Value, redacted: bool) -> io::Result<PathBuf> {
-        self.prepare_store_for_access(true)?;
-        let prefix = if redacted {
-            "focus-pet-redacted-export"
-        } else {
-            "focus-pet-export"
-        };
-        let path = self
-            .root
-            .join(format!("{}-{}.json", prefix, Utc::now().timestamp()));
-        let mut exported = snapshot.clone();
-        if redacted {
-            redact_snapshot(&mut exported);
-        }
-        let bytes = serde_json::to_vec_pretty(&exported).map_err(io::Error::other)?;
-        fs::write(&path, bytes)?;
-        Ok(path)
-    }
-
-    pub fn delete_all(&self) -> io::Result<()> {
-        self.prepare_store_for_access(true)?;
-        for file_name in ACTIVITY_DATA_FILES {
-            match fs::remove_file(self.root.join(file_name)) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-        }
-        self.write_metadata()
-    }
-
-    pub fn data_size(&self) -> io::Result<u64> {
-        if !self.root.exists() {
-            return Ok(0);
-        }
-        let mut total = 0;
-        for entry in WalkDir::new(&self.root).into_iter().filter_map(Result::ok) {
-            if entry.file_type().is_file() {
-                total += entry.metadata()?.len();
-            }
-        }
-        Ok(total)
     }
 
     fn prepare_store_for_access(&self, write_intent: bool) -> io::Result<bool> {
@@ -206,7 +134,7 @@ impl FocusPetStore {
         self.ensure_root()?;
         match self.metadata_state()? {
             MetadataState::Current => {
-                self.purge_legacy_recovery_data()?;
+                self.migrate_break_data_if_needed()?;
                 self.remove_legacy_roots();
                 Ok(true)
             }
@@ -214,8 +142,7 @@ impl FocusPetStore {
                 if self.root_contains_data() {
                     self.backup_root_if_needed("missing-schema")?;
                 }
-                self.write_metadata()?;
-                self.purge_legacy_recovery_data()?;
+                self.migrate_break_data_if_needed()?;
                 self.remove_legacy_roots();
                 Ok(true)
             }
@@ -254,7 +181,13 @@ impl FocusPetStore {
     }
 
     fn write_metadata(&self) -> io::Result<()> {
-        self.write_json("schema.json", &json!({ "schemaVersion": SCHEMA_VERSION }))
+        self.write_json(
+            "schema.json",
+            &json!({
+                "schemaVersion": SCHEMA_VERSION,
+                "dataMigrationVersion": DATA_MIGRATION_VERSION
+            }),
+        )
     }
 
     fn metadata_state(&self) -> io::Result<MetadataState> {
@@ -355,86 +288,97 @@ impl FocusPetStore {
         }
     }
 
-    fn purge_legacy_recovery_data(&self) -> io::Result<()> {
-        let obsolete_sessions = self.root.join("break-sessions.json");
-        if obsolete_sessions.exists() {
-            fs::remove_file(obsolete_sessions)?;
+    fn migrate_break_data_if_needed(&self) -> io::Result<()> {
+        let metadata = self.read_json("schema.json", json!({}))?;
+        if metadata
+            .get("dataMigrationVersion")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= DATA_MIGRATION_VERSION
+        {
+            return Ok(());
         }
 
-        self.rewrite_json_array("state-segments.json", |item| {
-            item.get("state").and_then(Value::as_str) != Some("break")
-        })?;
-        self.rewrite_json_array("nudges.json", |item| {
-            !matches!(
-                item.get("reason").and_then(Value::as_str),
-                Some("longFocusRest" | "veryLongFocusRest" | "breakEnding")
-            )
-        })?;
-        self.rewrite_json_array_objects("focus-sessions.json", |object| {
-            object.remove("autoStartBreak");
-            object.remove("breakDurationSeconds");
-        })?;
-
-        let settings_path = self.root.join("settings.json");
-        if settings_path.exists() {
-            let bytes = fs::read(&settings_path)?;
-            if let Ok(mut settings) = serde_json::from_slice::<Value>(&bytes) {
-                if let Some(reminder) = settings.get_mut("reminder").and_then(Value::as_object_mut)
-                {
-                    reminder.remove("enableFocusRestNudges");
-                    reminder.remove("longFocusMinutes");
-                    reminder.remove("veryLongFocusMinutes");
-                }
-                self.write_json("settings.json", &settings)?;
-            }
+        if self.root_contains_data() {
+            self.backup_root_if_needed("before-break-restoration-v2")?;
         }
-        Ok(())
+        let recovery_roots = self.break_recovery_roots();
+
+        let mut break_sessions = self.read_json("break-sessions.json", json!([]))?;
+        let mut state_segments = self.read_json("state-segments.json", json!([]))?;
+        let mut nudges = self.read_json("nudges.json", json!([]))?;
+        for recovery_root in &recovery_roots {
+            merge_json_array_by_id(
+                &mut break_sessions,
+                &read_json_file(&recovery_root.join("break-sessions.json"), json!([])),
+                |_| true,
+            );
+            merge_json_array_by_id(
+                &mut state_segments,
+                &read_json_file(&recovery_root.join("state-segments.json"), json!([])),
+                |item| item.get("state").and_then(Value::as_str) == Some("break"),
+            );
+            merge_json_array_by_id(
+                &mut nudges,
+                &read_json_file(&recovery_root.join("nudges.json"), json!([])),
+                |item| {
+                    matches!(
+                        item.get("reason").and_then(Value::as_str),
+                        Some("longFocusRest" | "veryLongFocusRest" | "breakEnding")
+                    )
+                },
+            );
+        }
+
+        let mut focus_sessions = self.read_json("focus-sessions.json", json!([]))?;
+        let recovered_focus_sessions = recovery_roots
+            .iter()
+            .map(|root| read_json_file(&root.join("focus-sessions.json"), json!([])))
+            .collect::<Vec<_>>();
+        restore_focus_break_fields(&mut focus_sessions, &recovered_focus_sessions);
+
+        let mut settings = self.read_json("settings.json", json!({}))?;
+        let recovered_settings = recovery_roots
+            .iter()
+            .map(|root| read_json_file(&root.join("settings.json"), json!({})))
+            .collect::<Vec<_>>();
+        restore_break_settings(&mut settings, &recovered_settings);
+
+        self.write_json("break-sessions.json", &break_sessions)?;
+        self.write_json("state-segments.json", &state_segments)?;
+        self.write_json("focus-sessions.json", &focus_sessions)?;
+        self.write_json("nudges.json", &nudges)?;
+        self.write_json("settings.json", &settings)?;
+        self.write_metadata()
     }
 
-    fn rewrite_json_array<F>(&self, name: &str, mut keep: F) -> io::Result<()>
-    where
-        F: FnMut(&Value) -> bool,
-    {
-        let path = self.root.join(name);
-        if !path.exists() {
-            return Ok(());
-        }
-        let bytes = fs::read(&path)?;
-        let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
-            return Ok(());
+    fn break_recovery_roots(&self) -> Vec<PathBuf> {
+        let Some(parent) = self.root.parent() else {
+            return Vec::new();
         };
-        let Some(items) = value.as_array_mut() else {
-            return Ok(());
-        };
-        let original_len = items.len();
-        items.retain(|item| keep(item));
-        if items.len() != original_len {
-            self.write_json(name, &value)?;
-        }
-        Ok(())
-    }
-
-    fn rewrite_json_array_objects<F>(&self, name: &str, mut update: F) -> io::Result<()>
-    where
-        F: FnMut(&mut serde_json::Map<String, Value>),
-    {
-        let path = self.root.join(name);
-        if !path.exists() {
-            return Ok(());
-        }
-        let bytes = fs::read(&path)?;
-        let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
-            return Ok(());
-        };
-        let Some(items) = value.as_array_mut() else {
-            return Ok(());
-        };
-        for item in items {
-            if let Some(object) = item.as_object_mut() {
-                update(object);
-            }
-        }
-        self.write_json(name, &value)
+        let backup_prefix = format!(
+            "{} Backup ",
+            self.root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(APP_SUPPORT_FOLDER)
+        );
+        let mut roots = fs::read_dir(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_dir()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with(&backup_prefix))
+                    && path.join("break-sessions.json").is_file()
+            })
+            .collect::<Vec<_>>();
+        roots.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
+        roots
     }
 
     fn read_json(&self, name: &str, default_value: Value) -> io::Result<Value> {
@@ -456,6 +400,169 @@ impl FocusPetStore {
         fs::write(&temporary, &bytes)?;
         replace_file(&temporary, &path)?;
         Ok(())
+    }
+}
+
+fn read_json_file(path: &Path, default_value: Value) -> Value {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(default_value)
+}
+
+fn merge_json_array_by_id<F>(current: &mut Value, recovered: &Value, mut include: F)
+where
+    F: FnMut(&Value) -> bool,
+{
+    if !current.is_array() {
+        *current = json!([]);
+    }
+    let Some(current_items) = current.as_array_mut() else {
+        return;
+    };
+    let mut ids = current_items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    let Some(recovered_items) = recovered.as_array() else {
+        return;
+    };
+    for item in recovered_items {
+        if !include(item) {
+            continue;
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if ids.insert(id.to_string()) {
+            current_items.push(item.clone());
+        }
+    }
+    current_items.sort_by(|left, right| {
+        let left_time = left
+            .get("start")
+            .or_else(|| left.get("time"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let right_time = right
+            .get("start")
+            .or_else(|| right.get("time"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        left_time.cmp(right_time)
+    });
+}
+
+fn restore_focus_break_fields(current: &mut Value, recovered_snapshots: &[Value]) {
+    if !current.is_array() {
+        *current = json!([]);
+    }
+    let mut recovered_by_id = HashMap::<String, serde_json::Map<String, Value>>::new();
+    for recovered in recovered_snapshots {
+        let Some(items) = recovered.as_array() else {
+            continue;
+        };
+        for item in items {
+            let (Some(id), Some(object)) =
+                (item.get("id").and_then(Value::as_str), item.as_object())
+            else {
+                continue;
+            };
+            let recovered = recovered_by_id.entry(id.to_string()).or_default();
+            for key in ["autoStartBreak", "breakDurationSeconds"] {
+                if !recovered.contains_key(key) {
+                    if let Some(value) = object.get(key) {
+                        recovered.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+    let Some(items) = current.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let recovered = object
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| recovered_by_id.get(id));
+        if !object.contains_key("autoStartBreak") {
+            object.insert(
+                "autoStartBreak".to_string(),
+                recovered
+                    .and_then(|value| value.get("autoStartBreak"))
+                    .cloned()
+                    .unwrap_or(json!(true)),
+            );
+        }
+        if !object.contains_key("breakDurationSeconds") {
+            object.insert(
+                "breakDurationSeconds".to_string(),
+                recovered
+                    .and_then(|value| value.get("breakDurationSeconds"))
+                    .cloned()
+                    .unwrap_or_else(|| json!(5 * 60)),
+            );
+        }
+    }
+}
+
+fn recovered_setting(recovered: &[Value], pointer: &str) -> Option<Value> {
+    recovered
+        .iter()
+        .find_map(|settings| settings.pointer(pointer).cloned())
+}
+
+fn restore_break_settings(current: &mut Value, recovered: &[Value]) {
+    if !current.is_object() {
+        *current = json!({});
+    }
+    let Some(settings) = current.as_object_mut() else {
+        return;
+    };
+    for (key, pointer, default_value) in [
+        ("autoStartBreak", "/autoStartBreak", json!(true)),
+        ("breakMinutes", "/breakMinutes", json!(5)),
+    ] {
+        if !settings.contains_key(key) {
+            settings.insert(
+                key.to_string(),
+                recovered_setting(recovered, pointer).unwrap_or(default_value),
+            );
+        }
+    }
+    let reminder = settings
+        .entry("reminder".to_string())
+        .or_insert_with(|| json!({}));
+    if !reminder.is_object() {
+        *reminder = json!({});
+    }
+    let Some(reminder) = reminder.as_object_mut() else {
+        return;
+    };
+    for (key, pointer, default_value) in [
+        (
+            "enableFocusRestNudges",
+            "/reminder/enableFocusRestNudges",
+            json!(true),
+        ),
+        ("longFocusMinutes", "/reminder/longFocusMinutes", json!(45)),
+        (
+            "veryLongFocusMinutes",
+            "/reminder/veryLongFocusMinutes",
+            json!(90),
+        ),
+    ] {
+        if !reminder.contains_key(key) {
+            reminder.insert(
+                key.to_string(),
+                recovered_setting(recovered, pointer).unwrap_or(default_value),
+            );
+        }
     }
 }
 
@@ -509,21 +616,21 @@ fn fallback_data_dir() -> PathBuf {
         .unwrap_or_else(|| Path::new(".").to_path_buf());
     #[cfg(target_os = "macos")]
     {
-        return home.join("Library/Application Support/Focus Pet");
+        home.join("Library/Application Support/Focus Pet")
     }
     #[cfg(target_os = "windows")]
     {
-        return windows_local_app_data_dir()
+        windows_local_app_data_dir()
             .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
             .unwrap_or_else(|| home.join("AppData/Local"))
-            .join(WINDOWS_APP_SUPPORT_FOLDER);
+            .join(WINDOWS_APP_SUPPORT_FOLDER)
     }
     #[cfg(target_os = "linux")]
     {
-        return std::env::var_os("XDG_DATA_HOME")
+        std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
-            .join("Focus Pet");
+            .join("Focus Pet")
     }
 }
 
@@ -602,6 +709,7 @@ fn windows_user_profile_dir() -> Option<PathBuf> {
     result
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn migrate_store_root_if_needed(source: &Path, destination: &Path) -> io::Result<bool> {
     if source == destination
         || destination.join("schema.json").exists()
@@ -625,74 +733,6 @@ fn migrate_store_root_if_needed(source: &Path, destination: &Path) -> io::Result
     Ok(destination.join("schema.json").is_file())
 }
 
-fn redacted_app_name(category: Option<&str>) -> &'static str {
-    match category {
-        Some("work") => "工作工具",
-        Some("entertainment") => "容易分心",
-        Some("ignore") => "不参与判断",
-        _ => "旧数据",
-    }
-}
-
-fn redact_snapshot(snapshot: &mut Value) {
-    let Some(root) = snapshot.as_object_mut() else {
-        return;
-    };
-    if let Some(privacy) = root
-        .get_mut("settings")
-        .and_then(Value::as_object_mut)
-        .and_then(|settings| settings.get_mut("privacy"))
-        .and_then(Value::as_object_mut)
-    {
-        privacy.insert("storeRawTitle".to_string(), json!(false));
-        privacy.insert("storeOnlyCategoryResult".to_string(), json!(true));
-    }
-    root.insert("classificationRules".to_string(), json!([]));
-    for (key, strip_title) in [("stateSegments", true), ("appUsage", false)] {
-        if let Some(items) = root.get_mut(key).and_then(Value::as_array_mut) {
-            for item in items {
-                if let Some(object) = item.as_object_mut() {
-                    let category = object
-                        .get("category")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    object.insert(
-                        "appName".to_string(),
-                        json!(redacted_app_name(category.as_deref())),
-                    );
-                    object.remove("bundleID");
-                    if strip_title {
-                        object.insert("titleStored".to_string(), json!(false));
-                        object.remove("titleDisplay");
-                    }
-                }
-            }
-        }
-    }
-    if let Some(items) = root.get_mut("focusSessions").and_then(Value::as_array_mut) {
-        for item in items {
-            if let Some(object) = item.as_object_mut() {
-                object.insert("taskName".to_string(), json!("专注任务"));
-                object.remove("mainAppName");
-            }
-        }
-    }
-    if let Some(items) = root.get_mut("nudges").and_then(Value::as_array_mut) {
-        for item in items {
-            if let Some(object) = item.as_object_mut() {
-                let category = object
-                    .get("category")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                object.insert(
-                    "appName".to_string(),
-                    json!(redacted_app_name(category.as_deref())),
-                );
-            }
-        }
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn migrate_store_contents_if_needed(source: &Path, destination: &Path) -> io::Result<bool> {
     if source == destination
@@ -714,6 +754,7 @@ fn migrate_store_contents_if_needed(source: &Path, destination: &Path) -> io::Re
         "app-usage.json",
         "input-activity.json",
         "focus-sessions.json",
+        "break-sessions.json",
         "nudges.json",
         "PetPacks",
         "Logs",
@@ -776,7 +817,10 @@ fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{migrate_store_root_if_needed, FocusPetStore, MetadataState, SCHEMA_VERSION};
+    use super::{
+        migrate_store_root_if_needed, read_json_file, FocusPetStore, MetadataState,
+        DATA_MIGRATION_VERSION, SCHEMA_VERSION,
+    };
     use serde_json::json;
     use std::fs;
 
@@ -789,6 +833,7 @@ mod tests {
             "appUsage": [],
             "inputActivity": [],
             "focusSessions": [],
+            "breakSessions": [],
             "nudges": []
         });
 
@@ -829,48 +874,6 @@ mod tests {
         let snapshot = store.load_snapshot().unwrap();
         assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
         assert!(!root.join("settings.json.tmp").exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn delete_all_clears_activity_without_removing_settings_or_pet_packs() {
-        let root = temp_store_root("delete-activity-only");
-        let store = FocusPetStore::from_root(root.clone());
-        store
-            .save_snapshot(&json!({
-                "settings": { "focusTargetMinutes": 50 },
-                "classificationRules": [{ "pattern": "Editor" }],
-                "stateSegments": [{ "state": "focus" }],
-                "appUsage": [{ "appName": "Editor" }],
-                "inputActivity": [{ "keyboardCount": 3 }],
-                "focusSessions": [{ "taskName": "Write tests" }],
-                "nudges": [{ "reason": "distracted" }]
-            }))
-            .unwrap();
-        fs::create_dir_all(root.join("PetPacks/demo")).unwrap();
-        fs::write(root.join("PetPacks/demo/pet.json"), "{}").unwrap();
-        fs::create_dir_all(root.join("Logs")).unwrap();
-        fs::write(root.join("Logs/focus-pet.log"), "diagnostic").unwrap();
-        fs::write(root.join("focus-pet-export-1.json"), "{}").unwrap();
-
-        store.delete_all().unwrap();
-
-        let snapshot = store.load_snapshot().unwrap();
-        assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
-        assert_eq!(snapshot["classificationRules"][0]["pattern"], "Editor");
-        for key in [
-            "stateSegments",
-            "appUsage",
-            "inputActivity",
-            "focusSessions",
-            "nudges",
-        ] {
-            assert_eq!(snapshot[key], json!([]), "{key} was not cleared");
-        }
-        assert!(root.join("PetPacks/demo/pet.json").is_file());
-        assert!(root.join("Logs/focus-pet.log").is_file());
-        assert!(root.join("focus-pet-export-1.json").is_file());
-        assert!(root.join("schema.json").is_file());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -939,57 +942,6 @@ mod tests {
         let _ = fs::remove_dir_all(parent);
     }
 
-    #[test]
-    fn diagnostic_log_entries_are_persisted_as_json_lines() {
-        let root = temp_store_root("diagnostic-log-entry");
-        let store = FocusPetStore::from_root(root.clone());
-        let path = store
-            .append_log_entry(&json!({
-                "time": "2026-07-18T09:00:00Z",
-                "state": "focus",
-                "app": "Editor"
-            }))
-            .unwrap();
-        let contents = fs::read_to_string(path).unwrap();
-        assert!(contents.contains(r#""state":"focus""#));
-        assert!(contents.ends_with('\n'));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn redacted_native_exports_strip_private_fields() {
-        let root = temp_store_root("redacted-native-export");
-        let store = FocusPetStore::from_root(root.clone());
-        let path = store
-            .export_snapshot(
-                &json!({
-                    "settings": { "privacy": { "storeRawTitle": true, "storeOnlyCategoryResult": false } },
-                    "classificationRules": [{ "pattern": "Secret" }],
-                    "stateSegments": [{
-                        "appName": "Secret Editor",
-                        "bundleID": "com.example.secret",
-                        "category": "work",
-                        "titleStored": true,
-                        "titleDisplay": "Secret project"
-                    }],
-                    "appUsage": [{ "appName": "Secret Editor", "bundleID": "com.example.secret", "category": "work" }],
-                    "focusSessions": [{ "taskName": "Secret project", "mainAppName": "Secret Editor" }],
-                    "nudges": [{ "appName": "Secret Game", "category": "entertainment" }]
-                }),
-                true,
-            )
-            .unwrap();
-        let exported: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(exported["classificationRules"], json!([]));
-        assert_eq!(exported["stateSegments"][0]["appName"], json!("工作工具"));
-        assert!(exported["stateSegments"][0].get("bundleID").is_none());
-        assert!(exported["stateSegments"][0].get("titleDisplay").is_none());
-        assert_eq!(exported["focusSessions"][0]["taskName"], json!("专注任务"));
-        assert!(exported["focusSessions"][0].get("mainAppName").is_none());
-        assert_eq!(exported["nudges"][0]["appName"], json!("容易分心"));
-        let _ = fs::remove_dir_all(root);
-    }
-
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_user_profile_is_stable_outside_package_local_cache() {
@@ -1000,9 +952,12 @@ mod tests {
     }
 
     #[test]
-    fn store_purges_obsolete_recovery_data_on_load() {
-        let root = temp_store_root("purge-obsolete-recovery");
+    fn store_restores_break_data_losslessly_from_pre_tauri_backup() {
+        let parent = temp_store_root("restore-break-data");
+        let root = parent.join("Focus Pet");
+        let backup = parent.join("Focus Pet Backup 20260707T120000Z pre-tauri");
         fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&backup).unwrap();
         fs::write(
             root.join("schema.json"),
             format!(r#"{{"schemaVersion":"{}"}}"#, SCHEMA_VERSION),
@@ -1011,29 +966,62 @@ mod tests {
         fs::write(root.join("break-sessions.json"), "[]").unwrap();
         fs::write(
             root.join("state-segments.json"),
-            r#"[{"id":"old","state":"break"},{"id":"keep","state":"focus"}]"#,
+            r#"[{"id":"keep","state":"focus"}]"#,
         )
         .unwrap();
         fs::write(
             root.join("focus-sessions.json"),
-            r#"[{"id":"focus","autoStartBreak":true,"breakDurationSeconds":300}]"#,
+            r#"[{"id":"focus","taskName":"Keep current"}]"#,
         )
         .unwrap();
         fs::write(
             root.join("settings.json"),
-            r#"{"reminder":{"enableFocusRestNudges":true,"longFocusMinutes":50,"veryLongFocusMinutes":90}}"#,
+            r#"{"focusTargetMinutes":25,"reminder":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            backup.join("break-sessions.json"),
+            r#"[{"id":"break-1","start":"2026-07-07T10:00:00Z","source":"manual"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            backup.join("state-segments.json"),
+            r#"[{"id":"old-break","state":"break","start":"2026-07-07T10:00:00Z"},{"id":"old-focus","state":"focus"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            backup.join("focus-sessions.json"),
+            r#"[{"id":"focus","autoStartBreak":false,"breakDurationSeconds":420}]"#,
+        )
+        .unwrap();
+        fs::write(
+            backup.join("nudges.json"),
+            r#"[{"id":"rest-nudge","reason":"longFocusRest","time":"2026-07-07T10:00:00Z"},{"id":"other","reason":"welcomeBack"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            backup.join("settings.json"),
+            r#"{"autoStartBreak":false,"breakMinutes":7,"reminder":{"enableFocusRestNudges":false,"longFocusMinutes":50,"veryLongFocusMinutes":100}}"#,
         )
         .unwrap();
 
         let store = FocusPetStore::from_root(root.clone());
         let snapshot = store.load_snapshot().unwrap();
-        assert!(!root.join("break-sessions.json").exists());
-        assert_eq!(snapshot["stateSegments"].as_array().unwrap().len(), 1);
-        assert!(snapshot["focusSessions"][0].get("autoStartBreak").is_none());
-        assert!(snapshot["settings"]["reminder"]
-            .get("longFocusMinutes")
-            .is_none());
-        let _ = fs::remove_dir_all(root);
+        assert_eq!(snapshot["breakSessions"][0]["id"], "break-1");
+        assert_eq!(snapshot["stateSegments"].as_array().unwrap().len(), 2);
+        assert_eq!(snapshot["focusSessions"][0]["autoStartBreak"], false);
+        assert_eq!(snapshot["focusSessions"][0]["breakDurationSeconds"], 420);
+        assert_eq!(snapshot["settings"]["autoStartBreak"], false);
+        assert_eq!(snapshot["settings"]["breakMinutes"], 7);
+        assert_eq!(snapshot["settings"]["reminder"]["longFocusMinutes"], 50);
+        assert_eq!(snapshot["nudges"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            read_json_file(&root.join("schema.json"), json!({}))["dataMigrationVersion"],
+            DATA_MIGRATION_VERSION
+        );
+        let second = store.load_snapshot().unwrap();
+        assert_eq!(second, snapshot, "migration must be idempotent");
+        let _ = fs::remove_dir_all(parent);
     }
 
     #[test]

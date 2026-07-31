@@ -25,6 +25,7 @@ const fallbackMenuPayload = (): MenuBarPayload => {
       date: now.slice(0, 10),
       focusSeconds: 0,
       distractedSeconds: 0,
+      breakSeconds: 0,
       awaySeconds: 0,
       nudgeCount: 0,
       longestFocusSeconds: 0,

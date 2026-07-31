@@ -1,4 +1,4 @@
-use super::{now_iso, NativeActivitySample, PermissionSnapshot};
+use super::{now_iso, NativeActivitySample};
 
 pub fn sample_activity() -> NativeActivitySample {
     NativeActivitySample {
@@ -16,16 +16,4 @@ pub fn sample_activity() -> NativeActivitySample {
         is_system_sleeping: false,
         is_screen_locked: false,
     }
-}
-
-pub fn permission_snapshot() -> PermissionSnapshot {
-    PermissionSnapshot {
-        refreshed_at: now_iso(),
-        input_monitoring: "unsupported".to_string(),
-        notifications: "unsupported".to_string(),
-    }
-}
-
-pub fn open_system_settings(_destination: &str) -> bool {
-    false
 }

@@ -51,7 +51,7 @@ pub fn import_pet_pack(source: &Path, library_dir: &Path) -> io::Result<Imported
         source_roots.roots.first().cloned().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "pet pack manifest not found")
         })?;
-    validate_pack_roots(&[source_root.clone()])?;
+    validate_pack_roots(std::slice::from_ref(&source_root))?;
     let imported = import_pack_root(&source_root, library_dir);
     drop(source_roots);
     imported
@@ -459,19 +459,19 @@ fn validate_manifest(manifest: &Value, root: &Path) -> PetPackImportValidation {
     if manifest.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
         errors.push("unsupportedSchema".to_string());
     }
-    if string_field(manifest, "id").is_none_or(|value| value.trim().is_empty()) {
+    if string_field(manifest, "id").map_or(true, |value| value.trim().is_empty()) {
         errors.push("missingID".to_string());
     }
-    if string_field(manifest, "name").is_none_or(|value| value.trim().is_empty()) {
+    if string_field(manifest, "name").map_or(true, |value| value.trim().is_empty()) {
         errors.push("missingName".to_string());
     }
     if !root.join("preview.png").is_file() {
         warnings.push("missingPreview".to_string());
     }
-    if license_field(manifest).is_none_or(|value| value.trim().is_empty()) {
+    if license_field(manifest).map_or(true, |value| value.trim().is_empty()) {
         warnings.push("missingLicense".to_string());
     }
-    if string_field(manifest, "distribution").is_none_or(|value| value.trim().is_empty()) {
+    if string_field(manifest, "distribution").map_or(true, |value| value.trim().is_empty()) {
         warnings.push("missingDistribution".to_string());
     }
 
@@ -514,11 +514,11 @@ fn validate_manifest(manifest: &Value, root: &Path) -> PetPackImportValidation {
     if manifest
         .get("sourceActions")
         .and_then(Value::as_array)
-        .is_none_or(|actions| actions.is_empty())
+        .map_or(true, |actions| actions.is_empty())
         && manifest
             .get("animations")
             .and_then(Value::as_object)
-            .is_none_or(|animations| animations.is_empty())
+            .map_or(true, |animations| animations.is_empty())
     {
         errors.push("missingSourceActions".to_string());
     }

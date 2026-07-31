@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     env,
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Mutex, OnceLock,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const JOURNAL_FILE: &str = "codex-session-events.jsonl";
@@ -26,6 +26,12 @@ const APP_SERVER_STREAM_HEARTBEAT: Duration = Duration::from_secs(30);
 /// refresh is the bounded fallback for App Server builds that do not broadcast
 /// changes to passive observer clients.
 const APP_SERVER_STREAM_POLL: Duration = Duration::from_secs(2);
+/// Normal terminal Codex sessions write their rollout transcript here even
+/// when no Hook or App Server is enabled. Keep discovery recent and bounded:
+/// Focus Pet is a live companion, not a complete transcript browser.
+const ROLLOUT_DISCOVERY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+const PROCESS_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_DISCOVERED_ROLLOUTS: usize = 32;
 static MANAGED_STREAM_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static MANAGED_STREAM_STARTED: AtomicBool = AtomicBool::new(false);
 static FOCUS_PET_EPHEMERAL_APP_SERVER: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
@@ -300,6 +306,10 @@ pub struct CodexSessionSnapshot {
     pub updated_at: String,
     #[serde(skip)]
     transcript_path: Option<String>,
+    #[serde(skip)]
+    status_source_priority: u8,
+    #[serde(skip)]
+    status_received_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -349,11 +359,23 @@ struct TranscriptCursor {
     remainder: String,
 }
 
+#[derive(Clone, Debug)]
+struct RolloutObservation {
+    modified_at: SystemTime,
+    runtime: String,
+    lifecycle: String,
+    process_open: bool,
+}
+
 #[derive(Default)]
 struct ManagerInner {
     sessions: BTreeMap<String, CodexSessionSnapshot>,
     seen_event_ids: BTreeSet<String>,
     transcript_cursors: HashMap<String, TranscriptCursor>,
+    rollout_observations: HashMap<String, RolloutObservation>,
+    rollout_process_probe_at: Option<Instant>,
+    open_rollout_paths: Option<HashSet<PathBuf>>,
+    pending_events: VecDeque<CodexEventEnvelope>,
     journal_offset: u64,
     journal_remainder: String,
 }
@@ -376,9 +398,23 @@ impl CodexSessionManager {
             .lock()
             .map_err(|_| "Codex session state lock is unavailable".to_string())?;
         let mut incoming = read_journal_events(&mut inner)?;
-        let mut delivered = Vec::new();
+        // Managed App Server notifications are ingested on their reader thread.
+        // Drain that outbox first so the Tauri event bridge can forward deltas
+        // to React instead of leaving them stranded in the native snapshot.
+        let mut delivered = inner.pending_events.drain(..).collect::<Vec<_>>();
         let preferences = sync_preferences();
         for mut event in incoming.drain(..) {
+            if !apply_content_policy(&mut event, &preferences) {
+                continue;
+            }
+            if !inner.seen_event_ids.insert(event.event_id.clone()) {
+                continue;
+            }
+            apply_event(&mut inner, &event);
+            delivered.push(event);
+        }
+        let inventory_events = discover_local_rollout_events(&mut inner);
+        for mut event in inventory_events {
             if !apply_content_policy(&mut event, &preferences) {
                 continue;
             }
@@ -444,19 +480,26 @@ impl CodexSessionManager {
         Ok(delivered)
     }
 
-    pub fn redact_visible_content(&self) -> Result<(), String> {
+    fn ingest_external_queued(
+        &self,
+        events: Vec<CodexEventEnvelope>,
+    ) -> Result<Vec<CodexEventEnvelope>, String> {
+        let delivered = self.ingest_external(events)?;
+        if delivered.is_empty() {
+            return Ok(delivered);
+        }
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| "Codex session state lock is unavailable".to_string())?;
-        for session in inner.sessions.values_mut() {
-            session.latest_visible_message = None;
-        }
-        Ok(())
+        inner.pending_events.extend(delivered.iter().cloned());
+        Ok(delivered)
     }
 }
 
 pub fn start_managed_daemon() -> Result<bool, String> {
+    let executable = codex_executable()
+        .ok_or_else(|| "未找到可运行的 Codex CLI；请确认已完成安装。".to_string())?;
     let control_socket = codex_home().join("app-server-control/app-server-control.sock");
     if control_socket.exists() {
         app_server_request(
@@ -466,7 +509,7 @@ pub fn start_managed_daemon() -> Result<bool, String> {
         .map_err(|_| "检测到 Codex App Server control socket，但它未能完成只读握手；Focus Pet 不会替换或重启该进程。".to_string())?;
         return Ok(true);
     }
-    let output = Command::new("codex")
+    let output = codex_command(&executable)
         .args(["app-server", "daemon", "start"])
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
@@ -488,9 +531,8 @@ pub fn start_managed_daemon() -> Result<bool, String> {
 }
 
 /// Start the official App Server directly when the user has a normal Codex CLI
-/// but has not opted into the separately-installed managed standalone runtime.
-/// This path is deliberately explicit (Settings button only), local, and owned
-/// by Focus Pet. It is stopped by Focus Pet's normal Quit actions; an existing
+/// but not the separately-installed managed standalone runtime. Focus Pet owns
+/// this local fallback and stops it during normal Quit actions; an existing
 /// user-owned control socket is never replaced or terminated.
 fn start_focus_pet_ephemeral_app_server() -> Result<bool, String> {
     let holder = FOCUS_PET_EPHEMERAL_APP_SERVER.get_or_init(|| Mutex::new(None));
@@ -507,7 +549,9 @@ fn start_focus_pet_ephemeral_app_server() -> Result<bool, String> {
         }
     }
     *child_slot = None;
-    let child = Command::new("codex")
+    let executable = codex_executable()
+        .ok_or_else(|| "未找到可运行的 Codex CLI；请确认已完成安装。".to_string())?;
+    let child = codex_command(&executable)
         .args(["app-server", "--listen", "unix://"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -574,14 +618,17 @@ pub fn start_managed_event_stream(manager: CodexSessionManager) {
 }
 
 fn run_managed_event_stream_once(manager: &CodexSessionManager) -> bool {
-    run_managed_event_stream_once_with_command(manager, Path::new("codex"))
+    let Some(executable) = codex_executable() else {
+        return false;
+    };
+    run_managed_event_stream_once_with_command(manager, &executable)
 }
 
 fn run_managed_event_stream_once_with_command(
     manager: &CodexSessionManager,
     executable: &Path,
 ) -> bool {
-    let child = Command::new(executable)
+    let child = codex_command(executable)
         .args(["app-server", "proxy"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -685,7 +732,7 @@ fn run_managed_event_stream_once_with_command(
                     .filter_map(managed_stream_runtime)
                     .collect::<Vec<_>>();
                 if !events.is_empty() {
-                    let _ = manager.ingest_external(events);
+                    let _ = manager.ingest_external_queued(events);
                 }
                 for (thread_id, runtime) in transitions {
                     if runtime == "active" {
@@ -752,6 +799,11 @@ fn managed_stream_events(
             .into_iter()
             .collect();
     }
+    if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta") {
+        return managed_agent_message_delta_event(message.get("params").unwrap_or(&Value::Null))
+            .into_iter()
+            .collect();
+    }
     if let Some(ManagedStreamRequest::TurnsList { thread_id }) = request {
         return managed_completion_events(thread_id, message);
     }
@@ -763,6 +815,41 @@ fn managed_stream_events(
         .flatten()
         .filter_map(managed_status_event_from_thread)
         .collect()
+}
+
+/// The official App Server emits only assistant-visible deltas here. This is
+/// deliberately the sole streaming content path: user prompts, reasoning,
+/// tool calls and terminal output are never projected into Focus Pet.
+fn managed_agent_message_delta_event(params: &Value) -> Option<CodexEventEnvelope> {
+    let thread_id = params.get("threadId")?.as_str()?;
+    let turn_id = params.get("turnId")?.as_str()?;
+    let item_id = params.get("itemId")?.as_str()?;
+    let delta = params.get("delta")?.as_str()?;
+    (!delta.is_empty()).then_some(())?;
+    let sequence = MANAGED_STREAM_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let now = chrono::Utc::now().to_rfc3339();
+    Some(CodexEventEnvelope {
+        schema_version: 1,
+        event_id: format!("local:appserver:{thread_id}:{item_id}:delta:{sequence}"),
+        sequence,
+        host_id: "local".to_string(),
+        session_id: thread_id.to_string(),
+        thread_id: Some(thread_id.to_string()),
+        turn_id: Some(turn_id.to_string()),
+        occurred_at: now.clone(),
+        received_at: now,
+        kind: "message.updated".to_string(),
+        source: "appServer".to_string(),
+        confidence: "exact".to_string(),
+        payload: json!({
+            "itemId": item_id,
+            "role": "assistant",
+            "phase": "streaming",
+            "text": delta,
+            "isDelta": true,
+            "isFinal": false,
+        }),
+    })
 }
 
 fn managed_status_event_from_thread(thread: &Value) -> Option<CodexEventEnvelope> {
@@ -1026,6 +1113,7 @@ pub fn integration_status() -> CodexIntegrationStatus {
     let hooks_path = home.join("hooks.json");
     let config_path = home.join("config.toml");
     let has_inline_hooks = config_has_inline_hooks(&config_path);
+    let focus_pet_hooks_installed = hooks_file_has_focus_pet_handlers(&hooks_path);
     let control_socket = home.join("app-server-control/app-server-control.sock");
     let standalone = home.join("packages/standalone/current/codex");
     let (managed_daemon_status, managed_daemon_message) = if control_socket.exists() {
@@ -1056,7 +1144,7 @@ pub fn integration_status() -> CodexIntegrationStatus {
         hook_command: hook_command(),
         hook_file_exists: hooks_path.is_file(),
         has_inline_hooks,
-        mode: if hooks_path.is_file() || has_inline_hooks {
+        mode: if focus_pet_hooks_installed {
             "configured".to_string()
         } else {
             "notConfigured".to_string()
@@ -1068,30 +1156,80 @@ pub fn integration_status() -> CodexIntegrationStatus {
 }
 
 fn codex_cli_is_available() -> bool {
-    Command::new("codex")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    codex_executable().is_some()
+}
+
+/// GUI apps launched by Finder/Dock do not inherit the user's interactive
+/// shell PATH. Resolve the same common installation locations that the SSH
+/// diagnostic uses, then prepend the executable directory so a Node-based
+/// launcher can also find `node`.
+fn codex_executable() -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from("codex")];
+    if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        candidates.extend([
+            home.join(".local/bin/codex"),
+            home.join(".npm-global/bin/codex"),
+            home.join(".volta/bin/codex"),
+            home.join(".asdf/shims/codex"),
+        ]);
+        if let Ok(versions) = fs::read_dir(home.join(".nvm/versions/node")) {
+            for version in versions.flatten() {
+                candidates.push(version.path().join("bin/codex"));
+            }
+        }
+    }
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/codex"),
+        PathBuf::from("/usr/local/bin/codex"),
+        PathBuf::from("/usr/bin/codex"),
+    ]);
+    candidates.into_iter().find(|candidate| {
+        codex_command(candidate)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
+}
+
+fn codex_command(executable: &Path) -> Command {
+    let mut command = Command::new(executable);
+    let executable_dir = executable
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let inherited = env::var_os("PATH").unwrap_or_default();
+    let mut search_paths = env::split_paths(&inherited).collect::<Vec<_>>();
+    search_paths.insert(0, executable_dir.to_path_buf());
+    for fallback in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        let fallback = PathBuf::from(fallback);
+        if !search_paths.iter().any(|path| path == &fallback) {
+            search_paths.push(fallback);
+        }
+    }
+    if let Ok(path) = env::join_paths(search_paths) {
+        command.env("PATH", path);
+    }
+    command
 }
 
 pub fn sync_preferences() -> CodexSyncPreferences {
-    let path = preferences_path();
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str::<CodexSyncPreferences>(&contents).ok())
-        .filter(|preferences| is_supported_content_mode(&preferences.content_mode))
-        .unwrap_or_default()
+    // The settings UI intentionally exposes a single safe mode: assistant
+    // visible output. Ignore the removed `statusOnly` preference left by old
+    // builds, otherwise an invisible legacy setting silently blanks every
+    // Codex session summary after upgrade.
+    CodexSyncPreferences::default()
 }
 
 pub fn set_sync_preferences(
     preferences: CodexSyncPreferences,
 ) -> Result<CodexSyncPreferences, String> {
-    if !is_supported_content_mode(&preferences.content_mode) {
-        return Err("Codex 内容等级必须是 statusOnly 或 assistantVisible。".to_string());
+    if preferences.content_mode != "assistantVisible" {
+        return Err("Codex 内容模式固定为 assistantVisible。".to_string());
     }
     write_json_atomically(
         &preferences_path(),
@@ -1127,7 +1265,15 @@ fn install_hooks_with_command(command: String) -> Result<CodexHookConfigurationR
         .or_insert_with(|| Value::Object(serde_json::Map::new()))
         .as_object_mut()
         .ok_or_else(|| "hooks.json 的 hooks 字段必须是 object".to_string())?;
-    for event_name in ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"] {
+    let event_names = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"];
+    if focus_pet_hooks_are_installed(hooks) {
+        return Ok(CodexHookConfigurationResult {
+            message: "Focus Pet 的 Codex Hook 已安装；未修改现有配置。".to_string(),
+            hooks_path: hooks_path.to_string_lossy().to_string(),
+            backup_path: None,
+        });
+    }
+    for event_name in event_names {
         let groups = hooks
             .entry(event_name.to_string())
             .or_insert_with(|| Value::Array(Vec::new()))
@@ -1250,6 +1396,8 @@ fn apply_event(inner: &mut ManagerInner, event: &CodexEventEnvelope) {
             capability_mode: "legacy".to_string(),
             updated_at: event.occurred_at.clone(),
             transcript_path: None,
+            status_source_priority: 0,
+            status_received_at: None,
         });
     if let Some(cwd) = event
         .payload
@@ -1343,17 +1491,43 @@ fn apply_event(inner: &mut ManagerInner, event: &CodexEventEnvelope) {
             }
         }
         "turn.statusChanged" => {
-            if let Some(runtime) = event.payload.get("runtime").and_then(Value::as_str) {
-                session.runtime = runtime.to_string();
+            let priority = event_source_priority(&event.source);
+            let higher_priority_is_stale = session
+                .status_received_at
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .zip(chrono::DateTime::parse_from_rfc3339(&event.received_at).ok())
+                .is_some_and(|(previous, incoming)| {
+                    incoming.signed_duration_since(previous).num_milliseconds() >= 10_000
+                });
+            if priority >= session.status_source_priority || higher_priority_is_stale {
+                if let Some(runtime) = event.payload.get("runtime").and_then(Value::as_str) {
+                    session.runtime = runtime.to_string();
+                    if runtime != "notLoaded" && session.lifecycle == "unknown" {
+                        session.lifecycle = "open".to_string();
+                    }
+                }
+                if let Some(lifecycle) = event
+                    .payload
+                    .get("lifecycle")
+                    .and_then(Value::as_str)
+                    .filter(|value| matches!(*value, "open" | "closed" | "unknown"))
+                {
+                    session.lifecycle = lifecycle.to_string();
+                }
+                if let Some(flags) = event.payload.get("activeFlags").and_then(Value::as_array) {
+                    session.active_flags = flags
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect();
+                }
+                session.status_source_priority = priority;
+                session.status_received_at = Some(event.received_at.clone());
             }
-            if let Some(flags) = event.payload.get("activeFlags").and_then(Value::as_array) {
-                session.active_flags = flags
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect();
+            if event.source == "appServer" {
+                session.capability_mode = "managed".to_string();
             }
-            session.capability_mode = "managed".to_string();
         }
         "message.updated" => {
             let text = event
@@ -1362,12 +1536,32 @@ fn apply_event(inner: &mut ManagerInner, event: &CodexEventEnvelope) {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if !text.is_empty() {
+                let item_id = event
+                    .payload
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                let is_delta = event
+                    .payload
+                    .get("isDelta")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let previous_text = if is_delta
+                    && session
+                        .latest_visible_message
+                        .as_ref()
+                        .is_some_and(|message| message.item_id == item_id)
+                {
+                    session
+                        .latest_visible_message
+                        .as_ref()
+                        .map(|message| message.text.as_str())
+                        .unwrap_or_default()
+                } else {
+                    ""
+                };
                 session.latest_visible_message = Some(CodexVisibleMessage {
-                    item_id: event
-                        .payload
-                        .get("itemId")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
+                    item_id,
                     role: event
                         .payload
                         .get("role")
@@ -1379,7 +1573,7 @@ fn apply_event(inner: &mut ManagerInner, event: &CodexEventEnvelope) {
                         .get("phase")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
-                    text: compact_visible_text(text),
+                    text: compact_visible_text(&format!("{previous_text}{text}")),
                     is_final: event
                         .payload
                         .get("isFinal")
@@ -1392,6 +1586,17 @@ fn apply_event(inner: &mut ManagerInner, event: &CodexEventEnvelope) {
         _ => {}
     }
     session.updated_at = event.occurred_at.clone();
+}
+
+fn event_source_priority(source: &str) -> u8 {
+    match source {
+        "appServer" => 5,
+        "hook" => 4,
+        "rollout" | "rolloutInventory" => 3,
+        "legacyNotify" => 2,
+        "processProbe" => 1,
+        _ => 0,
+    }
 }
 
 fn collect_transcript_events(inner: &mut ManagerInner) -> Vec<CodexEventEnvelope> {
@@ -1418,6 +1623,329 @@ fn collect_transcript_events(inner: &mut ManagerInner) -> Vec<CodexEventEnvelope
             tail_transcript(&host_id, &session_id, &transcript_path, cursor)
         })
         .collect()
+}
+
+/// Discover recent standard CLI rollout files without writing to `~/.codex`.
+/// Hooks remain useful for older Codex versions, but they are no longer a
+/// prerequisite for seeing a normal `codex` terminal session.
+fn discover_local_rollout_events(inner: &mut ManagerInner) -> Vec<CodexEventEnvelope> {
+    if inner
+        .rollout_process_probe_at
+        .map_or(true, |last| last.elapsed() >= PROCESS_PROBE_INTERVAL)
+    {
+        inner.open_rollout_paths = local_open_rollout_paths();
+        inner.rollout_process_probe_at = Some(Instant::now());
+    }
+    let mut files = Vec::new();
+    collect_rollout_files(&codex_home().join("sessions"), 0, &mut files);
+    files.sort_by(|left, right| right.1.cmp(&left.1));
+    files.truncate(MAX_DISCOVERED_ROLLOUTS);
+
+    let now = SystemTime::now();
+    let mut events = Vec::new();
+    for (path, modified_at) in files {
+        let Ok(age) = now.duration_since(modified_at) else {
+            continue;
+        };
+        if age > ROLLOUT_DISCOVERY_WINDOW {
+            continue;
+        }
+        let Some((session_id, cwd)) = rollout_descriptor(&path) else {
+            continue;
+        };
+        let transcript_path = path.to_string_lossy().to_string();
+        let key = format!("local:{session_id}");
+        if !inner.sessions.contains_key(&key) {
+            events.push(CodexEventEnvelope {
+                schema_version: 1,
+                event_id: format!("rollout-inventory:{session_id}:started"),
+                sequence: event_sequence(),
+                host_id: "local".to_string(),
+                session_id: session_id.clone(),
+                thread_id: None,
+                turn_id: None,
+                occurred_at: system_time_rfc3339(modified_at),
+                received_at: chrono::Utc::now().to_rfc3339(),
+                kind: "session.started".to_string(),
+                source: "rolloutInventory".to_string(),
+                confidence: "exact".to_string(),
+                payload: json!({
+                    "cwd": cwd,
+                    "transcriptPath": transcript_path,
+                    "title": "Codex CLI",
+                }),
+            });
+        }
+        let process_open = inner
+            .open_rollout_paths
+            .as_ref()
+            .is_some_and(|paths| paths.contains(&path));
+        let previous = inner.rollout_observations.get(&key);
+        let (runtime, lifecycle) = if previous.is_some_and(|observation| {
+            observation.modified_at == modified_at && observation.process_open == process_open
+        }) {
+            let observation = previous.expect("checked observation");
+            (observation.runtime.clone(), observation.lifecycle.clone())
+        } else {
+            let runtime = if process_open {
+                rollout_turn_runtime(&path)
+            } else {
+                "idle".to_string()
+            };
+            let lifecycle = if inner.open_rollout_paths.is_none() {
+                "unknown"
+            } else if process_open {
+                "open"
+            } else {
+                "closed"
+            };
+            (runtime, lifecycle.to_string())
+        };
+        let changed = inner
+            .rollout_observations
+            .get(&key)
+            .map(|observation| {
+                observation.modified_at != modified_at
+                    || observation.runtime != runtime
+                    || observation.lifecycle != lifecycle
+                    || observation.process_open != process_open
+            })
+            .unwrap_or(true);
+        if changed {
+            inner.rollout_observations.insert(
+                key,
+                RolloutObservation {
+                    modified_at,
+                    runtime: runtime.clone(),
+                    lifecycle: lifecycle.clone(),
+                    process_open,
+                },
+            );
+            events.push(CodexEventEnvelope {
+                schema_version: 1,
+                event_id: format!(
+                    "rollout-inventory:{session_id}:{}:{}:{}",
+                    runtime,
+                    lifecycle,
+                    system_time_key(modified_at)
+                ),
+                sequence: event_sequence(),
+                host_id: "local".to_string(),
+                session_id,
+                thread_id: None,
+                turn_id: None,
+                occurred_at: system_time_rfc3339(modified_at),
+                received_at: chrono::Utc::now().to_rfc3339(),
+                kind: "turn.statusChanged".to_string(),
+                source: if inner.open_rollout_paths.is_some() {
+                    "processProbe"
+                } else {
+                    "rolloutInventory"
+                }
+                .to_string(),
+                confidence: if inner.open_rollout_paths.is_some() {
+                    "exact"
+                } else {
+                    "observed"
+                }
+                .to_string(),
+                payload: json!({
+                    "runtime": if inner.open_rollout_paths.is_some() { Value::String(runtime) } else { Value::String("unknown".to_string()) },
+                    "lifecycle": lifecycle,
+                    "activeFlags": []
+                }),
+            });
+        }
+    }
+    events
+}
+
+fn rollout_turn_runtime(path: &Path) -> String {
+    const TAIL_BYTES: u64 = 256 * 1024;
+    let Ok(mut file) = File::open(path) else {
+        return "idle".to_string();
+    };
+    let length = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    if length > TAIL_BYTES {
+        let _ = file.seek(SeekFrom::Start(length - TAIL_BYTES));
+    }
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return "idle".to_string();
+    }
+    for line in String::from_utf8_lossy(&bytes).lines().rev() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        match record
+            .get("payload")
+            .and_then(|payload| payload.get("type"))
+            .and_then(Value::as_str)
+        {
+            Some("task_started") => return "active".to_string(),
+            Some("task_complete" | "turn_aborted") => return "idle".to_string(),
+            _ => {}
+        }
+    }
+    "idle".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn local_open_rollout_paths() -> Option<HashSet<PathBuf>> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-n", "-P", "-Fn", "-c", "codex"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix('n'))
+            .map(PathBuf::from)
+            .filter(|path| {
+                path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+                    && path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|name| name.starts_with("rollout-"))
+                    && path.components().any(|part| part.as_os_str() == "sessions")
+            })
+            .collect(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn local_open_rollout_paths() -> Option<HashSet<PathBuf>> {
+    let mut paths = HashSet::new();
+    let processes = fs::read_dir("/proc").ok()?;
+    for process in processes.flatten() {
+        if !process
+            .file_name()
+            .to_string_lossy()
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        {
+            continue;
+        }
+        let command = fs::read(process.path().join("cmdline")).unwrap_or_default();
+        if !String::from_utf8_lossy(&command).contains("codex") {
+            continue;
+        }
+        let Ok(descriptors) = fs::read_dir(process.path().join("fd")) else {
+            continue;
+        };
+        for descriptor in descriptors.flatten() {
+            let Ok(path) = fs::read_link(descriptor.path()) else {
+                continue;
+            };
+            if path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.starts_with("rollout-"))
+                && path.components().any(|part| part.as_os_str() == "sessions")
+            {
+                paths.insert(path);
+            }
+        }
+    }
+    Some(paths)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn local_open_rollout_paths() -> Option<HashSet<PathBuf>> {
+    None
+}
+
+fn collect_rollout_files(root: &Path, depth: usize, files: &mut Vec<(PathBuf, SystemTime)>) {
+    if depth > 5 || files.len() >= MAX_DISCOVERED_ROLLOUTS.saturating_mul(4) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_rollout_files(&path, depth.saturating_add(1), files);
+            continue;
+        }
+        if !file_type.is_file()
+            || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+            || !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-"))
+        {
+            continue;
+        }
+        if let Ok(modified_at) = entry.metadata().and_then(|metadata| metadata.modified()) {
+            files.push((path, modified_at));
+        }
+    }
+}
+
+fn rollout_descriptor(path: &Path) -> Option<(String, Option<String>)> {
+    let mut file = File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(64 * 1024)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let rollout_name = path.file_stem()?.to_str()?.strip_prefix("rollout-")?;
+    let fallback_id = rollout_name
+        .get(rollout_name.len().saturating_sub(36)..)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(rollout_name)
+        .to_string();
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let payload = record.get("payload").unwrap_or(&Value::Null);
+        let session_id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&fallback_id)
+            .to_string();
+        let cwd = payload
+            .get("cwd")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        return Some((session_id, cwd));
+    }
+    Some((fallback_id, None))
+}
+
+fn system_time_key(value: SystemTime) -> u128 {
+    value
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn system_time_rfc3339(value: SystemTime) -> String {
+    let seconds = value
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_else(|_| chrono::Utc::now().timestamp());
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339()
 }
 
 fn tail_transcript(
@@ -1480,7 +2008,9 @@ fn tail_transcript(
 }
 
 fn app_server_request(method: &str, params: Value) -> Result<Value, String> {
-    let mut child = Command::new("codex")
+    let executable = codex_executable()
+        .ok_or_else(|| "未找到可运行的 Codex CLI；请确认已完成安装。".to_string())?;
+    let mut child = codex_command(&executable)
         .args(["app-server", "proxy"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1584,22 +2114,50 @@ fn transcript_message_event(
     line: &str,
 ) -> Option<CodexEventEnvelope> {
     let record = serde_json::from_str::<Value>(line).ok()?;
-    if record.get("type")?.as_str()? != "response_item" {
-        return None;
-    }
     let payload = record.get("payload")?;
-    if payload.get("type")?.as_str()? != "message" || payload.get("role")?.as_str()? != "assistant"
+    let record_type = record.get("type")?.as_str()?;
+    let (item_id, text, phase) = if record_type == "event_msg"
+        && payload.get("type").and_then(Value::as_str) == Some("agent_message")
     {
+        (
+            format!(
+                "event-{}",
+                record
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .unwrap_or("message")
+            ),
+            payload.get("message").and_then(Value::as_str)?.to_string(),
+            payload
+                .get("phase")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        )
+    } else if record_type == "response_item"
+        && payload.get("type")?.as_str()? == "message"
+        && payload.get("role")?.as_str()? == "assistant"
+    {
+        (
+            payload
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("message")
+                .to_string(),
+            payload
+                .get("content")?
+                .as_array()?
+                .iter()
+                .filter(|content| {
+                    content.get("type").and_then(Value::as_str) == Some("output_text")
+                })
+                .filter_map(|content| content.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None,
+        )
+    } else {
         return None;
-    }
-    let text = payload
-        .get("content")?
-        .as_array()?
-        .iter()
-        .filter(|content| content.get("type").and_then(Value::as_str) == Some("output_text"))
-        .filter_map(|content| content.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
+    };
     let text = compact_visible_text(&text);
     if text.is_empty() {
         return None;
@@ -1609,10 +2167,6 @@ fn transcript_message_event(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let item_id = payload
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("message");
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
     item_id.hash(&mut hasher);
@@ -1632,6 +2186,7 @@ fn transcript_message_event(
         payload: json!({
             "itemId": item_id,
             "role": "assistant",
+            "phase": phase,
             "text": text,
             "isFinal": true,
         }),
@@ -1759,10 +2314,6 @@ fn compact_visible_text(value: &str) -> String {
     compact
 }
 
-fn is_supported_content_mode(mode: &str) -> bool {
-    matches!(mode, "statusOnly" | "assistantVisible")
-}
-
 /// Enforce the data-minimization setting before an event reaches the durable
 /// journal, session reducer, or webview. Lifecycle state is retained.
 fn apply_content_policy(
@@ -1806,6 +2357,35 @@ fn is_focus_pet_handler(handler: &Value) -> bool {
             .and_then(Value::as_str)
             .map(|message| message == "Focus Pet session sync")
             .unwrap_or(false)
+}
+
+fn focus_pet_hooks_are_installed(hooks: &serde_json::Map<String, Value>) -> bool {
+    ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]
+        .iter()
+        .all(|event_name| {
+            hooks
+                .get(*event_name)
+                .and_then(Value::as_array)
+                .map(|groups| {
+                    groups.iter().any(|group| {
+                        group
+                            .get("hooks")
+                            .and_then(Value::as_array)
+                            .map(|handlers| handlers.iter().any(is_focus_pet_handler))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        })
+}
+
+fn hooks_file_has_focus_pet_handlers(path: &Path) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+        .and_then(|root| root.get("hooks").and_then(Value::as_object).cloned())
+        .map(|hooks| focus_pet_hooks_are_installed(&hooks))
+        .unwrap_or(false)
 }
 
 fn backup_file(path: &Path) -> Result<String, String> {
@@ -1860,21 +2440,21 @@ fn app_data_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
-        return home.join("Library/Application Support/Focus Pet");
+        home.join("Library/Application Support/Focus Pet")
     }
     #[cfg(target_os = "windows")]
     {
-        return env::var_os("APPDATA")
+        env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or(home)
-            .join("Focus Pet");
+            .join("Focus Pet")
     }
     #[cfg(target_os = "linux")]
     {
-        return env::var_os("XDG_DATA_HOME")
+        env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
-            .join("Focus Pet");
+            .join("Focus Pet")
     }
 }
 
@@ -1916,10 +2496,12 @@ fn set_private_file_permissions(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_content_policy, compact_visible_text, managed_completion_events,
-        managed_status_events_from_thread_list, parse_hook_payload, retained_journal_bytes,
-        run_managed_event_stream_once_with_command, transcript_message_event, websocket_client_key,
-        CodexSessionManager, CodexSyncPreferences, APP_SERVER_STREAM_POLL,
+        apply_content_policy, compact_visible_text, focus_pet_hooks_are_installed,
+        hooks_file_has_focus_pet_handlers, managed_completion_events,
+        managed_status_events_from_thread_list, managed_stream_events, parse_hook_payload,
+        retained_journal_bytes, rollout_descriptor, run_managed_event_stream_once_with_command,
+        transcript_message_event, websocket_client_key, CodexEventEnvelope, CodexSessionManager,
+        CodexSyncPreferences, APP_SERVER_STREAM_POLL,
     };
     use base64::Engine as _;
     #[cfg(unix)]
@@ -1941,6 +2523,35 @@ mod tests {
     #[test]
     fn managed_observer_inventory_fallback_is_realtime_bounded() {
         assert_eq!(APP_SERVER_STREAM_POLL, std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn status_only_remote_inventory_opens_an_active_session() {
+        let manager = CodexSessionManager::new();
+        manager
+            .ingest_external(vec![CodexEventEnvelope {
+                schema_version: 1,
+                event_id: "ssh-5080-active".to_string(),
+                sequence: 1,
+                host_id: "ssh:5080".to_string(),
+                session_id: "remote-session-1".to_string(),
+                thread_id: None,
+                turn_id: None,
+                occurred_at: "2026-07-30T08:00:00Z".to_string(),
+                received_at: "2026-07-30T08:00:00Z".to_string(),
+                kind: "turn.statusChanged".to_string(),
+                source: "rolloutInventory".to_string(),
+                confidence: "inferred".to_string(),
+                payload: serde_json::json!({ "runtime": "active", "activeFlags": [] }),
+            }])
+            .expect("ingest remote rollout inventory");
+        let inner = manager.inner.lock().expect("lock session manager");
+        let session = inner
+            .sessions
+            .get("ssh:5080:remote-session-1")
+            .expect("remote session");
+        assert_eq!(session.lifecycle, "open");
+        assert_eq!(session.runtime, "active");
     }
 
     #[test]
@@ -1985,6 +2596,40 @@ mod tests {
     }
 
     #[test]
+    fn rollout_agent_message_is_visible_before_the_final_response_item() {
+        let event = transcript_message_event(
+            "local",
+            "s-1",
+            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"agent_message","message":"Streaming assistant text","phase":"commentary"}}"#,
+        )
+        .unwrap();
+        assert_eq!(event.payload["role"], "assistant");
+        assert_eq!(event.payload["text"], "Streaming assistant text");
+        assert_eq!(event.payload["phase"], "commentary");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn standard_rollout_descriptor_discovers_session_without_a_hook() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rollout-2026-01-01T00-00-00-019fa884-01f9-7c81-b158-{unique:012x}.jsonl"
+        ));
+        fs::write(
+            &path,
+            r#"{"type":"session_meta","payload":{"id":"session-from-rollout","cwd":"/work/focus-pet"}}"#,
+        )
+        .expect("write rollout fixture");
+        let descriptor = rollout_descriptor(&path).expect("parse rollout descriptor");
+        assert_eq!(descriptor.0, "session-from-rollout");
+        assert_eq!(descriptor.1.as_deref(), Some("/work/focus-pet"));
+        fs::remove_file(path).expect("remove rollout fixture");
+    }
+
+    #[test]
     fn rollout_fixture_only_surfaces_assistant_visible_output() {
         let events = include_str!("../fixtures/codex/rollout-records.jsonl")
             .lines()
@@ -2026,6 +2671,61 @@ mod tests {
         assert!(events[0].payload.get("command").is_none());
     }
 
+    #[test]
+    fn managed_stream_projects_only_official_assistant_deltas() {
+        let notification = serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "assistant-1",
+                "delta": "正在输出"
+            }
+        });
+        let events = managed_stream_events(&notification, None);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "message.updated");
+        assert_eq!(events[0].payload["role"], "assistant");
+        assert_eq!(events[0].payload["text"], "正在输出");
+        assert_eq!(events[0].payload["isDelta"], true);
+        assert!(events[0].payload.get("prompt").is_none());
+    }
+
+    #[test]
+    fn installed_hooks_are_detected_without_rewriting_existing_groups() {
+        let handler = serde_json::json!({
+            "type": "command",
+            "command": "'/Applications/Focus Pet.app/Contents/MacOS/focus-pet' --codex-hook"
+        });
+        let hooks = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]
+            .into_iter()
+            .map(|event| {
+                (
+                    event.to_string(),
+                    serde_json::json!([{ "hooks": [handler.clone()] }]),
+                )
+            })
+            .collect();
+        assert!(focus_pet_hooks_are_installed(&hooks));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrelated_hooks_file_is_not_reported_as_focus_pet_configured() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("focus-pet-other-hooks-{unique}.json"));
+        fs::write(
+            &path,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"other-tool"}]}]}}"#,
+        )
+        .expect("write unrelated hooks fixture");
+        assert!(!hooks_file_has_focus_pet_handlers(&path));
+        fs::remove_file(path).expect("remove unrelated hooks fixture");
+    }
+
     #[cfg(unix)]
     #[test]
     fn managed_stream_performs_read_only_handshake_and_projects_final_message() {
@@ -2056,7 +2756,10 @@ const handle = (message) => {
   if (message.method === 'thread/list') send({ id: 2, result: { data: [{ id: 'thread-fake', status: { type: 'idle' }, name: 'Fake thread' }] } });
   if (message.method === 'thread/turns/list') {
     send({ id: 3, result: { data: [{ id: 'turn-fake', items: [{ id: 'assistant-fake', type: 'agentMessage', text: 'Final from managed stream' }] }] } });
-    process.exit(0);
+    // Give stdout a tick to flush the final WebSocket frame before closing.
+    // An immediate exit makes the fixture race the Rust reader and tests the
+    // fake process's buffering rather than the observer contract.
+    setTimeout(() => process.exit(0), 20);
   }
 };
 const parse = () => {
@@ -2149,6 +2852,6 @@ process.stdin.on('data', (chunk) => { buffer = Buffer.concat([buffer, chunk]); p
     #[test]
     fn manager_starts_empty() {
         let manager = CodexSessionManager::new();
-        assert!(manager.snapshot().unwrap().is_empty());
+        assert!(manager.inner.lock().unwrap().sessions.is_empty());
     }
 }

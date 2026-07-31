@@ -6,6 +6,7 @@ import type {
   PetIntent,
   PetSettings,
 } from "../core/types";
+import type { CodexSessionSnapshot } from "../core/codexSessions";
 
 export interface PetCompanionViewState {
   theme: AppThemeID;
@@ -15,9 +16,14 @@ export interface PetCompanionViewState {
   todayWorkload: Pick<InputWorkloadSummary, "estimatedTypedCharacters" | "pointerActionCount">;
   latestPetBubble?: string;
   codexBubble?: string;
+  codexSessions: CodexSessionSnapshot[];
 }
 
-export const makePetCompanionViewState = (state: AppRuntimeState, codexBubble?: string): PetCompanionViewState => ({
+export const makePetCompanionViewState = (
+  state: AppRuntimeState,
+  codexBubble?: string,
+  codexSessions: CodexSessionSnapshot[] = [],
+): PetCompanionViewState => ({
   theme: state.settings.appearance.theme,
   petSettings: state.settings.pet,
   currentPetIntent: state.currentPetIntent,
@@ -31,4 +37,5 @@ export const makePetCompanionViewState = (state: AppRuntimeState, codexBubble?: 
   },
   latestPetBubble: state.latestPetBubble,
   codexBubble,
+  codexSessions,
 });

@@ -1,4 +1,4 @@
-use super::{now_iso, PermissionSnapshot, RawActivitySample};
+use super::{now_iso, RawActivitySample};
 use std::{
     mem::size_of,
     path::Path,
@@ -108,28 +108,6 @@ fn locked_activity_sample(timestamp: String, idle_seconds: f64) -> RawActivitySa
         is_system_sleeping: false,
         is_screen_locked: true,
     }
-}
-
-pub fn permission_snapshot() -> PermissionSnapshot {
-    ensure_input_monitor();
-    PermissionSnapshot {
-        refreshed_at: now_iso(),
-        input_monitoring: if INPUT_HOOKS_ACTIVE.load(Ordering::Acquire) {
-            "windows-low-level-hooks-available".to_string()
-        } else {
-            "windows-idle-fallback".to_string()
-        },
-        notifications: "windows-notification-runtime-available".to_string(),
-    }
-}
-
-pub fn open_system_settings(destination: &str) -> bool {
-    let uri = match destination {
-        "notifications" => "ms-settings:notifications",
-        "inputMonitoring" | "privacySecurity" => "ms-settings:privacy-general",
-        _ => "ms-settings:privacy-general",
-    };
-    open::that(uri).is_ok()
 }
 
 struct ForegroundWindow {
@@ -431,8 +409,8 @@ fn saturating_increment(counter: &AtomicU32) {
 mod tests {
     use super::{
         input_monitor_retry_due, is_pointer_action_message, locked_activity_sample,
-        monitor_hooks_ready, permission_snapshot, process_name_from_snapshot, sample_activity,
-        saturating_increment, INPUT_MONITOR_RETRY_MS,
+        monitor_hooks_ready, process_name_from_snapshot, sample_activity, saturating_increment,
+        INPUT_MONITOR_RETRY_MS,
     };
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -486,10 +464,6 @@ mod tests {
         assert!(sample.idle_seconds >= 0.0);
         assert!(sample.sample_quality.starts_with("win32-"));
         assert!(sample.input_monitoring_status.starts_with("windows-"));
-
-        let permissions = permission_snapshot();
-        assert!(permissions.input_monitoring.starts_with("windows-"));
-        assert!(permissions.notifications.contains("available"));
     }
 
     #[test]

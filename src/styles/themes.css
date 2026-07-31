@@ -44,6 +44,15 @@
   background: var(--inset-surface);
 }
 
+.theme-choice-preview > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .32;
+}
+
 .theme-preview-window {
   position: absolute;
   inset: 11px 14px 17px;
@@ -102,6 +111,13 @@
 }
 
 .theme-choice-card.is-selected .theme-choice-check { opacity: 1; }
+
+:root[data-theme] .app-stage {
+  background-image: var(--theme-art-image);
+  background-repeat: no-repeat;
+  background-position: right -120px top -80px;
+  background-size: 620px 414px;
+}
 
 .theme-choice-card[data-theme-preview="neobrutalism"] { --theme-preview-1: #ffdf38; --theme-preview-2: #ff5caa; --theme-preview-3: #65e65b; --theme-preview-4: #111111; }
 .theme-choice-card[data-theme-preview="neobrutalism"] .theme-choice-preview { border: 2px solid #111; border-radius: 0; background: #fff8de; }
@@ -209,7 +225,7 @@
 :root[data-theme="neobrutalism"] :is(body, .app-stage, .app-shell, .dashboard-main) { background: var(--app-bg-mid); }
 :root[data-theme="neobrutalism"] .sidebar { border-right: 3px solid #111; background: #ffdf38; box-shadow: none; }
 :root[data-theme="neobrutalism"] .brand-mark img { border: 3px solid #111; border-radius: 4px; box-shadow: 4px 4px 0 #111; }
-:root[data-theme="neobrutalism"] :is(.fp-glass, .fp-inset-card, .panel, .settings-content-panel, .settings-subcard, .recognition-diagnostic-panel, .pet-settings-section, .settings-list-row, .recognition-summary-row, .data-summary-row, .permission-list button, .swift-focus-card, .system-monitor-card, .swift-timeline-card, .today-app-usage-card, .today-rhythm-card, .history-card, .pet-pack-card, .pet-selected-summary, .pet-mapping-panel, .random-action-panel, .pet-preview-stage, .widget-card, .menu-bar-card, .pet-hover-panel, .workspace-toast) {
+:root[data-theme="neobrutalism"] :is(.fp-glass, .fp-inset-card, .panel, .settings-content-panel, .settings-subcard, .recognition-diagnostic-panel, .pet-settings-section, .settings-list-row, .recognition-summary-row, .swift-focus-card, .system-monitor-card, .swift-timeline-card, .today-app-usage-card, .today-rhythm-card, .history-card, .pet-pack-card, .pet-selected-summary, .pet-mapping-panel, .random-action-panel, .pet-preview-stage, .widget-card, .menu-bar-card, .pet-hover-panel, .workspace-toast) {
   border: 3px solid #111;
   border-radius: 4px;
   background: var(--card);
@@ -217,7 +233,7 @@
   box-shadow: 4px 4px 0 #111;
   backdrop-filter: none;
 }
-:root[data-theme="neobrutalism"] :is(.fp-inset-card, .settings-subcard, .recognition-diagnostic-panel, .settings-list-row, .recognition-summary-row, .data-summary-row) { border-width: 2px; box-shadow: 3px 3px 0 #111; }
+:root[data-theme="neobrutalism"] :is(.fp-inset-card, .settings-subcard, .recognition-diagnostic-panel, .settings-list-row, .recognition-summary-row) { border-width: 2px; box-shadow: 3px 3px 0 #111; }
 :root[data-theme="neobrutalism"] :is(.sidebar-tab, .sidebar-icon, .command-button, .fp-button, .fp-toggle-pill, .fp-segmented-control, .fp-segmented-option, .fp-stepper-actions button, input, select, .menu-action-button, .pet-hover-actions button) { border-radius: 3px; }
 :root[data-theme="neobrutalism"] :is(.sidebar-tab.active, .fp-segmented-option[aria-checked="true"], .theme-choice-card.is-selected) { border: 2px solid #111; background: #fff; box-shadow: 3px 3px 0 #111; }
 :root[data-theme="neobrutalism"] .sidebar-tab.active::before { display: none; }
@@ -484,7 +500,7 @@
 :root[data-theme="constructivism"] .brand-mark { color: #f4f0e5; }
 :root[data-theme="constructivism"] .brand-mark :is(strong, span) { color: inherit; }
 :root[data-theme="constructivism"] :is(.pet-stage img, .activity-app-icon img) { filter: grayscale(1) contrast(1.18); }
-:root[data-theme="constructivism"] :is(.fp-glass, .fp-inset-card, .panel, .settings-content-panel, .settings-subcard, .recognition-diagnostic-panel, .pet-settings-section, .settings-list-row, .recognition-summary-row, .data-summary-row, .permission-list button, .swift-focus-card, .system-monitor-card, .swift-timeline-card, .today-app-usage-card, .today-rhythm-card, .history-card, .pet-pack-card, .pet-selected-summary, .pet-mapping-panel, .random-action-panel, .pet-preview-stage, .widget-card, .menu-bar-card, .pet-hover-panel, .workspace-toast) {
+:root[data-theme="constructivism"] :is(.fp-glass, .fp-inset-card, .panel, .settings-content-panel, .settings-subcard, .recognition-diagnostic-panel, .pet-settings-section, .settings-list-row, .recognition-summary-row, .swift-focus-card, .system-monitor-card, .swift-timeline-card, .today-app-usage-card, .today-rhythm-card, .history-card, .pet-pack-card, .pet-selected-summary, .pet-mapping-panel, .random-action-panel, .pet-preview-stage, .widget-card, .menu-bar-card, .pet-hover-panel, .workspace-toast) {
   border: 2px solid #0a0a0a;
   border-radius: 0;
   background: #f4f0e5;
@@ -602,4 +618,13 @@
 
 @media (max-width: 520px) {
   .theme-choice-card { min-height: 160px; grid-template-columns: 1fr; grid-template-rows: 70px 1fr; }
+}
+
+/* Theme art is a packaged, static layer. Keep this declaration last so
+   theme-specific background shorthands cannot accidentally erase it. */
+:root[data-theme] .app-stage {
+  background-image: var(--theme-art-image);
+  background-position: right top;
+  background-repeat: no-repeat;
+  background-size: min(46vw, 720px) auto;
 }

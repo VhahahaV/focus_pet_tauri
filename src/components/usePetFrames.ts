@@ -12,10 +12,12 @@ export const usePetFrames = (frameURLs: string[], fallbackURL?: string): string[
 
   useEffect(() => {
     let cancelled = false;
-    setLoadedFrames([]);
-    if (candidates.length === 0) return () => {
-      cancelled = true;
-    };
+    if (candidates.length === 0) {
+      setLoadedFrames([]);
+      return () => {
+        cancelled = true;
+      };
+    }
 
     void Promise.all(candidates.map((url) => new Promise<string | undefined>((resolve) => {
       const image = new Image();
@@ -23,7 +25,10 @@ export const usePetFrames = (frameURLs: string[], fallbackURL?: string): string[
       image.onerror = () => resolve(undefined);
       image.src = url;
     }))).then((results) => {
-      if (!cancelled) setLoadedFrames(results.filter((url): url is string => Boolean(url)));
+      if (!cancelled) {
+        const nextFrames = results.filter((url): url is string => Boolean(url));
+        setLoadedFrames(nextFrames);
+      }
     });
 
     return () => {

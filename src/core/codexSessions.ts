@@ -47,6 +47,10 @@ export interface CodexSessionSnapshot {
   latestVisibleMessage?: CodexVisibleMessage;
   capabilityMode: "managed" | "hooks" | "legacy" | string;
   updatedAt: string;
+  /** Frontend-only precedence marker; native snapshots may omit it. */
+  statusSourcePriority?: number;
+  /** Receive time for expiring a disconnected higher-priority source. */
+  statusReceivedAt?: string;
 }
 
 export interface CodexIntegrationStatus {
@@ -112,6 +116,7 @@ const sourcePriority: Record<string, number> = {
   appServer: 5,
   hook: 4,
   rollout: 3,
+  rolloutInventory: 3,
   legacyNotify: 2,
   processProbe: 1,
 };
@@ -120,8 +125,8 @@ const sessionKey = (session: Pick<CodexSessionSnapshot, "hostId" | "sessionId">)
 
 const eventSourcePriority = (event: CodexEventEnvelope): number => sourcePriority[event.source] ?? 0;
 
-const compact = (value: string, max = 220): string => {
-  const normalized = value.replaceAll(String.fromCharCode(0), "").trim().replace(/\s+/g, " ");
+const compact = (value: string, max = 4_000): string => {
+  const normalized = value.replaceAll(String.fromCharCode(0), "").trimEnd();
   return normalized.length <= max ? normalized : `${normalized.slice(0, Math.max(0, max - 1))}…`;
 };
 
@@ -140,6 +145,8 @@ const initialSession = (event: CodexEventEnvelope): CodexSessionSnapshot => ({
   activeFlags: [],
   capabilityMode: event.source === "appServer" ? "managed" : event.source === "legacyNotify" ? "legacy" : "hooks",
   updatedAt: event.occurredAt,
+  statusSourcePriority: 0,
+  statusReceivedAt: event.receivedAt,
 });
 
 const payloadString = (payload: Record<string, unknown>, key: string): string | undefined =>
@@ -153,12 +160,17 @@ export const reduceCodexEvents = (
   events: CodexEventEnvelope[],
 ): CodexSessionSnapshot[] => {
   const sessions = new Map(previous.map((session) => [sessionKey(session), session]));
-  const priorities = new Map(previous.map((session) => [sessionKey(session), 0]));
+  const priorities = new Map(previous.map((session) => [sessionKey(session), session.statusSourcePriority ?? 0]));
   for (const event of [...events].sort((left, right) => left.sequence - right.sequence || left.occurredAt.localeCompare(right.occurredAt))) {
     const key = `${event.hostId}:${event.sessionId}`;
     const current = sessions.get(key) ?? initialSession(event);
     const priority = eventSourcePriority(event);
     const currentPriority = priorities.get(key) ?? 0;
+    const previousStatusAt = Date.parse(current.statusReceivedAt ?? "");
+    const incomingStatusAt = Date.parse(event.receivedAt);
+    const higherPriorityIsStale = Number.isFinite(previousStatusAt)
+      && Number.isFinite(incomingStatusAt)
+      && incomingStatusAt - previousStatusAt >= 10_000;
     const cwd = payloadString(event.payload, "cwd") ?? current.cwd;
     const next: CodexSessionSnapshot = {
       ...current,
@@ -194,49 +206,86 @@ export const reduceCodexEvents = (
       }
       const text = payloadString(event.payload, "lastAssistantMessage");
       if (text) next.latestVisibleMessage = { role: "assistant", phase: "final_answer", text: compact(text), isFinal: true, updatedAt: event.occurredAt };
-    } else if (event.kind === "turn.statusChanged" && priority >= currentPriority) {
+    } else if (event.kind === "turn.statusChanged" && (priority >= currentPriority || higherPriorityIsStale)) {
       next.runtime = payloadString(event.payload, "runtime") ?? next.runtime;
+      if (next.runtime !== "notLoaded" && next.lifecycle === "unknown") next.lifecycle = "open";
+      const lifecycle = payloadString(event.payload, "lifecycle");
+      if (lifecycle === "open" || lifecycle === "closed" || lifecycle === "unknown") {
+        next.lifecycle = lifecycle;
+      }
       next.activeFlags = payloadStringList(event.payload, "activeFlags");
+      next.statusSourcePriority = priority;
+      next.statusReceivedAt = event.receivedAt;
       if (event.turnId && next.currentTurn?.turnId === event.turnId && next.runtime === "active") {
         next.currentTurn = { ...next.currentTurn, status: "inProgress" };
       }
     } else if (event.kind === "message.updated") {
       const text = payloadString(event.payload, "text");
       if (text && payloadString(event.payload, "role") !== "user") {
+        const itemId = payloadString(event.payload, "itemId");
+        const currentMessage = current.latestVisibleMessage;
+        const previousText = event.payload.isDelta === true && currentMessage?.itemId === itemId
+          ? currentMessage?.text ?? ""
+          : "";
         next.latestVisibleMessage = {
-          itemId: payloadString(event.payload, "itemId"),
+          itemId,
           role: payloadString(event.payload, "role") ?? "assistant",
           phase: payloadString(event.payload, "phase"),
-          text: compact(text),
+          text: compact(`${previousText}${text}`),
           isFinal: event.payload.isFinal === true,
           updatedAt: event.occurredAt,
         };
       }
     }
     sessions.set(key, next);
-    priorities.set(key, Math.max(currentPriority, priority));
+    const retainedPriority = event.kind === "turn.statusChanged"
+      ? next.statusSourcePriority ?? currentPriority
+      : currentPriority;
+    priorities.set(key, retainedPriority);
   }
-  return [...sessions.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  // Map preserves the previous array's insertion order. Updating a message or
+  // heartbeat must not move a row under the user's pointer.
+  return [...sessions.values()];
 };
 
 export const codexBubble = (sessions: CodexSessionSnapshot[]): string | undefined => {
   const active = sessions.find((session) => session.lifecycle === "open" && (session.activeFlags.includes("waitingOnApproval") || session.activeFlags.includes("waitingOnUserInput") || session.runtime === "active"));
-  const selected = active ?? sessions.find((session) => session.currentTurn?.status === "completed") ?? sessions[0];
+  const selected = active;
   if (!selected) return undefined;
   const prefix = selected.hostKind === "ssh" ? `🌐 ${selected.title}` : selected.title;
   if (selected.activeFlags.includes("waitingOnApproval")) return `${prefix} 正在等待审批`;
   if (selected.activeFlags.includes("waitingOnUserInput")) return `${prefix} 正在等待你的输入`;
-  if (selected.runtime === "active") return selected.latestVisibleMessage?.text ? `${prefix}：${selected.latestVisibleMessage.text}` : `${prefix} 正在运行`;
-  if (selected.currentTurn?.status === "completed") return selected.latestVisibleMessage?.text ? `${prefix}：${selected.latestVisibleMessage.text}` : `${prefix} 已完成`;
-  return selected.latestVisibleMessage?.text ? `${prefix}：${selected.latestVisibleMessage.text}` : undefined;
+  if (selected.runtime === "active") return selected.latestVisibleMessage?.text ? `${prefix}：${compact(selected.latestVisibleMessage.text, 96)}` : `${prefix} 正在运行`;
+  if (selected.currentTurn?.status === "completed") return selected.latestVisibleMessage?.text ? `${prefix}：${compact(selected.latestVisibleMessage.text, 96)}` : `${prefix} 已完成`;
+  return selected.latestVisibleMessage?.text ? `${prefix}：${compact(selected.latestVisibleMessage.text, 96)}` : undefined;
 };
 
 export const codexStatusLabel = (session: CodexSessionSnapshot): string => {
   if (session.activeFlags.includes("waitingOnApproval")) return "等待审批";
   if (session.activeFlags.includes("waitingOnUserInput")) return "等待输入";
   if (session.runtime === "active") return "运行中";
-  if (session.currentTurn?.status === "completed") return "已完成";
   if (session.lifecycle === "closed") return "已结束";
+  if (session.lifecycle === "open") return "待命";
+  if (session.currentTurn?.status === "completed" || session.latestVisibleMessage?.isFinal) return "已完成";
   if (session.runtime === "systemError") return "异常";
   return "待命";
 };
+
+export const codexSessionIsOpen = (session: CodexSessionSnapshot): boolean =>
+  session.lifecycle === "open";
+
+export const codexSessionIsActive = (session: CodexSessionSnapshot): boolean =>
+  codexSessionIsOpen(session) && (
+    session.runtime === "active"
+    || session.activeFlags.includes("waitingOnApproval")
+    || session.activeFlags.includes("waitingOnUserInput")
+  );
+
+export const onlyActiveCodexSessions = (
+  sessions: CodexSessionSnapshot[],
+): CodexSessionSnapshot[] => sessions.filter(codexSessionIsActive);
+
+export const reduceActiveCodexEvents = (
+  previous: CodexSessionSnapshot[],
+  events: CodexEventEnvelope[],
+): CodexSessionSnapshot[] => onlyActiveCodexSessions(reduceCodexEvents(previous, events));

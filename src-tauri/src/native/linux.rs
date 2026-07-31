@@ -1,4 +1,4 @@
-use super::{now_iso, shell_text, PermissionSnapshot, RawActivitySample};
+use super::{now_iso, shell_text, RawActivitySample};
 use std::process::Command;
 
 pub fn sample_activity() -> RawActivitySample {
@@ -31,26 +31,6 @@ pub fn sample_activity() -> RawActivitySample {
         is_system_sleeping: false,
         is_screen_locked: false,
     }
-}
-
-pub fn permission_snapshot() -> PermissionSnapshot {
-    PermissionSnapshot {
-        refreshed_at: now_iso(),
-        input_monitoring: "desktop-session".to_string(),
-        notifications: "freedesktop-notifications".to_string(),
-    }
-}
-
-pub fn open_system_settings(destination: &str) -> bool {
-    let target = match destination {
-        "notifications" => "gnome-notifications-panel.desktop",
-        _ => "gnome-privacy-panel.desktop",
-    };
-    open::that(target).is_ok()
-        || Command::new("xdg-open")
-            .arg("settings://privacy")
-            .status()
-            .is_ok()
 }
 
 fn active_window_title() -> Option<String> {

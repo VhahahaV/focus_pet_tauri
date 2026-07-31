@@ -21,13 +21,13 @@ The Tauri backend exposes one stable command surface to React, with OS-specific 
 
 Current commands:
 
-- `load_snapshot`, `save_snapshot`, `export_snapshot`, `delete_all_data`, `data_size`
-- `sample_activity`, `permission_snapshot`
-- `open_system_settings`, `open_log_folder`, `current_log_file`
+- `load_snapshot`, `save_snapshot`, `native_runtime_snapshot`
+- `sample_activity`, `sample_system_metrics`
 - `choose_and_import_pet_pack`, `import_pet_pack_from_path`
 - `list_pet_packs`, `delete_pet_pack`
 - `deliver_notification`
 - `sync_widget_windows`
+- Codex lifecycle, SSH discovery, and active-session streaming commands
 
 The macOS adapter reads the frontmost app/window through System Events, reads HID idle time through `ioreg`, detects lock state with a read-only session check, and uses CoreGraphics idle-event timestamps as a keyboard/pointer fallback. Windows calls Win32 directly for foreground-window metadata, idle time, lock state, and low-level keyboard/pointer hooks; PowerShell is retained only for the notification delivery fallback. Linux uses X11/KDE-friendly command adapters (`xdotool`, `xprop`, `xprintidle`, `qdbus`) with a clear Wayland-limited status when compositor restrictions apply. A shared native tracker computes app-switch deltas and conservative idle-based input fallback counts when a platform cannot provide direct events.
 
@@ -77,12 +77,12 @@ Verified in this workspace:
 - `cargo check` in `src-tauri`
 - `npm run test:ui`
 - `cargo test` in `src-tauri`
-- `npm run tauri:build`
-- macOS `.app` launch smoke test
+- `npm run tauri:build -- --target universal-apple-darwin --bundles dmg`
+- macOS DMG mount, universal-binary, embedded-theme, and code-signature audit
 
-The Vitest suite covers core behavior: classification, recognition sensitivity presets, recognition exception reset, privacy redaction, state engine, timeline recording, range-based history snapshots, attention heatmap buckets, long-gap away backfill, welcome-back nudges, daily summary, sessions, nudges, retention pruning, imported pet-pack records with action assets, pet-pack hide/restore settings, companion-pet random source-action rotation, native menu action routing, widget sync state, and pet-pack validation. The Rust suite verifies frontend/backend command serialization contracts, native app-switch/input fallback deltas, snapshot shape, store schema metadata, legacy store migration, unsupported-schema backup/write blocking, folder and zip pet-pack import validation, frame-asset discovery, multi-pack archive import, launch-time library listing, deletion, notification command exit-status handling, installation-path notice detection, and companion-pet Dock/taskbar work-area placement. The Playwright suite verifies the built React dashboard on desktop and mobile viewports, including tab navigation, history heatmap/range insight rendering, starting a focus session, migrated recognition/session/reminder/retention/permission/logging/desktop movement/pet controls, and rendering status, rhythm, and pet companion widget views.
+The Vitest suite covers core behavior: classification, recognition sensitivity presets, recognition exception reset, state engine, timeline recording, range-based history snapshots, attention heatmap buckets, long-gap away backfill, welcome-back nudges, daily summary, sessions, nudges, retention pruning, active Codex session rendering, Markdown, pet-pack records, companion animation, native menu actions, widget sync, and pet-pack validation. The Rust suite verifies frontend/backend command serialization contracts, native app-switch/input fallback deltas, snapshot shape, store schema metadata, legacy store migration, unsupported-schema backup/write blocking, folder and zip pet-pack import validation, frame-asset discovery, multi-pack archive import, launch-time library listing, notification command exit-status handling, installation-path notice detection, Codex/SSH streaming, and companion-pet cross-display placement. The Playwright suite verifies the built React dashboard on desktop and mobile viewports, including tab navigation, history rendering, focus sessions, recognition/reminder/desktop movement/pet controls, theme persistence, retired-settings removal, and widget views.
 
-For target-machine validation on macOS, Windows, and Linux, run `npm run verify:preflight` first to check native helper availability and print the OS-specific smoke checklist. Run `npm run verify:native` to exercise the native adapter probes for the current OS without showing a notification; on a visible desktop session run `npm run verify:native:notify` to also verify notification delivery. Then run `npm run verify:platform`; it executes the automated build/test/bundle sequence and prints the same manual native smoke checklist for notifications, foreground-app sampling, widget windows, tray/menu actions, pet-pack import, persistence, export/delete, and logs.
+For target-machine validation on macOS, Windows, and Linux, run `npm run verify:preflight` first to check native helper availability and print the OS-specific smoke checklist. Run `npm run verify:native` to exercise the native adapter probes for the current OS without showing a notification; on a visible desktop session run `npm run verify:native:notify` to also verify notification delivery. Then run `npm run verify:platform`; it executes the automated build/test/bundle sequence and prints the same manual native smoke checklist for notifications, foreground-app sampling, widget windows, tray/menu actions, pet-pack import, persistence, and Codex session discovery.
 
 The repository also includes `.github/workflows/verify-platforms.yml`, which runs the same automated verification on macOS, Windows, and Linux runners and uploads the generated desktop bundles. Linux runners install the WebKitGTK, app-indicator, xdo, packaging, desktop opener, notification, and picker helpers required for Tauri and Focus Pet native adapters.
 
@@ -90,5 +90,5 @@ The repository also includes `.github/workflows/verify-platforms.yml`, which run
 
 Current macOS release artifacts:
 
-- `src-tauri/target/release/bundle/macos/Focus Pet.app`
-- `src-tauri/target/release/bundle/dmg/Focus Pet_0.1.0_aarch64.dmg`
+- `release/Focus-Pet-0.1.0-macos-universal-20260731-r3.dmg`
+- `release/Focus-Pet-0.1.0-macos-universal-20260731-r3.dmg.sha256`

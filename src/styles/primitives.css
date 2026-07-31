@@ -120,7 +120,7 @@
 
 .status-distracted{--status:var(--distracted-500);--status-soft:rgba(222,127,105,0.12)}
 
-.status-privacy{--status:var(--cyan-500);--status-soft:rgba(76,169,198,0.12)}
+.status-info{--status:var(--cyan-500);--status-soft:rgba(76,169,198,0.12)}
 
 .status-warning{--status:var(--warning);--status-soft:rgba(215,166,66,0.14)}
 
@@ -329,3 +329,10 @@
 .fp-button[data-size="small"]{min-height:var(--button-height-small);padding-inline:12px;border-radius:10px;font-size:12px}
 
 .fp-button[data-variant="primary"]{color:var(--card);border-color:color-mix(in srgb,var(--status-strong,var(--focus-600)) 72%,var(--card));background:linear-gradient(180deg,color-mix(in srgb,var(--status-primary,var(--focus-500)) 88%,var(--card)),var(--status-strong,var(--focus-600)));box-shadow:inset 0 1px 0 rgb(255 255 255/0.36),0 8px 18px color-mix(in srgb,var(--status-primary,var(--focus-500)) 25%,transparent)}
+
+/* Static translucent fills are much cheaper than re-blurring the desktop
+   behind every card whenever telemetry or a sprite frame changes. */
+.fp-glass,
+.fp-glass[data-role="badge"],
+.fp-glass[data-role="stage"],
+.panel{backdrop-filter:none}

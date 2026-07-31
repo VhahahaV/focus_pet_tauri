@@ -21,6 +21,14 @@
 
 .swift-focus-card{position:relative;overflow:hidden;border:1px solid var(--border-default);border-radius:22px;background:linear-gradient(135deg,rgba(255,255,255,0.82),rgba(247,251,255,0.54)),rgba(255,255,255,0.62);box-shadow:0 18px 46px rgba(77,106,139,0.08);backdrop-filter:blur(20px)}
 
+.today-session-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+
+.today-session-controls>span{color:var(--text-secondary);font-size:12px;font-weight:720;font-variant-numeric:tabular-nums}
+
+.today-session-controls .fp-button{min-height:30px}
+
+@media (max-width:640px){.today-session-controls{justify-content:flex-start}}
+
 
 .swift-timeline-card{position:relative;overflow:hidden;border:1px solid var(--border-default);border-radius:22px;background:linear-gradient(135deg,rgba(255,255,255,0.82),rgba(247,251,255,0.54)),rgba(255,255,255,0.62);box-shadow:0 18px 46px rgba(77,106,139,0.08);backdrop-filter:blur(20px)}
 
@@ -174,7 +182,81 @@
 
 .timeline-metrics .switch{color:var(--chart-kbd-strong);background:var(--app-bg-mid)}
 
-.axis-label{position:absolute;left:0;color:var(--text-primary);font-size:13px;font-weight:750}
+.axis-label{position:absolute;left:0;display:grid;gap:7px;color:var(--text-primary);font-size:13px;font-weight:750}
+
+.timeline-state-label{top:5px}
+
+.timeline-input-label{top:101px}
+
+/* A small, directly collapsible live surface keeps concurrent Codex work near
+   today’s context without turning the history page into a second task list. */
+.codex-live-panel{overflow:hidden;border:1px solid color-mix(in srgb,var(--pet-400,var(--focus-400)) 32%,var(--border-soft));border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--pet-100,var(--focus-100)) 44%,var(--card)),var(--card));box-shadow:inset 0 1px 0 rgb(255 255 255/0.72)}
+
+.codex-live-panel-header{width:100%;min-height:58px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:9px;padding:10px 12px;border:0;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer}
+
+.codex-live-panel-header:active{transform:scale(.995)}
+
+.codex-live-panel-icon,.codex-live-session-source{display:grid;place-items:center;flex:0 0 auto;border-radius:10px;background:color-mix(in srgb,var(--pet-100,var(--focus-100)) 74%,white);color:var(--pet-600,var(--focus-600))}
+
+.codex-live-panel-icon{width:34px;height:34px}
+
+.codex-live-panel-title{min-width:0;display:grid;gap:2px}
+
+.codex-live-panel-title strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:820}
+
+.codex-live-panel-title small,.codex-live-session-copy small{overflow:hidden;color:var(--text-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:680}
+
+.codex-live-panel-count{display:grid;place-items:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;background:var(--card);color:var(--pet-600,var(--focus-600));font-size:10px;font-weight:820}
+
+.codex-live-panel-header>svg{transition:transform 180ms cubic-bezier(.2,.8,.2,1)}
+
+.codex-live-panel.is-expanded .codex-live-panel-header>svg{transform:rotate(180deg)}
+
+.codex-live-session-list{max-height:340px;display:grid;gap:7px;overflow:auto;padding:0 10px 10px;scrollbar-gutter:stable}
+
+.codex-live-session{overflow:hidden;border:1px solid var(--border-soft);border-radius:13px;background:color-mix(in srgb,var(--card) 88%,transparent)}
+
+.codex-live-session-summary{width:100%;min-height:50px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:8px;border:0;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer}
+
+.codex-live-session-summary:active{background:color-mix(in srgb,var(--pet-100,var(--focus-100)) 42%,transparent)}
+
+.codex-live-session-source{width:28px;height:28px;border-radius:9px}
+
+.codex-live-session-source.is-remote{color:var(--focus-600)}
+
+.codex-live-session-copy{min-width:0;display:grid;gap:1px}
+
+.codex-live-session-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:790}
+
+.codex-live-session-status{padding:4px 6px;border-radius:999px;background:color-mix(in srgb,var(--focus-100) 74%,var(--card));color:var(--focus-600);font-size:9px;font-style:normal;font-weight:790;white-space:nowrap}
+
+.codex-live-session-status.status-idle{background:color-mix(in srgb,var(--away-100) 68%,var(--card));color:var(--text-secondary)}
+
+.codex-live-session-status.status-systemError{background:color-mix(in srgb,var(--distracted-100) 70%,var(--card));color:var(--distracted-600)}
+
+.codex-live-session-summary>svg{transition:transform 180ms cubic-bezier(.2,.8,.2,1)}
+
+.codex-live-session.is-open .codex-live-session-summary>svg{transform:rotate(90deg)}
+
+.codex-live-session-output{max-height:212px;overflow:auto;margin:0 8px 8px;padding:9px 10px;border-radius:10px;background:var(--inset-surface);color:var(--text-secondary);font-size:11px;line-height:1.55}
+
+.codex-live-session-output pre{margin:0;white-space:pre-wrap;word-break:break-word;font:inherit}
+
+@media (max-width:560px){.codex-live-session-list{max-height:300px}.codex-live-session-output{max-height:174px}.codex-live-session-status{display:none}}
+
+.timeline-color-legend{display:flex;align-items:center;gap:4px;color:var(--text-secondary);font-size:9px;font-weight:760;line-height:1;white-space:nowrap}
+
+.timeline-color-legend i{width:7px;height:7px;margin-left:3px;border-radius:999px;background:currentColor}
+
+.timeline-color-legend i:first-child{margin-left:0}
+
+.timeline-color-legend .state-focus{color:var(--focus-500)}
+
+.timeline-color-legend .state-distracted{color:var(--distracted-500)}
+
+.timeline-color-legend .keyboard{color:var(--chart-kbd)}
+
+.timeline-color-legend .pointer{color:var(--chart-pointer)}
 
 .timeline-hour-grid{position:absolute;left:74px;right:22px;top:18px;bottom:38px;z-index:0;pointer-events:none}
 
@@ -233,7 +315,7 @@
 
 .today-app-usage-list{display:grid;gap:6px}
 
-.today-app-usage-row{display:grid;grid-template-columns:24px 28px minmax(104px,0.28fr) minmax(120px,1fr) 88px;align-items:center;gap:10px;min-height:46px;padding:6px 8px;border:1px solid var(--border-default);border-radius:10px;background:rgba(255,255,255,0.62)}
+.today-app-usage-row{display:grid;grid-template-columns:24px 28px minmax(146px,0.4fr) minmax(120px,1fr) 88px;align-items:center;gap:10px;min-height:46px;padding:6px 8px;border:1px solid var(--border-default);border-radius:10px;background:rgba(255,255,255,0.62)}
 
 .today-app-usage-row>em{color:var(--text-tertiary);font-size:11px;font-style:normal;font-weight:820}
 
@@ -243,7 +325,7 @@
 
 .today-app-icon.fallback{color:var(--status-strong,var(--focus-600));font-size:12px;font-weight:780}
 
-.today-app-name{min-width:0;display:grid;gap:2px}
+.today-app-name{min-width:0;display:grid;gap:3px}
 
 .today-app-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -252,6 +334,20 @@
 .today-app-name strong{color:var(--text-primary);font-size:12px;font-weight:780}
 
 .today-app-name small{color:var(--text-tertiary);font-size:10px;font-weight:690}
+
+.today-app-category-picker{position:relative;z-index:4;width:max-content;max-width:100%}
+
+.today-app-category-trigger{min-height:20px;display:inline-flex;align-items:center;gap:3px;padding:0 7px;border:1px solid var(--border-soft);border-radius:999px;background:var(--inset-surface);color:var(--text-primary);font-size:9px;font-weight:780;line-height:1;white-space:nowrap;cursor:pointer}
+
+.today-app-category-trigger:hover{background:var(--card-hover)}
+
+.today-app-category-options{position:absolute;z-index:20;top:calc(100% + 4px);left:0;display:grid;min-width:98px;gap:2px;padding:4px;border:1px solid var(--border-default);border-radius:10px;background:var(--card);box-shadow:var(--shadow-raised)}
+
+.today-app-category-options button{min-height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary);font-size:10px;font-weight:760;line-height:1;text-align:left;white-space:nowrap;cursor:pointer}
+
+.today-app-category-options button:hover,.today-app-category-options button.active{background:var(--status-soft,var(--focus-100));color:var(--text-primary)}
+
+.today-app-category-picker button:focus-visible{outline:2px solid var(--focus-400);outline-offset:1px}
 
 .today-app-meter{position:relative;height:12px;border-radius:999px;background:rgba(218,228,238,0.72);overflow:hidden}
 
@@ -536,7 +632,7 @@
 
 .system-monitor-header>div{display:flex;align-items:center;gap:8px;min-width:0}
 
-.system-monitor-header>div:first-child>span{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--radius-medium);color:var(--privacy-600,var(--focus-600));background:var(--privacy-100,var(--focus-100))}
+.system-monitor-header>div:first-child>span{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--radius-medium);color:var(--focus-600);background:var(--focus-100)}
 
 .system-monitor-header>div:first-child>div{min-width:0;display:grid;gap:1px}
 
@@ -776,3 +872,9 @@
 .today-mini-pet-avatar.is-animated img{image-rendering:pixelated}
 
 @media (prefers-reduced-motion:reduce){.today-mini-pet-avatar.is-animated img{animation:none}}
+
+.swift-focus-card,
+.swift-timeline-card,
+.today-app-usage-card,
+.today-rhythm-card,
+.system-monitor-card{backdrop-filter:none}

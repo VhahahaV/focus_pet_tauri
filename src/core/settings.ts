@@ -1,15 +1,14 @@
 import type {
   AppSettings,
   AppearanceSettings,
+  CodexDisplaySettings,
   DataRetentionSettings,
   DesktopWidgetSettings,
   JudgmentSettings,
-  LoggingSettings,
   PetSettings,
   ReminderSettings,
   SystemMonitorModule,
   SystemMonitorSettings,
-  WindowTitlePrivacy,
 } from "./types";
 import { clamp } from "./utils";
 import { defaultAppTheme, normalizeAppTheme } from "./theme";
@@ -22,20 +21,15 @@ export const normalizeAppearanceSettings = (settings: Partial<AppearanceSettings
   theme: normalizeAppTheme(settings.theme),
 });
 
-export const defaultPrivacy = (): WindowTitlePrivacy => ({
-  storeRawTitle: false,
-  storeOnlyCategoryResult: false,
-  pauseActivityRecording: false,
+export const defaultCodexDisplaySettings = (): CodexDisplaySettings => ({
+  showInToday: false,
 });
 
-export const normalizePrivacy = (privacy: Partial<WindowTitlePrivacy> = {}): WindowTitlePrivacy => {
-  const storeOnlyCategoryResult = privacy.storeOnlyCategoryResult ?? false;
-  return {
-    storeRawTitle: storeOnlyCategoryResult ? false : (privacy.storeRawTitle ?? false),
-    storeOnlyCategoryResult,
-    pauseActivityRecording: privacy.pauseActivityRecording ?? false,
-  };
-};
+export const normalizeCodexDisplaySettings = (
+  settings: Partial<CodexDisplaySettings> = {},
+): CodexDisplaySettings => ({
+  showInToday: settings.showInToday ?? false,
+});
 
 export const defaultReminderSettings = (): ReminderSettings => ({
   enablePetBubbles: true,
@@ -104,8 +98,6 @@ export const normalizeRetentionSettings = (settings: Partial<DataRetentionSettin
     nudgeRetentionDays: Math.max(1, base.nudgeRetentionDays),
   };
 };
-
-export const defaultLoggingSettings = (): LoggingSettings => ({ isEnabled: true });
 
 export const defaultJudgmentSettings = (): JudgmentSettings => ({
   inputIdleDistractedSeconds: 180,
@@ -193,6 +185,7 @@ export const normalizePetSettings = (settings: Partial<PetSettings> = {}): PetSe
   }
   return {
     ...base,
+    animationEnabled: true,
     opacity: clamp(base.opacity, 0.35, 1),
     size: clamp(base.size, 64, 220),
     randomActionSwitchSeconds: normalizeRandomActionSwitchSeconds(base.randomActionSwitchSeconds),
@@ -234,10 +227,9 @@ export const defaultAppSettings = (): AppSettings => {
   return {
     hasCompletedOnboarding: false,
     appearance: defaultAppearanceSettings(),
-    privacy: defaultPrivacy(),
+    codex: defaultCodexDisplaySettings(),
     reminder: defaultReminderSettings(),
     retention: defaultRetentionSettings(),
-    logging: defaultLoggingSettings(),
     judgment: defaultJudgmentSettings(),
     pet: defaultPetSettings(),
     desktopWidget,
@@ -257,10 +249,9 @@ export const normalizeAppSettings = (settings: Partial<AppSettings> = {}): AppSe
     ...defaultAppSettings(),
     ...settings,
     appearance: normalizeAppearanceSettings(settings.appearance),
-    privacy: normalizePrivacy(settings.privacy),
+    codex: normalizeCodexDisplaySettings(settings.codex),
     reminder: normalizeReminderSettings(settings.reminder),
     retention: normalizeRetentionSettings(settings.retention),
-    logging: { ...defaultLoggingSettings(), ...settings.logging },
     judgment: normalizeJudgmentSettings(settings.judgment),
     pet: normalizePetSettings(settings.pet),
     desktopWidget,

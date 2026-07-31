@@ -957,6 +957,7 @@ name = "focus-pet"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "block2",
  "chrono",
  "core-foundation",
  "core-graphics 0.24.0",
@@ -965,6 +966,7 @@ dependencies = [
  "log",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "open",
  "serde",
  "serde_json",

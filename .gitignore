@@ -18,6 +18,10 @@ src-tauri/target/
 target-*/
 src-tauri/target-*/
 src-tauri/src-tauri/
+src-tauri/agent/target/
+release/build-*/
+release/*.dmg
+release/*.dmg.sha256
 
 # Migrated local pet-pack archives kept for importer verification.
 !local-pet-packs/

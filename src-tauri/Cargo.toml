@@ -33,10 +33,12 @@ base64 = "0.22"
 getrandom = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 core-foundation = "0.10"
 core-graphics = "0.24"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSColor", "NSGraphics", "NSPanel", "NSRunningApplication", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", features = ["NSNotification", "NSOperation", "NSString"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 freedesktop-desktop-entry = "0.7"

@@ -34,16 +34,9 @@ const diff = (left, right) => sorted(left.filter((value) => !right.includes(valu
 const requiredCommands = [
   "load_snapshot",
   "save_snapshot",
-  "export_snapshot",
-  "delete_all_data",
   "quit_app",
-  "data_size",
   "sample_activity",
-  "permission_snapshot",
   "installation_snapshot",
-  "open_system_settings",
-  "open_log_folder",
-  "current_log_file",
   "choose_and_import_pet_pack",
   "import_pet_pack_from_path",
   "list_pet_packs",
@@ -114,7 +107,7 @@ addCheck("Tauri asset protocol is scoped for imported pet-pack media", () => {
   const asset = config.app?.security?.assetProtocol;
   if (!asset?.enable) throw new Error("asset protocol is not enabled");
   const scope = asset.scope ?? [];
-  for (const required of ["$APPDATA/**", "$LOCALDATA/**", "$HOME/**"]) {
+  for (const required of ["$APPDATA/**", "$LOCALDATA/**", "$APPCACHE/**"]) {
     if (!scope.includes(required)) throw new Error(`asset protocol missing scope ${required}`);
   }
   const csp = config.app?.security?.csp ?? "";

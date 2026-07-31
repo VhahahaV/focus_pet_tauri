@@ -10,7 +10,6 @@ import type {
   NativeActivitySample,
   NudgeEvent,
   NudgeReason,
-  PermissionSnapshot,
   PetIntentKind,
   PetIntentSource,
 } from "../core/types";
@@ -33,9 +32,9 @@ import {
   recordInputActivity,
   recordStateSegment,
 } from "../core/timeline";
-import { dayBounds, makeID, secondsBetween } from "../core/utils";
+import { dayBounds, secondsBetween } from "../core/utils";
 import { emptySnapshot, normalizeSnapshot } from "../store/localStore";
-import { makeMockActivitySample, mockPermissionSnapshot } from "./mockNative";
+import { makeMockActivitySample } from "./mockNative";
 
 export interface RuntimeMemory {
   previousState?: FocusState;
@@ -109,12 +108,12 @@ export const runtimeFromSnapshot = (
         normalized.appUsage,
         normalized.focusSessions,
         normalized.nudges,
+        normalized.breakSessions,
       ),
       todayWorkload: inputWorkloadSummary(normalized.inputActivity, bounds.start, bounds.end),
       currentPetIntent: makePetIntent(intentKindForState(currentDecision.state), "state", { startedAt: now.toISOString() }),
       latestPetBubble: undefined,
       statusMessage: "Focus Pet 已准备好。",
-      permissionSnapshot: mockPermissionSnapshot(),
       recognitionDiagnostic: {
         sampledAt: now.toISOString(),
         sampleQuality: undefined,
@@ -131,9 +130,7 @@ export const runtimeFromSnapshot = (
         defaultRuleCount: new ActivityClassifier(normalized.classificationRules, catalogEntries).defaultRules.length,
         userRuleCount: normalized.classificationRules.length,
         inputMonitoringStatus: "检查中",
-        recordingPaused: normalized.settings.privacy.pauseActivityRecording,
       },
-      dataSizeBytes: 0,
     },
     memory: initialMemory(now),
     latestNudge: undefined,
@@ -149,28 +146,6 @@ export const inputMonitoringPermissionTitle = (status: string): string => {
   if (normalized === "检查中") return "检查中";
   return "待开启";
 };
-
-export const notificationPermissionTitle = (status: string): string => {
-  const normalized = status.trim().toLowerCase();
-  if (
-    normalized === "已允许" ||
-    normalized === "granted" ||
-    normalized.includes("available") ||
-    normalized.includes("delivered") ||
-    normalized.includes("sent")
-  ) return "已允许";
-  if (normalized === "browser-preview") return "预览环境";
-  if (normalized === "检查中") return "检查中";
-  return "待开启";
-};
-
-export const permissionSnapshotForDisplay = (snapshot: PermissionSnapshot): PermissionSnapshot => ({
-  ...snapshot,
-  inputMonitoring: snapshot.inputMonitoring === "browser-preview"
-    ? "预览环境"
-    : inputMonitoringPermissionTitle(snapshot.inputMonitoring),
-  notifications: notificationPermissionTitle(snapshot.notifications),
-});
 
 const applyStability = (
   decision: ReturnType<typeof evaluateState>,
@@ -276,7 +251,6 @@ export const advanceRuntime = (
     activeCategoryDuration: secondsBetween(memory.activeCategorySince, now),
     activeAppDuration: secondsBetween(memory.activeAppSince, now),
     isFocusSessionActive: Boolean(activeFocus),
-    privacy: runtime.settings.privacy,
     switchCountLast5Min: Math.max(nativeSample.switchCount, runtime.inputActivity.slice(-5).reduce((total, bucket) => total + bucket.switchCount, 0)),
     switchCountLast15Min: Math.max(nativeSample.switchCount, runtime.inputActivity.slice(-15).reduce((total, bucket) => total + bucket.switchCount, 0)),
   };
@@ -307,7 +281,7 @@ export const advanceRuntime = (
   runtime.currentSnapshot = activitySnapshot;
   runtime.currentDecision = stabilized.decision;
 
-  if (!runtime.settings.privacy.pauseActivityRecording) {
+  {
     if (backfilledAwaySeconds > 0) {
       const awayEnd = new Date(now.getTime() - currentTickSeconds * 1000).toISOString();
       const awaySource: ActivitySignalSource[] = nativeSample.isSystemSleeping || inferredSystemSleepGap
@@ -366,7 +340,8 @@ export const advanceRuntime = (
     if (stabilized.decision.state === "distracted" && previousState !== "distracted") updated.interruptionCount += 1;
     if (!updated.mainAppName && activitySnapshot.category === "work") updated.mainAppName = activitySnapshot.appName;
     if (remainingFocusSeconds(updated, now) <= 0) {
-      runtime.focusSessions[index] = finishFocusSession(updated, "completed", now, updated.mainAppName);
+      const completed = finishFocusSession(updated, "completed", now, updated.mainAppName);
+      runtime.focusSessions[index] = completed;
     } else {
       runtime.focusSessions[index] = updated;
     }
@@ -412,7 +387,14 @@ export const advanceRuntime = (
   }
 
   const bounds = dayBounds(now);
-  runtime.summary = buildDailySummary(now, runtime.stateSegments, runtime.appUsage, runtime.focusSessions, runtime.nudges);
+  runtime.summary = buildDailySummary(
+    now,
+    runtime.stateSegments,
+    runtime.appUsage,
+    runtime.focusSessions,
+    runtime.nudges,
+    runtime.breakSessions,
+  );
   runtime.todayWorkload = inputWorkloadSummary(runtime.inputActivity, bounds.start, bounds.end);
   runtime.recognitionDiagnostic = {
     sampledAt: now.toISOString(),
@@ -430,7 +412,6 @@ export const advanceRuntime = (
     defaultRuleCount: classifier.defaultRules.length,
     userRuleCount: runtime.classificationRules.length,
     inputMonitoringStatus: inputMonitoringPermissionTitle(nativeSample.inputMonitoringStatus),
-    recordingPaused: runtime.settings.privacy.pauseActivityRecording,
   };
   return { state: runtime, memory, latestNudge };
 };
@@ -442,6 +423,7 @@ export const runtimeSnapshot = (state: AppRuntimeState): LocalStoreSnapshot => (
   appUsage: state.appUsage,
   inputActivity: state.inputActivity,
   focusSessions: state.focusSessions,
+  breakSessions: state.breakSessions,
   nudges: state.nudges,
 });
 
@@ -452,7 +434,7 @@ export const runtimeActions = {
       ...state,
       focusSessions: [
         ...state.focusSessions,
-        makeFocusSession(taskName, minutes),
+        makeFocusSession(taskName, minutes, new Date()),
       ],
       statusMessage: "专注会话已开始。",
     };
@@ -460,11 +442,12 @@ export const runtimeActions = {
   finishFocusSession(state: AppRuntimeState, completed = true): AppRuntimeState {
     const active = activeFocusSession(state.focusSessions);
     if (!active) return state;
+    const focusSessions = state.focusSessions.map((session) =>
+      session.id === active.id ? finishFocusSession(session, completed ? "completed" : "cancelled") : session
+    );
     return {
       ...state,
-      focusSessions: state.focusSessions.map((session) =>
-        session.id === active.id ? finishFocusSession(session, completed ? "completed" : "cancelled") : session,
-      ),
+      focusSessions,
       statusMessage: completed ? "专注会话已完成。" : "专注会话已取消。",
     };
   },
@@ -598,19 +581,5 @@ export const runtimeActions = {
       }),
       latestPetBubble: message,
     };
-  },
-  writeDiagnosticSnapshot(state: AppRuntimeState): AppRuntimeState {
-    if (!state.settings.logging.isEnabled) {
-      return { ...state, statusMessage: "日志已关闭，诊断快照未写入。" };
-    }
-    const diagnostic = {
-      id: makeID("diagnostic"),
-      time: new Date().toISOString(),
-      state: state.currentDecision.state,
-      app: state.currentSnapshot.appName,
-      reason: state.currentDecision.reason.join(", "),
-    };
-    console.info("Focus Pet diagnostic", diagnostic);
-    return { ...state, statusMessage: "诊断快照已写入控制台和日志。" };
   },
 };

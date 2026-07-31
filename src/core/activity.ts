@@ -2,7 +2,6 @@ import type {
   ActivityCategory,
   ActivitySignalSource,
   ActivitySnapshot,
-  AppSettings,
   NativeActivitySample,
   SanitizedWindowTitle,
 } from "./types";
@@ -10,17 +9,13 @@ import { hashText, redactWindowTitle, safeTrim } from "./utils";
 
 export const sanitizeWindowTitle = (
   title: string | undefined,
-  privacy: AppSettings["privacy"],
 ): SanitizedWindowTitle => {
   const trimmed = safeTrim(title);
   if (!trimmed) return { rawTitle: undefined, titleDisplay: undefined, titleStored: false, titleHash: undefined };
-  if (privacy.storeOnlyCategoryResult) {
-    return { rawTitle: undefined, titleDisplay: undefined, titleStored: false, titleHash: undefined };
-  }
   return {
-    rawTitle: privacy.storeRawTitle ? trimmed : undefined,
-    titleDisplay: privacy.storeRawTitle ? trimmed : redactWindowTitle(trimmed),
-    titleStored: privacy.storeRawTitle,
+    rawTitle: undefined,
+    titleDisplay: redactWindowTitle(trimmed),
+    titleStored: false,
     titleHash: hashText(trimmed),
   };
 };
@@ -30,13 +25,12 @@ export interface SnapshotContext {
   activeCategoryDuration: number;
   activeAppDuration: number;
   isFocusSessionActive: boolean;
-  privacy: AppSettings["privacy"];
   switchCountLast5Min: number;
   switchCountLast15Min: number;
 }
 
 export const makeActivitySnapshot = (sample: NativeActivitySample, context: SnapshotContext): ActivitySnapshot => {
-  const sanitized = sanitizeWindowTitle(sample.windowTitle, context.privacy);
+  const sanitized = sanitizeWindowTitle(sample.windowTitle);
   const source: ActivitySignalSource[] = ["frontmostApplication", "windowTitle", "idleTime", "appSwitching"];
   if (context.isFocusSessionActive) source.push("focusSession");
   if (sample.isSystemSleeping) source.push("systemSleep");

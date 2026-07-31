@@ -2,11 +2,13 @@ use crate::codex_sessions::{
     connect_app_server_proxy_with_timeout, read_app_server_proxy_message,
     send_app_server_proxy_message, CodexEventEnvelope,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env, fs,
+    hash::{Hash, Hasher},
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -26,7 +28,7 @@ const APP_SERVER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// `thread/status/changed` is pushed immediately when available. Inventory is
 /// refreshed every two seconds so an App Server that suppresses broadcasts for
 /// passive observers still appears real-time in the desktop UI.
-const APP_SERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const APP_SERVER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const SSH_HOSTS_FILE: &str = "codex-ssh-hosts.json";
 static SSH_EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -127,6 +129,7 @@ struct SshInner {
     events: VecDeque<CodexEventEnvelope>,
     connections: HashMap<String, SshConnectionStatus>,
     stop_requested: HashSet<String>,
+    remote_rollout_event_ids: HashSet<String>,
 }
 
 #[derive(Clone, Default)]
@@ -141,17 +144,19 @@ impl SshSessionManager {
 
     pub fn connect(&self, alias: &str) -> Result<(), String> {
         validate_alias(alias)?;
-        let diagnostic = diagnose_host(alias)?;
-        if diagnostic.daemon_status != "ready" {
-            return Err(connection_readiness_error(&diagnostic));
-        }
         let inner = self.inner.clone();
         let alias = alias.to_string();
         {
             let mut state = inner
                 .lock()
                 .map_err(|_| "SSH session state lock is unavailable".to_string())?;
-            if state.connections.contains_key(&alias) && !state.stop_requested.contains(&alias) {
+            if state.connections.get(&alias).is_some_and(|connection| {
+                matches!(
+                    connection.status.as_str(),
+                    "connecting" | "connected" | "reconnecting"
+                )
+            }) && !state.stop_requested.contains(&alias)
+            {
                 return Ok(());
             }
             state.stop_requested.remove(&alias);
@@ -162,6 +167,20 @@ impl SshSessionManager {
                     status: "connecting".to_string(),
                 },
             );
+        }
+        let diagnostic = match diagnose_host(&alias) {
+            Ok(diagnostic) => diagnostic,
+            Err(error) => {
+                mark_connection(&inner, &alias, "disconnected");
+                return Err(error);
+            }
+        };
+        if diagnostic.daemon_status != "ready" {
+            // A normal SSH Codex CLI still has its standard rollout files.
+            // Keep this connection entirely read-only instead of bootstrapping
+            // a daemon the user did not ask to install or restart.
+            std::thread::spawn(move || run_rollout_only_loop(inner, alias));
+            return Ok(());
         }
         std::thread::spawn(move || run_stream_loop(inner, alias, diagnostic));
         Ok(())
@@ -291,14 +310,17 @@ pub fn diagnose_host(alias: &str) -> Result<SshHostDiagnostic, String> {
     // this app can speak to its control socket. Prefer the public proxy, then
     // test a pure byte relay because current proxy builds can hang before the
     // WebSocket upgrade even though the same Unix socket is healthy.
-    if daemon_status == "running" {
-        daemon_status = match select_app_server_transport(alias, &codex_path) {
-            Ok(selected) => {
-                transport = Some(selected.identifier().to_string());
-                "ready".to_string()
-            }
-            Err(_) => "proxyUnresponsive".to_string(),
-        };
+    // A ChatGPT/Codex desktop client can own a perfectly usable App Server
+    // socket without this SSH login reporting a managed standalone daemon.
+    // The WebSocket `initialize` probe is the actual readiness signal, so run
+    // it even when `daemon version` says notRunning. It is strictly read-only.
+    match select_app_server_transport(alias, &codex_path) {
+        Ok(selected) => {
+            transport = Some(selected.identifier().to_string());
+            daemon_status = "ready".to_string();
+        }
+        Err(_) if daemon_status == "running" => daemon_status = "proxyUnresponsive".to_string(),
+        Err(_) => {}
     }
     Ok(SshHostDiagnostic {
         alias: candidate.alias,
@@ -316,32 +338,17 @@ pub fn diagnose_host(alias: &str) -> Result<SshHostDiagnostic, String> {
 
 pub fn provision_host(alias: &str) -> Result<SshProvisionResult, String> {
     let diagnostic = diagnose_host(alias)?;
-    let post_bootstrap = match diagnostic.daemon_status.as_str() {
-        "ready" => diagnostic,
-        "notRunning" => {
-            // This is explicitly invoked by the Settings confirmation button.
-            // It is the official Codex setup command, not a Focus Pet upload.
-            run_ssh(
-                alias,
-                &codex_command(&diagnostic.codex_path, "app-server daemon bootstrap"),
-            )?;
-            diagnose_host(alias)?
-        }
-        "proxyUnresponsive" => {
-            return Err("检测到远端 Codex daemon 正在运行，但标准 proxy 与直连 Socket 的只读 App Server 握手均未获响应。为避免影响正在运行的 Codex 会话，未执行 bootstrap、重启或任何远端修改。请确认该会话由公开 App Server 管理，或通过官方 Remote Control 配对接入。".to_string());
-        }
-        _ => return Err(connection_readiness_error(&diagnostic)),
-    };
-    if post_bootstrap.daemon_status != "ready" {
-        return Err(connection_readiness_error(&post_bootstrap));
-    }
     Ok(SshProvisionResult {
         alias: alias.to_string(),
-        daemon_status: post_bootstrap.daemon_status,
-        message: format!(
-            "已验证远端 Codex App Server 的只读 SSH {} 通道；Focus Pet 会同步会话状态。",
-            post_bootstrap.transport.as_deref().unwrap_or("proxy")
-        ),
+        daemon_status: diagnostic.daemon_status.clone(),
+        message: if diagnostic.daemon_status == "ready" {
+            format!(
+                "已验证远端 Codex App Server 的只读 SSH {} 通道；Focus Pet 会同步会话状态与 assistant 输出。",
+                diagnostic.transport.as_deref().unwrap_or("proxy")
+            )
+        } else {
+            "已验证远端 Codex CLI；Focus Pet 将通过只读 rollout 同步普通 CLI 会话，不会启动或修改远端 daemon。".to_string()
+        },
     })
 }
 
@@ -380,20 +387,20 @@ fn run_stream_loop(inner: Arc<Mutex<SshInner>>, alias: String, diagnostic: SshHo
             .stderr(Stdio::null())
             .spawn();
         let Ok(mut child) = child else {
-            mark_connection(&inner, &alias, "disconnected");
+            mark_connection(&inner, &alias, "reconnecting");
             failed_attempts = failed_attempts.saturating_add(1);
             std::thread::sleep(reconnect_delay(&alias, failed_attempts));
             continue;
         };
         let Some(stdin) = child.stdin.take() else {
-            mark_connection(&inner, &alias, "disconnected");
+            mark_connection(&inner, &alias, "reconnecting");
             let _ = child.wait();
             failed_attempts = failed_attempts.saturating_add(1);
             std::thread::sleep(reconnect_delay(&alias, failed_attempts));
             continue;
         };
         let Some(stdout) = child.stdout.take() else {
-            mark_connection(&inner, &alias, "disconnected");
+            mark_connection(&inner, &alias, "reconnecting");
             let _ = child.wait();
             failed_attempts = failed_attempts.saturating_add(1);
             std::thread::sleep(reconnect_delay(&alias, failed_attempts));
@@ -405,7 +412,7 @@ fn run_stream_loop(inner: Arc<Mutex<SshInner>>, alias: String, diagnostic: SshHo
             stdout,
             APP_SERVER_HANDSHAKE_TIMEOUT,
         ) else {
-            mark_connection(&inner, &alias, "disconnected");
+            mark_connection(&inner, &alias, "reconnecting");
             let _ = child.kill();
             let _ = child.wait();
             failed_attempts = failed_attempts.saturating_add(1);
@@ -432,6 +439,7 @@ fn run_stream_loop(inner: Arc<Mutex<SshInner>>, alias: String, diagnostic: SshHo
         // downloading durable history during the periodic state refresh.
         let mut loaded_completion_threads = HashSet::<String>::new();
         let mut next_poll_at = Instant::now();
+        let mut next_rollout_poll_at = Instant::now();
         if send_app_server_message(
             &mut stdin,
             json!({
@@ -486,6 +494,13 @@ fn run_stream_loop(inner: Arc<Mutex<SshInner>>, alias: String, diagnostic: SshHo
                 }
                 pending_requests.insert(request_id, AppServerRequest::ThreadList);
                 next_poll_at = Instant::now() + APP_SERVER_POLL_INTERVAL;
+            }
+            if initialized && Instant::now() >= next_rollout_poll_at {
+                push_remote_rollout_events(
+                    &inner,
+                    remote_rollout_events(&alias).unwrap_or_default(),
+                );
+                next_rollout_poll_at = Instant::now() + APP_SERVER_POLL_INTERVAL;
             }
             match receiver.recv_timeout(Duration::from_secs(1)) {
                 Ok(line) => {
@@ -567,7 +582,7 @@ fn run_stream_loop(inner: Arc<Mutex<SshInner>>, alias: String, diagnostic: SshHo
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        mark_connection(&inner, &alias, "disconnected");
+        mark_connection(&inner, &alias, "reconnecting");
         let _ = child.wait();
         if stop_is_requested(&inner, &alias) {
             return;
@@ -578,6 +593,31 @@ fn run_stream_loop(inner: Arc<Mutex<SshInner>>, alias: String, diagnostic: SshHo
             failed_attempts.saturating_add(1)
         };
         std::thread::sleep(reconnect_delay(&alias, failed_attempts.saturating_add(1)));
+    }
+}
+
+fn run_rollout_only_loop(inner: Arc<Mutex<SshInner>>, alias: String) {
+    let mut failed_attempts = 0usize;
+    loop {
+        if stop_is_requested(&inner, &alias) {
+            return;
+        }
+        match remote_rollout_events(&alias) {
+            Ok(events) => {
+                push_remote_rollout_events(&inner, events);
+                mark_connection(&inner, &alias, "connected");
+                failed_attempts = 0;
+            }
+            Err(_) => {
+                mark_connection(&inner, &alias, "reconnecting");
+                failed_attempts = failed_attempts.saturating_add(1);
+            }
+        }
+        std::thread::sleep(if failed_attempts == 0 {
+            APP_SERVER_POLL_INTERVAL
+        } else {
+            reconnect_delay(&alias, failed_attempts)
+        });
     }
 }
 
@@ -612,7 +652,7 @@ fn select_app_server_transport(
 /// resumes a thread nor issues a turn/item/history request; it is safe to use
 /// as a readiness check around a daemon serving another Codex client.
 fn probe_app_server_transport(alias: &str, command: &str) -> Result<(), String> {
-    let mut child = ssh_process(alias, &command)
+    let mut child = ssh_process(alias, command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -687,18 +727,223 @@ fn probe_app_server_transport(alias: &str, command: &str) -> Result<(), String> 
     result
 }
 
-fn connection_readiness_error(diagnostic: &SshHostDiagnostic) -> String {
-    match diagnostic.daemon_status.as_str() {
-        "notRunning" => "远端 Codex App Server daemon 尚未运行。可在确认后点击“启用接入”启动官方 daemon。".to_string(),
-        "proxyUnresponsive" => "远端 Codex daemon 已运行，但标准 proxy 与直连 Socket 的只读 App Server 握手均未响应。Focus Pet 不会 bootstrap、重启或干预现有会话；该主机需要通过官方 Remote Control 配对接入。".to_string(),
-        "ready" => "远端 Codex App Server 已就绪。".to_string(),
-        _ => "远端 Codex App Server 尚未达到可安全连接状态。".to_string(),
-    }
-}
-
 fn push_events(inner: &Arc<Mutex<SshInner>>, events: Vec<CodexEventEnvelope>) {
     if let Ok(mut state) = inner.lock() {
         state.events.extend(events);
+        while state.events.len() > 2_000 {
+            state.events.pop_front();
+        }
+    }
+}
+
+/// A normal remote `codex` terminal session writes a local rollout file but
+/// does not necessarily register as an App Server thread. Poll only the small,
+/// recent active tail through the user's existing SSH transport so no remote
+/// agent, daemon, Hook, prompt, or shell startup file is required.
+fn remote_rollout_events(alias: &str) -> Result<Vec<CodexEventEnvelope>, String> {
+    // Keep this to one SSH process per poll. Two independent handshakes every
+    // five seconds per host made the UI stutter badly with several saved
+    // servers and also allowed the two snapshots to disagree transiently.
+    let output = run_ssh(alias, &remote_rollout_combined_command())?;
+    let records = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    let live_probe_available = records.iter().any(|record| {
+        record.get("kind").and_then(Value::as_str) == Some("liveProbe")
+            && record.get("available").and_then(Value::as_bool) == Some(true)
+    });
+    let live_cli_sessions = records
+        .iter()
+        .filter(|record| record.get("kind").and_then(Value::as_str) == Some("liveCli"))
+        .filter_map(|record| record.get("sessionId").and_then(Value::as_str))
+        .filter(|session_id| is_safe_session_id(session_id))
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    Ok(records
+        .into_iter()
+        .filter(|record| {
+            !matches!(
+                record.get("kind").and_then(Value::as_str),
+                Some("liveProbe" | "liveCli")
+            )
+        })
+        .map(|mut record| {
+            if live_probe_available
+                && record.get("kind").and_then(Value::as_str) == Some("inventory")
+            {
+                let session_id = record
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                if let Some(session_id) = session_id {
+                    if let Some(object) = record.as_object_mut() {
+                        let is_open = live_cli_sessions.contains(&session_id);
+                        object.insert(
+                            "lifecycle".to_string(),
+                            json!(if is_open { "open" } else { "closed" }),
+                        );
+                        object.insert("processOpen".to_string(), json!(is_open));
+                        object.insert("probeAvailable".to_string(), json!(true));
+                    }
+                }
+            }
+            record
+        })
+        .filter_map(|record| remote_rollout_event(alias, &record))
+        .collect())
+}
+
+fn is_safe_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 256
+        && session_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+fn remote_rollout_event(alias: &str, record: &Value) -> Option<CodexEventEnvelope> {
+    let kind = record.get("kind")?.as_str()?;
+    let session_id = record.get("sessionId")?.as_str()?.trim();
+    if session_id.is_empty() || session_id.len() > 256 {
+        return None;
+    }
+    let host_id = format!("ssh:{alias}");
+    let now = chrono::Utc::now().to_rfc3339();
+    let sequence = SSH_EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    if kind == "inventory" {
+        let runtime = record
+            .get("runtime")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "active" | "idle" | "unknown"))?;
+        let lifecycle = record
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "open" | "closed" | "unknown"))
+            .unwrap_or("unknown");
+        let modified_ms = record.get("modifiedMs")?.as_i64()?;
+        let cwd = record
+            .get("cwd")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 4_096);
+        return Some(CodexEventEnvelope {
+            schema_version: 1,
+            event_id: format!(
+                "{host_id}:rollout:{session_id}:status:{runtime}:{lifecycle}:{modified_ms}"
+            ),
+            sequence,
+            host_id,
+            session_id: session_id.to_string(),
+            thread_id: None,
+            turn_id: None,
+            occurred_at: now.clone(),
+            received_at: now,
+            kind: "turn.statusChanged".to_string(),
+            source: "rollout".to_string(),
+            confidence: if record
+                .get("probeAvailable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "exact"
+            } else {
+                "observed"
+            }
+            .to_string(),
+            payload: json!({
+                "runtime": runtime,
+                "lifecycle": lifecycle,
+                "activeFlags": [],
+                "cwd": cwd
+            }),
+        });
+    }
+    if kind == "assistantMessage" {
+        let item_id = record.get("itemId")?.as_str()?.trim();
+        let text = record.get("text")?.as_str()?.trim();
+        if item_id.is_empty() || item_id.len() > 512 || text.is_empty() || text.len() > 32_000 {
+            return None;
+        }
+        let occurred_at = record
+            .get("occurredAt")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&now)
+            .to_string();
+        let phase = record.get("phase").and_then(Value::as_str);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        item_id.hash(&mut hasher);
+        text.hash(&mut hasher);
+        return Some(CodexEventEnvelope {
+            schema_version: 1,
+            event_id: format!(
+                "{host_id}:rollout:{session_id}:{item_id}:{:x}",
+                hasher.finish()
+            ),
+            sequence,
+            host_id,
+            session_id: session_id.to_string(),
+            thread_id: None,
+            turn_id: None,
+            occurred_at: occurred_at.clone(),
+            received_at: now,
+            kind: "message.updated".to_string(),
+            source: "rollout".to_string(),
+            confidence: "exact".to_string(),
+            payload: json!({
+                "itemId": item_id,
+                "role": "assistant",
+                "phase": phase,
+                "text": text,
+                "isFinal": true,
+            }),
+        });
+    }
+    None
+}
+
+fn push_remote_rollout_events(inner: &Arc<Mutex<SshInner>>, events: Vec<CodexEventEnvelope>) {
+    if let Ok(mut state) = inner.lock() {
+        let mut inserted = 0usize;
+        let mut hosts = HashSet::new();
+        let mut open_sessions = HashSet::new();
+        let mut active_sessions = HashSet::new();
+        for event in events {
+            if !state
+                .remote_rollout_event_ids
+                .insert(event.event_id.clone())
+            {
+                continue;
+            }
+            hosts.insert(event.host_id.clone());
+            if event.kind == "turn.statusChanged"
+                && event.payload.get("lifecycle").and_then(Value::as_str) == Some("open")
+            {
+                open_sessions.insert(format!("{}:{}", event.host_id, event.session_id));
+            }
+            if event.kind == "turn.statusChanged"
+                && event.payload.get("runtime").and_then(Value::as_str) == Some("active")
+                && event.payload.get("lifecycle").and_then(Value::as_str) == Some("open")
+            {
+                active_sessions.insert(format!("{}:{}", event.host_id, event.session_id));
+            }
+            inserted = inserted.saturating_add(1);
+            state.events.push_back(event);
+        }
+        if inserted > 0 {
+            log::info!(
+                "ingested {inserted} new remote Codex rollout events from {}; open sessions in batch={}, active turns in batch={}",
+                hosts.into_iter().collect::<Vec<_>>().join(", "),
+                open_sessions.len(),
+                active_sessions.len()
+            );
+        }
+        if state.remote_rollout_event_ids.len() > 8_000 {
+            // The UI has already consumed the corresponding bounded event
+            // queue. Resetting this cache is preferable to retaining an
+            // unbounded index of historical assistant messages.
+            state.remote_rollout_event_ids.clear();
+        }
         while state.events.len() > 2_000 {
             state.events.pop_front();
         }
@@ -721,6 +966,14 @@ fn app_server_events_from_message(
             .into_iter()
             .collect();
     }
+    if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta") {
+        return app_server_agent_message_delta_event(
+            host_id,
+            message.get("params").unwrap_or(&Value::Null),
+        )
+        .into_iter()
+        .collect();
+    }
     if let Some(AppServerRequest::TurnsList { thread_id }) = request {
         return app_server_completion_events(host_id, thread_id, message);
     }
@@ -735,6 +988,44 @@ fn app_server_events_from_message(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// App Server's streaming notification contains assistant-visible text only.
+/// Focus Pet never relays user input, reasoning, tool arguments or terminal
+/// output over SSH, even while this observer is connected.
+fn app_server_agent_message_delta_event(
+    host_id: &str,
+    params: &Value,
+) -> Option<CodexEventEnvelope> {
+    let thread_id = params.get("threadId")?.as_str()?;
+    let turn_id = params.get("turnId")?.as_str()?;
+    let item_id = params.get("itemId")?.as_str()?;
+    let delta = params.get("delta")?.as_str()?;
+    (!delta.is_empty()).then_some(())?;
+    let sequence = SSH_EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let now = chrono::Utc::now().to_rfc3339();
+    Some(CodexEventEnvelope {
+        schema_version: 1,
+        event_id: format!("{host_id}:appserver:{thread_id}:{item_id}:delta:{sequence}"),
+        sequence,
+        host_id: host_id.to_string(),
+        session_id: thread_id.to_string(),
+        thread_id: Some(thread_id.to_string()),
+        turn_id: Some(turn_id.to_string()),
+        occurred_at: now.clone(),
+        received_at: now,
+        kind: "message.updated".to_string(),
+        source: "appServer".to_string(),
+        confidence: "exact".to_string(),
+        payload: json!({
+            "itemId": item_id,
+            "role": "assistant",
+            "phase": "streaming",
+            "text": delta,
+            "isDelta": true,
+            "isFinal": false,
+        }),
+    })
 }
 
 fn app_server_thread_runtime(event: &CodexEventEnvelope) -> Option<(String, String)> {
@@ -940,7 +1231,17 @@ fn run_ssh(alias: &str, remote_command: &str) -> Result<String, String> {
 
 fn ssh_process(alias: &str, remote_command: &str) -> Command {
     let mut command = Command::new("ssh");
-    command.arg("-T");
+    // Automatic startup must never display a password prompt or leave a
+    // background invoke hanging on an offline host.
+    command.args([
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "ConnectionAttempts=1",
+    ]);
     if let Ok(Some(saved)) =
         saved_hosts().map(|records| records.into_iter().find(|record| record.alias == alias))
     {
@@ -963,7 +1264,7 @@ fn ssh_process(alias: &str, remote_command: &str) -> Command {
 /// diagnostic unsafe. Instead probe common npm runtime locations and prepend
 /// the selected executable's directory when invoking the Node launcher.
 fn codex_diagnostic_command() -> &'static str {
-    r#"printf 'FOCUS_PET_OS=%s\n' "$(uname -s)"; printf 'FOCUS_PET_ARCH=%s\n' "$(uname -m)"; for candidate in "$HOME/.local/bin/codex" "$HOME/.npm-global/bin/codex" "$HOME/.volta/bin/codex" "$HOME/.asdf/shims/codex" "$HOME"/.nvm/versions/node/*/bin/codex /usr/local/bin/codex /usr/bin/codex /opt/homebrew/bin/codex; do [ -x "$candidate" ] || continue; candidate_dir=${candidate%/*}; version=$(PATH="$candidate_dir:$PATH" "$candidate" --version 2>/dev/null) || continue; printf 'FOCUS_PET_CODEX_PATH=%s\n' "$candidate"; printf 'FOCUS_PET_CODEX_VERSION=%s\n' "$version"; daemon=$(PATH="$candidate_dir:$PATH" "$candidate" app-server daemon version 2>/dev/null || true); case "$daemon" in *'"status":"running"'*|*'"status": "running"'*) printf 'FOCUS_PET_DAEMON_STATUS=running\n' ;; *) printf 'FOCUS_PET_DAEMON_STATUS=notRunning\n' ;; esac; break; done"#
+    r#"printf 'FOCUS_PET_OS=%s\n' "$(uname -s)"; printf 'FOCUS_PET_ARCH=%s\n' "$(uname -m)"; for candidate in "$HOME"/.cursor-server/extensions/openai.chatgpt-*/bin/*/codex "$HOME"/.vscode-server/extensions/openai.chatgpt-*/bin/*/codex "$HOME/.local/bin/codex" "$HOME/.npm-global/bin/codex" "$HOME/.volta/bin/codex" "$HOME/.asdf/shims/codex" "$HOME"/.nvm/versions/node/*/bin/codex /usr/local/bin/codex /usr/bin/codex /opt/homebrew/bin/codex; do [ -x "$candidate" ] || continue; candidate_dir=${candidate%/*}; version=$(PATH="$candidate_dir:$PATH" "$candidate" --version 2>/dev/null) || continue; printf 'FOCUS_PET_CODEX_PATH=%s\n' "$candidate"; printf 'FOCUS_PET_CODEX_VERSION=%s\n' "$version"; daemon=$(PATH="$candidate_dir:$PATH" "$candidate" app-server daemon version 2>/dev/null || true); case "$daemon" in *'"status":"running"'*|*'"status": "running"'*) printf 'FOCUS_PET_DAEMON_STATUS=running\n' ;; *) printf 'FOCUS_PET_DAEMON_STATUS=notRunning\n' ;; esac; break; done"#
 }
 
 fn codex_command(codex_path: &str, arguments: &str) -> String {
@@ -996,6 +1297,78 @@ fn app_server_transport_from_identifier(identifier: &str) -> Option<AppServerTra
 fn direct_unix_socket_relay_command() -> String {
     const RELAY_BASE64: &str = "aW1wb3J0IG9zLHNlbGVjdCxzb2NrZXQKcz1zb2NrZXQuc29ja2V0KHNvY2tldC5BRl9VTklYLHNvY2tldC5TT0NLX1NUUkVBTSkKcy5jb25uZWN0KG9zLnBhdGguZXhwYW5kdXNlcignfi8uY29kZXgvYXBwLXNlcnZlci1jb250cm9sL2FwcC1zZXJ2ZXItY29udHJvbC5zb2NrJykpCndoaWxlIFRydWU6CiByLF8sXz1zZWxlY3Quc2VsZWN0KFswLHNdLFtdLFtdKQogaWYgMCBpbiByOgogIGI9b3MucmVhZCgwLDY1NTM2KQogIGlmIG5vdCBiOiBicmVhawogIHMuc2VuZGFsbChiKQogaWYgcyBpbiByOgogIGI9cy5yZWN2KDY1NTM2KQogIGlmIG5vdCBiOiBicmVhawogIG9zLndyaXRlKDEsYikK";
     format!("python3 -u -c \"import base64;exec(base64.b64decode('{RELAY_BASE64}'))\"")
+}
+
+fn remote_live_cli_session_command() -> String {
+    const SCRIPT: &str = r#"
+import glob, json, os, time
+
+root = os.path.expanduser("~/.codex/sessions")
+try:
+    uptime = float(open("/proc/uptime", "r", encoding="utf-8").read().split()[0])
+    boot_epoch = time.time() - uptime
+    ticks_per_second = os.sysconf("SC_CLK_TCK")
+except (OSError, ValueError):
+    print(json.dumps({"kind":"liveProbe","available":False}, separators=(",",":")))
+    raise SystemExit(0)
+
+print(json.dumps({"kind":"liveProbe","available":True}, separators=(",",":")))
+
+starts = []
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    base = "/proc/" + pid
+    try:
+        arguments = [
+            value.decode("utf-8", "replace")
+            for value in open(base + "/cmdline", "rb").read(8192).split(b"\0")
+            if value
+        ]
+        if not arguments or os.path.basename(arguments[0]) != "codex":
+            continue
+        if "app-server" in arguments:
+            continue
+        stat = open(base + "/stat", "r", encoding="utf-8").read()
+        fields_after_comm = stat[stat.rfind(") ") + 2:].split()
+        starts.append(boot_epoch + float(fields_after_comm[19]) / ticks_per_second)
+    except (OSError, ValueError, IndexError):
+        continue
+
+sessions = set()
+for started in starts:
+    for offset in range(-15, 16):
+        local = time.localtime(started + offset)
+        day = time.strftime("%Y/%m/%d", local)
+        stamp = time.strftime("%Y-%m-%dT%H-%M-%S", local)
+        pattern = os.path.join(root, day, "rollout-" + stamp + "-*.jsonl")
+        for path in glob.glob(pattern):
+            name = os.path.basename(path)
+            session_id = name[8:-6][-36:]
+            if session_id:
+                sessions.add(session_id)
+
+for session_id in sorted(sessions):
+    print(json.dumps({"kind":"liveCli","sessionId":session_id}, separators=(",",":")))
+"#;
+    let encoded = BASE64_STANDARD.encode(SCRIPT.as_bytes());
+    format!("python3 -u -c \"import base64;exec(base64.b64decode('{encoded}'))\"")
+}
+
+fn remote_rollout_combined_command() -> String {
+    format!(
+        "{}; {}",
+        remote_rollout_poll_command(),
+        remote_live_cli_session_command()
+    )
+}
+
+/// Python only walks `~/.codex/sessions`, emits bounded JSON lines, and never
+/// invokes Codex or modifies a remote file. Message bodies are limited to
+/// recent active rollout files and only `agent_message` records are projected.
+fn remote_rollout_poll_command() -> String {
+    const SCRIPT_BASE64: &str = "aW1wb3J0IGpzb24sb3MsdGltZQpyb290PW9zLnBhdGguZXhwYW5kdXNlcignfi8uY29kZXgvc2Vzc2lvbnMnKQpub3c9dGltZS50aW1lKCkKcHJvYmVfYXZhaWxhYmxlPW9zLnBhdGguaXNkaXIoJy9wcm9jJykKb3Blbl9wYXRocz1zZXQoKQppZiBwcm9iZV9hdmFpbGFibGU6CiAgdHJ5OgogICAgZm9yIHBpZCBpbiBvcy5saXN0ZGlyKCcvcHJvYycpOgogICAgICBpZiBub3QgcGlkLmlzZGlnaXQoKTogY29udGludWUKICAgICAgYmFzZT0nL3Byb2MvJytwaWQKICAgICAgdHJ5OgogICAgICAgIGNtZD1vcGVuKGJhc2UrJy9jbWRsaW5lJywncmInKS5yZWFkKDgxOTIpLnJlcGxhY2UoYidcMCcsYicgJykuZGVjb2RlKCd1dGYtOCcsJ3JlcGxhY2UnKS5sb3dlcigpCiAgICAgIGV4Y2VwdCBPU0Vycm9yOiBjb250aW51ZQogICAgICBpZiAnY29kZXgnIG5vdCBpbiBjbWQ6IGNvbnRpbnVlCiAgICAgIHRyeTogZmRzPW9zLmxpc3RkaXIoYmFzZSsnL2ZkJykKICAgICAgZXhjZXB0IE9TRXJyb3I6IGNvbnRpbnVlCiAgICAgIGZvciBmZCBpbiBmZHM6CiAgICAgICAgdHJ5OiB0YXJnZXQ9b3MucGF0aC5yZWFscGF0aChiYXNlKycvZmQvJytmZCkKICAgICAgICBleGNlcHQgT1NFcnJvcjogY29udGludWUKICAgICAgICBpZiB0YXJnZXQuc3RhcnRzd2l0aChyb290K29zLnNlcCkgYW5kIG9zLnBhdGguYmFzZW5hbWUodGFyZ2V0KS5zdGFydHN3aXRoKCdyb2xsb3V0LScpIGFuZCB0YXJnZXQuZW5kc3dpdGgoJy5qc29ubCcpOgogICAgICAgICAgb3Blbl9wYXRocy5hZGQodGFyZ2V0KQogIGV4Y2VwdCBPU0Vycm9yOgogICAgcHJvYmVfYXZhaWxhYmxlPUZhbHNlCmZpbGVzPVtdCmZvciBiYXNlLGRpcnMsbmFtZXMgaW4gb3Mud2Fsayhyb290KToKICBpZiBiYXNlW2xlbihyb290KTpdLmNvdW50KG9zLnNlcCk+MzoKICAgIGRpcnNbOl09W10KICAgIGNvbnRpbnVlCiAgZm9yIG5hbWUgaW4gbmFtZXM6CiAgICBpZiBub3QgKG5hbWUuc3RhcnRzd2l0aCgncm9sbG91dC0nKSBhbmQgbmFtZS5lbmRzd2l0aCgnLmpzb25sJykpOiBjb250aW51ZQogICAgcGF0aD1vcy5wYXRoLmpvaW4oYmFzZSxuYW1lKQogICAgdHJ5OiBtb2RpZmllZD1vcy5wYXRoLmdldG10aW1lKHBhdGgpCiAgICBleGNlcHQgT1NFcnJvcjogY29udGludWUKICAgIGlmIG5vdy1tb2RpZmllZDw9ODY0MDA6IGZpbGVzLmFwcGVuZCgobW9kaWZpZWQscGF0aCkpCmZvciBtb2RpZmllZCxwYXRoIGluIHNvcnRlZChmaWxlcyxyZXZlcnNlPVRydWUpWzozMl06CiAgc2Vzc2lvbl9pZD1vcy5wYXRoLmJhc2VuYW1lKHBhdGgpWzg6LTZdWy0zNjpdCiAgY3dkPU5vbmUKICB0cnk6CiAgICB3aXRoIG9wZW4ocGF0aCwncmInKSBhcyBzdHJlYW06CiAgICAgIGhlYWQ9c3RyZWFtLnJlYWQoNjU1MzYpLmRlY29kZSgndXRmLTgnLCdyZXBsYWNlJykKICAgIGZvciBsaW5lIGluIGhlYWQuc3BsaXRsaW5lcygpOgogICAgICBpdGVtPWpzb24ubG9hZHMobGluZSkKICAgICAgaWYgaXRlbS5nZXQoJ3R5cGUnKT09J3Nlc3Npb25fbWV0YSc6CiAgICAgICAgcGF5bG9hZD1pdGVtLmdldCgncGF5bG9hZCcpIG9yIHt9CiAgICAgICAgc2Vzc2lvbl9pZD1wYXlsb2FkLmdldCgnaWQnKSBvciBzZXNzaW9uX2lkCiAgICAgICAgY3dkPXBheWxvYWQuZ2V0KCdjd2QnKQogICAgICAgIGJyZWFrCiAgZXhjZXB0IEV4Y2VwdGlvbjogY29udGludWUKICBwcm9jZXNzX29wZW49cGF0aCBpbiBvcGVuX3BhdGhzCiAgbGlmZWN5Y2xlPSdvcGVuJyBpZiBwcm9jZXNzX29wZW4gZWxzZSAoJ2Nsb3NlZCcgaWYgcHJvYmVfYXZhaWxhYmxlIGVsc2UgJ3Vua25vd24nKQogIHJ1bnRpbWU9J3Vua25vd24nCiAgdGFpbD0nJwogIHRyeToKICAgIHdpdGggb3BlbihwYXRoLCdyYicpIGFzIHN0cmVhbToKICAgICAgc3RyZWFtLnNlZWsobWF4KDAsb3MucGF0aC5nZXRzaXplKHBhdGgpLTI2MjE0NCkpCiAgICAgIHRhaWw9c3RyZWFtLnJlYWQoKS5kZWNvZGUoJ3V0Zi04JywncmVwbGFjZScpCiAgZXhjZXB0IE9TRXJyb3I6IHBhc3MKICBpZiBwcm9iZV9hdmFpbGFibGU6CiAgICBydW50aW1lPSdpZGxlJwogICAgaWYgcHJvY2Vzc19vcGVuOgogICAgICBmb3IgbGluZSBpbiByZXZlcnNlZCh0YWlsLnNwbGl0bGluZXMoKSk6CiAgICAgICAgdHJ5OiBpdGVtPWpzb24ubG9hZHMobGluZSkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uOiBjb250aW51ZQogICAgICAgIHBheWxvYWQ9aXRlbS5nZXQoJ3BheWxvYWQnKSBvciB7fQogICAgICAgIGlmIGl0ZW0uZ2V0KCd0eXBlJykhPSdldmVudF9tc2cnOiBjb250aW51ZQogICAgICAgIGtpbmQ9cGF5bG9hZC5nZXQoJ3R5cGUnKQogICAgICAgIGlmIGtpbmQ9PSd0YXNrX3N0YXJ0ZWQnOiBydW50aW1lPSdhY3RpdmUnOyBicmVhawogICAgICAgIGlmIGtpbmQgaW4gKCd0YXNrX2NvbXBsZXRlJywndHVybl9hYm9ydGVkJyk6IHJ1bnRpbWU9J2lkbGUnOyBicmVhawogIHByaW50KGpzb24uZHVtcHMoeydraW5kJzonaW52ZW50b3J5Jywnc2Vzc2lvbklkJzpzZXNzaW9uX2lkLCdjd2QnOmN3ZCwnbW9kaWZpZWRNcyc6aW50KG1vZGlmaWVkKjEwMDApLCdydW50aW1lJzpydW50aW1lLCdsaWZlY3ljbGUnOmxpZmVjeWNsZSwncHJvY2Vzc09wZW4nOnByb2Nlc3Nfb3BlbiwncHJvYmVBdmFpbGFibGUnOnByb2JlX2F2YWlsYWJsZX0sc2VwYXJhdG9ycz0oJywnLCc6JykpKQogIGlmIG5vdCBwcm9jZXNzX29wZW46IGNvbnRpbnVlCiAgZm9yIGxpbmUgaW4gdGFpbC5zcGxpdGxpbmVzKCk6CiAgICB0cnk6IGl0ZW09anNvbi5sb2FkcyhsaW5lKQogICAgZXhjZXB0IEV4Y2VwdGlvbjogY29udGludWUKICAgIHBheWxvYWQ9aXRlbS5nZXQoJ3BheWxvYWQnKSBvciB7fQogICAgaWYgaXRlbS5nZXQoJ3R5cGUnKT09J2V2ZW50X21zZycgYW5kIHBheWxvYWQuZ2V0KCd0eXBlJyk9PSdhZ2VudF9tZXNzYWdlJyBhbmQgaXNpbnN0YW5jZShwYXlsb2FkLmdldCgnbWVzc2FnZScpLHN0cikgYW5kIHBheWxvYWRbJ21lc3NhZ2UnXS5zdHJpcCgpOgogICAgICBwcmludChqc29uLmR1bXBzKHsna2luZCc6J2Fzc2lzdGFudE1lc3NhZ2UnLCdzZXNzaW9uSWQnOnNlc3Npb25faWQsJ2l0ZW1JZCc6J2V2ZW50LScrc3RyKGl0ZW0uZ2V0KCd0aW1lc3RhbXAnLCdtZXNzYWdlJykpLCdvY2N1cnJlZEF0JzppdGVtLmdldCgndGltZXN0YW1wJyksJ3RleHQnOnBheWxvYWRbJ21lc3NhZ2UnXSwncGhhc2UnOnBheWxvYWQuZ2V0KCdwaGFzZScpfSxzZXBhcmF0b3JzPSgnLCcsJzonKSkpCg==";
+    format!("python3 -u -c \"import base64;exec(base64.b64decode('{SCRIPT_BASE64}'))\"")
 }
 
 /// Collect concrete aliases from the user's SSH config and its `Include`
@@ -1056,7 +1429,7 @@ fn ssh_directive(line: &str) -> Option<(&str, &str)> {
     Some((key, values.trim()))
 }
 
-fn expand_include_pattern(config_path: &PathBuf, pattern: &str) -> Vec<PathBuf> {
+fn expand_include_pattern(config_path: &Path, pattern: &str) -> Vec<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from);
     let expanded = if let Some(suffix) = pattern.strip_prefix("~/") {
         home.unwrap_or_else(|| PathBuf::from(".")).join(suffix)
@@ -1196,21 +1569,21 @@ fn focus_pet_data_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
-        return home.join("Library/Application Support/Focus Pet");
+        home.join("Library/Application Support/Focus Pet")
     }
     #[cfg(target_os = "windows")]
     {
-        return env::var_os("APPDATA")
+        env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or(home)
-            .join("Focus Pet");
+            .join("Focus Pet")
     }
     #[cfg(target_os = "linux")]
     {
-        return env::var_os("XDG_DATA_HOME")
+        env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
-            .join("Focus Pet");
+            .join("Focus Pet")
     }
 }
 
@@ -1265,10 +1638,13 @@ fn is_safe_alias(alias: &str) -> bool {
 mod tests {
     use super::{
         aliases_from_config, app_server_events_from_message, app_server_transport_from_identifier,
-        codex_command, direct_unix_socket_relay_command, is_safe_alias, reconnect_delay,
-        stream_is_stale, validate_alias, AppServerRequest, AppServerTransport, SshSessionManager,
+        codex_command, codex_diagnostic_command, direct_unix_socket_relay_command, is_safe_alias,
+        reconnect_delay, remote_live_cli_session_command, remote_rollout_combined_command,
+        remote_rollout_event, remote_rollout_poll_command, ssh_process, stream_is_stale,
+        validate_alias, AppServerRequest, AppServerTransport, SshSessionManager,
         APP_SERVER_POLL_INTERVAL, STREAM_HEARTBEAT_TIMEOUT,
     };
+    use base64::Engine as _;
     use serde_json::json;
     use std::{
         fs,
@@ -1282,6 +1658,23 @@ mod tests {
         assert!(validate_alias("work; rm -rf /").is_err());
         assert!(validate_alias("*").is_err());
         assert!(validate_alias("../../host").is_err());
+    }
+
+    #[test]
+    fn automatic_ssh_connections_are_non_interactive_and_bounded() {
+        let command = ssh_process("5080", "true");
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(args.windows(2).any(|pair| pair == ["-o", "BatchMode=yes"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "ConnectTimeout=5"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "ConnectionAttempts=1"]));
+        assert!(args.iter().any(|argument| argument == "5080"));
     }
 
     #[test]
@@ -1335,6 +1728,90 @@ mod tests {
     }
 
     #[test]
+    fn app_server_delta_projects_streaming_assistant_text_over_ssh() {
+        let notification = json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-active",
+                "turnId": "turn-1",
+                "itemId": "assistant-1",
+                "delta": "remote chunk"
+            }
+        });
+        let events = app_server_events_from_message("ssh:remote-prod", &notification, None);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].host_id, "ssh:remote-prod");
+        assert_eq!(events[0].payload["role"], "assistant");
+        assert_eq!(events[0].payload["text"], "remote chunk");
+        assert_eq!(events[0].payload["isDelta"], true);
+    }
+
+    #[test]
+    fn remote_rollout_projection_only_accepts_inventory_and_assistant_messages() {
+        let inventory = json!({
+            "kind": "inventory", "sessionId": "cli-session", "cwd": "/work/project",
+            "modifiedMs": 1_700_000_000_000_i64, "runtime": "active"
+        });
+        let event = remote_rollout_event("remote-prod", &inventory).unwrap();
+        assert_eq!(event.kind, "turn.statusChanged");
+        assert_eq!(event.payload["runtime"], "active");
+        assert_eq!(event.payload["cwd"], "/work/project");
+
+        let message = json!({
+            "kind": "assistantMessage", "sessionId": "cli-session", "itemId": "event-1",
+            "occurredAt": "2026-07-29T00:00:00Z", "phase": "commentary",
+            "text": "Only visible assistant output"
+        });
+        let event = remote_rollout_event("remote-prod", &message).unwrap();
+        assert_eq!(event.kind, "message.updated");
+        assert_eq!(event.payload["role"], "assistant");
+        assert_eq!(event.payload["text"], "Only visible assistant output");
+    }
+
+    #[test]
+    fn remote_rollout_poller_is_transport_only() {
+        let command = remote_rollout_poll_command();
+        assert!(command.starts_with("python3 -u -c "));
+        assert!(!command.contains("codex "));
+        assert!(!command.contains("bootstrap"));
+    }
+
+    #[test]
+    fn remote_live_cli_probe_is_read_only_and_does_not_count_app_servers() {
+        let command = remote_live_cli_session_command();
+        assert!(command.starts_with("python3 -u -c "));
+        assert!(!command.contains("codex "));
+        let encoded = command
+            .split("base64.b64decode('")
+            .nth(1)
+            .and_then(|value| value.split_once("')"))
+            .map(|(value, _)| value)
+            .expect("embedded base64 script");
+        let script = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .expect("valid base64"),
+        )
+        .expect("UTF-8 script");
+        assert!(script.contains("/proc/"));
+        assert!(script.contains("\"app-server\" in arguments"));
+        assert!(script.contains("SC_CLK_TCK"));
+        assert!(script.contains("\"kind\":\"liveProbe\""));
+        assert!(script.contains("\"kind\":\"liveCli\""));
+        assert!(!script.contains("open(\"\")"));
+        assert!(!script.contains("subprocess"));
+        assert!(!script.contains("os.remove"));
+        assert!(!script.contains("os.rename"));
+    }
+
+    #[test]
+    fn remote_rollout_poll_combines_the_read_only_probes_in_one_transport() {
+        let command = remote_rollout_combined_command();
+        assert_eq!(command.matches("python3 -u -c").count(), 2);
+        assert!(command.contains("; "));
+    }
+
+    #[test]
     fn app_server_turn_history_projects_only_final_assistant_text() {
         let history = json!({
             "id": 3,
@@ -1373,6 +1850,16 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_prefers_the_remote_chatgpt_extension_codex() {
+        let command = codex_diagnostic_command();
+        let extension = command
+            .find(".cursor-server/extensions/openai.chatgpt-")
+            .unwrap();
+        let user_cli = command.find("$HOME/.local/bin/codex").unwrap();
+        assert!(extension < user_cli);
+    }
+
+    #[test]
     fn direct_unix_socket_transport_is_explicit_and_transport_only() {
         assert_eq!(
             app_server_transport_from_identifier("directUnixSocket"),
@@ -1401,7 +1888,7 @@ mod tests {
         let now = Instant::now();
         assert!(!stream_is_stale(now, now));
         assert!(stream_is_stale(now - STREAM_HEARTBEAT_TIMEOUT, now));
-        assert_eq!(APP_SERVER_POLL_INTERVAL, Duration::from_secs(2));
+        assert_eq!(APP_SERVER_POLL_INTERVAL, Duration::from_secs(5));
     }
 
     #[test]

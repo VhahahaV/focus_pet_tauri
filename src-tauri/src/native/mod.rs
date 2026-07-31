@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -39,14 +38,6 @@ pub struct RawActivitySample {
     pub is_screen_locked: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionSnapshot {
-    pub refreshed_at: String,
-    pub input_monitoring: String,
-    pub notifications: String,
-}
-
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -60,25 +51,26 @@ pub fn sample_activity() -> NativeActivitySample {
     enrich_sample(platform::sample_activity())
 }
 
-pub fn permission_snapshot() -> PermissionSnapshot {
-    platform::permission_snapshot()
-}
-
-pub fn open_system_settings(destination: &str) -> bool {
-    platform::open_system_settings(destination)
-}
-
-pub fn open_path(path: &Path) -> bool {
-    if !path.exists() {
-        if path.extension().is_some() {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-        } else {
-            std::fs::create_dir_all(path).ok();
-        }
+pub fn frontmost_window_center() -> Option<(f64, f64)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::frontmost_window_center()
     }
-    open::that(path).is_ok()
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+pub fn cursor_position() -> Option<(f64, f64)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::cursor_position()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -197,7 +189,7 @@ pub fn run_command_success(program: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(any(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub fn shell_text(script: &str) -> Option<String> {
     run_text_command("sh", &["-lc", script])
 }

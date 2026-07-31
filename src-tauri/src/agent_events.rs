@@ -121,7 +121,7 @@ pub fn drain_events() -> Result<Vec<AgentCompletionEvent>, String> {
 }
 
 fn drain_events_from_root(root: &PathBuf) -> Result<Vec<AgentCompletionEvent>, String> {
-    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(root).map_err(|error| error.to_string())?;
     let inbox = root.join(INBOX_FILE);
     if !inbox.exists() {
         return Ok(Vec::new());
@@ -220,19 +220,19 @@ fn app_data_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
-        return home.join("Library/Application Support/Focus Pet");
+        home.join("Library/Application Support/Focus Pet")
     }
     #[cfg(target_os = "windows")]
     {
-        return crate::store::windows_focus_pet_data_root()
-            .unwrap_or_else(|| home.join("AppData/Local/Focus Pet Data"));
+        crate::store::windows_focus_pet_data_root()
+            .unwrap_or_else(|| home.join("AppData/Local/Focus Pet Data"))
     }
     #[cfg(target_os = "linux")]
     {
-        return env::var_os("XDG_DATA_HOME")
+        env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
-            .join("Focus Pet");
+            .join("Focus Pet")
     }
 }
 

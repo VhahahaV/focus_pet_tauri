@@ -153,7 +153,7 @@ test("computer monitor can be customized and keeps the Today cards aligned", asy
     const heights = await page.locator(".today-top-grid > section").evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
     expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
   }
-  await expect(page.getByText(/休息/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "开始休息" })).toHaveCount(0);
 });
 
 test("Today summary remains readable when the main window is narrowed", async ({ page }) => {
@@ -195,6 +195,16 @@ test("timeline density scales with its window and hover colors follow every them
   await page.getByRole("radio", { name: "24h", exact: true }).click();
   const twentyFourHourDensity = await barDensity();
   expect(twentyFourHourDensity).toBeGreaterThan(twoHourDensity);
+  await expect(page.locator(".timeline-hour-axis span")).toHaveCount(12);
+  await expect(page.locator(".state-block").first()).toHaveText("");
+  await expect(page.getByLabel("状态颜色说明")).toContainText("专注");
+  await expect(page.getByLabel("输入颜色说明")).toContainText("键盘");
+
+  const firstAppCategory = page.locator(".today-app-category-picker").first();
+  await expect(firstAppCategory.getByRole("button")).toHaveCount(1);
+  await firstAppCategory.getByRole("button").click();
+  await page.getByRole("option", { name: "娱乐", exact: true }).click();
+  await expect(firstAppCategory.getByRole("button", { name: /娱乐/ })).toHaveAttribute("aria-expanded", "false");
 
   await dashboardNav.getByRole("button", { name: "设置" }).click();
   const themeNames = [
@@ -326,7 +336,7 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await loadBuiltApp(page);
   await page.getByRole("navigation", { name: "Dashboard" }).getByRole("button", { name: "设置" }).click();
   await expect(page.getByRole("navigation", { name: "设置模块" })).toHaveCount(0);
-  for (const title of ["外观主题", "桌面状态卡", "提醒", "识别", "权限", "数据", "关于"]) {
+  for (const title of ["外观主题", "桌面状态卡", "提醒", "识别", "关于"]) {
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
   }
   const settingsWidths = await page.locator(".settings-content-panel").evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().width));
@@ -338,10 +348,11 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.getByText("回归提醒")).toBeVisible();
   await expect(page.getByRole("heading", { name: "智能体任务" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Codex 会话同步配置" })).toBeVisible();
-  await expect(page.getByRole("radiogroup", { name: "可展示内容" })).toBeVisible();
-  await expect(page.getByRole("radio", { name: "仅状态" })).toBeVisible();
-  await expect(page.getByRole("radio", { name: "Assistant 摘要" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "测试桌宠通知" })).toBeVisible();
+  await expect(page.getByText(/Assistant 摘要（默认）/)).toBeVisible();
+  await expect(page.getByText(/自动完成 Hook、App Server、rollout 与 SSH 会话发现/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /安装 Codex Hook/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /连接精确状态/ })).toHaveCount(0);
+  await expect(page.getByRole("radiogroup", { name: "可展示内容" })).toHaveCount(0);
   await expect(page.getByText("温和走神阈值")).toBeVisible();
   await expect(page.locator(".settings-module-reminders .settings-number-stepper")).toHaveCount(4);
   await expect(page.getByRole("button", { name: "温和走神阈值 增加" })).toBeVisible();
@@ -360,15 +371,9 @@ test("settings expose all modules without a secondary navigation rail", async ({
     await expect(page.getByText(signal, { exact: true })).toBeVisible();
   }
 
-  await expect(page.getByText("刷新于")).toBeVisible();
-  await expect(page.getByRole("button", { name: "请求" }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "测试", exact: true })).toBeVisible();
-  await expect(page.getByText(/^(隐私与安全|Windows 隐私设置)$/)).toBeVisible();
-
-  await expect(page.getByText("本机数据")).toBeVisible();
-  await expect(page.getByText("启用日志")).toBeVisible();
-  await expect(page.getByRole("button", { name: /打开日志/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /复制路径/ })).toBeVisible();
+  await expect(page.getByText(/^(隐私与安全|Windows 隐私设置)$/)).toHaveCount(0);
+  await expect(page.getByText("本机数据")).toHaveCount(0);
+  await expect(page.getByText("启用日志")).toHaveCount(0);
 });
 
 test("appearance themes switch globally and persist their selection", async ({ page }) => {

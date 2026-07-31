@@ -1,4 +1,4 @@
-import type { NativeActivitySample, PermissionSnapshot, SystemMetricsSample } from "../core/types";
+import type { NativeActivitySample, SystemMetricsSample } from "../core/types";
 
 const workApps = [
   { appName: "Codex", bundleID: "com.openai.codex", windowTitle: "Focus Pet migration · Codex" },
@@ -30,12 +30,6 @@ export const makeMockActivitySample = (now = new Date()): NativeActivitySample =
     isScreenLocked: false,
   };
 };
-
-export const mockPermissionSnapshot = (): PermissionSnapshot => ({
-  refreshedAt: new Date().toISOString(),
-  inputMonitoring: "browser-preview",
-  notifications: typeof Notification === "undefined" ? "browser-preview" : Notification.permission,
-});
 
 export const makeMockSystemMetrics = (now = new Date()): SystemMetricsSample => {
   const wave = (Math.sin(now.getTime() / 5_000) + 1) / 2;

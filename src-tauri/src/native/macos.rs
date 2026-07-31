@@ -1,24 +1,28 @@
-use super::{now_iso, run_text_command, PermissionSnapshot, RawActivitySample};
+use super::{now_iso, run_text_command, RawActivitySample};
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
-use core_graphics::event::CGEventType;
+use core_graphics::event::{CGEvent, CGEventType};
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+use core_graphics::geometry::CGRect;
 use core_graphics::window::{
-    create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowLayer,
-    kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, kCGWindowName,
-    kCGWindowOwnerPID,
+    create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowBounds,
+    kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+    kCGWindowName, kCGWindowOwnerPID,
 };
 use std::ffi::c_void;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const FOCUS_PET_BUNDLE_ID: &str = "com.focuspet.FocusPet";
-static INPUT_MONITOR_INIT: Once = Once::new();
+static INPUT_MONITOR_SETUP: Mutex<()> = Mutex::new(());
 static INPUT_MONITOR_AVAILABLE: AtomicBool = AtomicBool::new(false);
+static INPUT_MONITOR_TAP: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+static INPUT_MONITOR_LAST_ATTEMPT_MS: AtomicU64 = AtomicU64::new(0);
 static KEYBOARD_COUNT: AtomicU32 = AtomicU32::new(0);
 static POINTER_COUNT: AtomicU32 = AtomicU32::new(0);
 static LAST_POINTER_MOTION_MS: AtomicU64 = AtomicU64::new(0);
@@ -229,6 +233,48 @@ fn front_window_title_for_pid(process_id: i32) -> Option<String> {
     None
 }
 
+/// Returns the center of the actual NSWorkspace frontmost application's
+/// ordinary window. Filtering by PID avoids choosing a visually high window
+/// from another display when the user switches apps or Spaces by keyboard.
+pub fn frontmost_window_center() -> Option<(f64, f64)> {
+    let frontmost_process_id = i64::from(frontmost_application_from_workspace()?.process_id);
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let window_ids = create_window_list(options, kCGNullWindowID)?;
+    let descriptions = create_description_from_array(window_ids)?;
+    for window in descriptions.iter() {
+        let Some(owner_pid) = cf_number_value(&window, unsafe { kCGWindowOwnerPID }) else {
+            continue;
+        };
+        let layer = cf_number_value(&window, unsafe { kCGWindowLayer }).unwrap_or_default();
+        if owner_pid != frontmost_process_id || layer != 0 {
+            continue;
+        }
+        let Some(bounds_value) = window.find(unsafe { kCGWindowBounds }) else {
+            continue;
+        };
+        let Some(bounds_dictionary) = bounds_value.downcast::<CFDictionary>() else {
+            continue;
+        };
+        let Some(bounds) = CGRect::from_dict_representation(&bounds_dictionary) else {
+            continue;
+        };
+        if bounds.size.width <= 1.0 || bounds.size.height <= 1.0 {
+            continue;
+        }
+        return Some((
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        ));
+    }
+    None
+}
+
+pub fn cursor_position() -> Option<(f64, f64)> {
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let point = CGEvent::new(source).ok()?.location();
+    Some((point.x, point.y))
+}
+
 fn cf_number_value(dictionary: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i64> {
     dictionary.find(key)?.downcast::<CFNumber>()?.to_i64()
 }
@@ -248,47 +294,66 @@ fn cf_string_value(
 }
 
 fn ensure_input_monitor() {
-    INPUT_MONITOR_INIT.call_once(|| {
-        let events = [
-            CGEventType::KeyDown,
-            CGEventType::FlagsChanged,
-            CGEventType::LeftMouseDown,
-            CGEventType::RightMouseDown,
-            CGEventType::OtherMouseDown,
-            CGEventType::MouseMoved,
-            CGEventType::LeftMouseDragged,
-            CGEventType::RightMouseDragged,
-            CGEventType::OtherMouseDragged,
-            CGEventType::ScrollWheel,
-        ];
-        let mask = events.iter().fold(0_u64, |value, event_type| {
-            value | (1_u64 << (*event_type as u32))
-        });
-        let tap = unsafe {
-            CGEventTapCreate(
-                K_CG_SESSION_EVENT_TAP,
-                K_CG_HEAD_INSERT_EVENT_TAP,
-                K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
-                mask,
-                Some(input_event_callback),
-                std::ptr::null_mut(),
-            )
-        };
-        if tap.is_null() {
-            INPUT_MONITOR_AVAILABLE.store(false, Ordering::Relaxed);
-            return;
-        }
-        let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0) };
-        if source.is_null() {
-            INPUT_MONITOR_AVAILABLE.store(false, Ordering::Relaxed);
-            return;
-        }
-        unsafe {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
-            CGEventTapEnable(tap, true);
-        }
-        INPUT_MONITOR_AVAILABLE.store(true, Ordering::Relaxed);
+    if INPUT_MONITOR_AVAILABLE.load(Ordering::Acquire)
+        && !INPUT_MONITOR_TAP.load(Ordering::Acquire).is_null()
+    {
+        return;
+    }
+    let now = now_millis();
+    let previous_attempt = INPUT_MONITOR_LAST_ATTEMPT_MS.load(Ordering::Relaxed);
+    if previous_attempt > 0 && now.saturating_sub(previous_attempt) < 30_000 {
+        return;
+    }
+    let Ok(_guard) = INPUT_MONITOR_SETUP.try_lock() else {
+        return;
+    };
+    if INPUT_MONITOR_AVAILABLE.load(Ordering::Acquire)
+        && !INPUT_MONITOR_TAP.load(Ordering::Acquire).is_null()
+    {
+        return;
+    }
+    INPUT_MONITOR_LAST_ATTEMPT_MS.store(now, Ordering::Relaxed);
+    let events = [
+        CGEventType::KeyDown,
+        CGEventType::FlagsChanged,
+        CGEventType::LeftMouseDown,
+        CGEventType::RightMouseDown,
+        CGEventType::OtherMouseDown,
+        CGEventType::MouseMoved,
+        CGEventType::LeftMouseDragged,
+        CGEventType::RightMouseDragged,
+        CGEventType::OtherMouseDragged,
+        CGEventType::ScrollWheel,
+    ];
+    let mask = events.iter().fold(0_u64, |value, event_type| {
+        value | (1_u64 << (*event_type as u32))
     });
+    let tap = unsafe {
+        CGEventTapCreate(
+            K_CG_SESSION_EVENT_TAP,
+            K_CG_HEAD_INSERT_EVENT_TAP,
+            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+            mask,
+            Some(input_event_callback),
+            std::ptr::null_mut(),
+        )
+    };
+    if tap.is_null() {
+        INPUT_MONITOR_AVAILABLE.store(false, Ordering::Release);
+        return;
+    }
+    let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0) };
+    if source.is_null() {
+        unsafe { CFMachPortInvalidate(tap) };
+        INPUT_MONITOR_AVAILABLE.store(false, Ordering::Release);
+        return;
+    }
+    unsafe {
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
+        CGEventTapEnable(tap, true);
+    }
+    INPUT_MONITOR_TAP.store(tap, Ordering::Release);
+    INPUT_MONITOR_AVAILABLE.store(true, Ordering::Release);
 }
 
 fn drain_input_counts() -> (u32, u32) {
@@ -304,6 +369,18 @@ extern "C" fn input_event_callback(
     event: *mut c_void,
     _user_info: *mut c_void,
 ) -> *mut c_void {
+    if event_type == CGEventType::TapDisabledByTimeout as u32
+        || event_type == CGEventType::TapDisabledByUserInput as u32
+    {
+        let tap = INPUT_MONITOR_TAP.load(Ordering::Acquire);
+        if !tap.is_null() {
+            unsafe { CGEventTapEnable(tap, true) };
+            INPUT_MONITOR_AVAILABLE.store(true, Ordering::Release);
+        } else {
+            INPUT_MONITOR_AVAILABLE.store(false, Ordering::Release);
+        }
+        return event;
+    }
     match event_type {
         value
             if should_count_keyboard_event(
@@ -379,64 +456,6 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
-}
-
-pub fn permission_snapshot() -> PermissionSnapshot {
-    let input_monitoring = if input_monitoring_is_allowed() {
-        "已允许"
-    } else {
-        "待开启"
-    };
-    PermissionSnapshot {
-        refreshed_at: now_iso(),
-        input_monitoring: input_monitoring.to_string(),
-        notifications: "system-managed".to_string(),
-    }
-}
-
-fn input_monitoring_is_allowed() -> bool {
-    ensure_input_monitor();
-    INPUT_MONITOR_AVAILABLE.load(Ordering::Relaxed) || can_create_passive_input_event_tap()
-}
-
-fn can_create_passive_input_event_tap() -> bool {
-    let events = [
-        CGEventType::KeyDown,
-        CGEventType::LeftMouseDown,
-        CGEventType::RightMouseDown,
-        CGEventType::OtherMouseDown,
-    ];
-    let mask = events.iter().fold(0_u64, |value, event_type| {
-        value | (1_u64 << (*event_type as u32))
-    });
-    let tap = unsafe {
-        CGEventTapCreate(
-            K_CG_SESSION_EVENT_TAP,
-            K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
-            mask,
-            Some(input_event_callback),
-            std::ptr::null_mut(),
-        )
-    };
-    if tap.is_null() {
-        return false;
-    }
-    unsafe {
-        CFMachPortInvalidate(tap);
-    }
-    true
-}
-
-pub fn open_system_settings(destination: &str) -> bool {
-    let pane = match destination {
-        "inputMonitoring" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-        }
-        "notifications" => "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
-        _ => "x-apple.systempreferences:com.apple.preference.security",
-    };
-    open::that(pane).is_ok()
 }
 
 fn idle_seconds() -> f64 {

@@ -1,0 +1,42 @@
+{
+  "source": {
+    "petIntent": "../focus_pet/Sources/FocusPetCore/PetIntent.swift",
+    "nudgePolicy": "../focus_pet/Sources/FocusPetCore/NudgePolicy.swift",
+    "petBehavior": "../focus_pet/Sources/FocusPetCore/PetBehavior.swift"
+  },
+  "userMappingCases": [
+    "quietCompanion",
+    "focusRestHint",
+    "distractedObserve",
+    "nudgeGentle",
+    "nudgeStrong",
+    "breakCompanion",
+    "breakEnding",
+    "sleep"
+  ],
+  "preferredSourceActionIDs": {
+    "focusRestHint": ["stretch", "grooming", "blink", "idle", "default"],
+    "breakCompanion": ["breakRelax", "break", "relax", "onfloor", "sleep", "default", "idle"],
+    "breakEnding": ["breakEnd", "mouseSummon", "cursorPounce", "welcomeBack", "wake", "default"]
+  },
+  "legacyPetActionByIntent": {
+    "focusRestHint": "stretch",
+    "breakCompanion": "breakRelax",
+    "breakEnding": "breakEnd"
+  },
+  "intentByLegacyPetAction": {
+    "stretch": "focusRestHint",
+    "breakRelax": "breakCompanion",
+    "breakEnd": "breakEnding"
+  },
+  "defaultPetIntentByNudgeReason": {
+    "distractedOverThreshold": "nudgeGentle",
+    "distractedStrong": "nudgeStrong",
+    "frequentSwitching": "nudgeStrong",
+    "longFocusRest": "focusRestHint",
+    "veryLongFocusRest": "focusRestHint",
+    "focusSessionCompleted": "focusRestHint",
+    "breakEnding": "breakEnding",
+    "welcomeBack": "welcomeBack"
+  }
+}

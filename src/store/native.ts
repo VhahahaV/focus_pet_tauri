@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AgentCompletionEvent, InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, PermissionSnapshot, SystemMetricsSample } from "../core/types";
+import type { AgentCompletionEvent, InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, NativeRuntimeEnvelope, SystemMetricsSample } from "../core/types";
 import type { CodexEventEnvelope, CodexHookConfigurationResult, CodexIntegrationStatus, CodexSessionSnapshot, CodexSyncPreferences, SshConnectionStatus, SshHostCandidate, SshHostDiagnostic, SshProvisionResult, SshUninstallResult } from "../core/codexSessions";
 import type { PetPackRecord, PetSourceActionAssets } from "../resources/petPack";
 import { importedPetPackRecord } from "../resources/petPack";
@@ -16,16 +16,6 @@ export const nativeSaveSnapshot = async (snapshot: LocalStoreSnapshot): Promise<
   return invoke<boolean>("save_snapshot", { snapshot });
 };
 
-export const nativeExportSnapshot = async (snapshot: LocalStoreSnapshot, redacted: boolean): Promise<string | undefined> => {
-  if (!isTauriRuntime()) return undefined;
-  return invoke<string>("export_snapshot", { snapshot, redacted });
-};
-
-export const nativeDeleteAllData = async (): Promise<boolean> => {
-  if (!isTauriRuntime()) return false;
-  return invoke<boolean>("delete_all_data");
-};
-
 export const nativeQuitApp = async (): Promise<boolean> => {
   if (!isTauriRuntime()) return false;
   return invoke<boolean>("quit_app");
@@ -36,14 +26,29 @@ export const nativePerformMenuBarAction = async (action: string): Promise<boolea
   return invoke<boolean>("perform_menu_bar_action", { action });
 };
 
-export const nativeDataSize = async (): Promise<number> => {
-  if (!isTauriRuntime()) return 0;
-  return invoke<number>("data_size");
+export const nativeSetPetWindowTrackingPaused = async (paused: boolean): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("set_pet_window_tracking_paused", { paused });
+};
+
+export const nativeSetPetPanelPosition = async (x: number, y: number): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("set_pet_panel_position", { x, y });
+};
+
+export const nativeSetPetPanelIgnoresMouseEvents = async (ignores: boolean): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("set_pet_panel_ignores_mouse_events", { ignores });
 };
 
 export const nativeActivitySample = async (): Promise<NativeActivitySample | undefined> => {
   if (!isTauriRuntime()) return undefined;
   return invoke<NativeActivitySample>("sample_activity");
+};
+
+export const nativeRuntimeSnapshot = async (): Promise<NativeRuntimeEnvelope | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<NativeRuntimeEnvelope>("native_runtime_snapshot");
 };
 
 export const nativeSystemMetrics = async (): Promise<SystemMetricsSample | undefined> => {
@@ -151,11 +156,6 @@ export const nativeCodexSshConnectionStatus = async (): Promise<SshConnectionSta
   return invoke<SshConnectionStatus[]>("codex_ssh_connection_status");
 };
 
-export const nativePermissionSnapshot = async (): Promise<PermissionSnapshot | undefined> => {
-  if (!isTauriRuntime()) return undefined;
-  return invoke<PermissionSnapshot>("permission_snapshot");
-};
-
 export const nativeAppIcon = async (bundleID: string | undefined, appName: string): Promise<string | undefined> => {
   if (!isTauriRuntime()) return undefined;
   const path = await invoke<string | undefined>("app_icon", { bundleId: bundleID, appName });
@@ -165,36 +165,6 @@ export const nativeAppIcon = async (bundleID: string | undefined, appName: strin
 export const nativeInstallationSnapshot = async (): Promise<InstallationSnapshot | undefined> => {
   if (!isTauriRuntime()) return undefined;
   return invoke<InstallationSnapshot>("installation_snapshot");
-};
-
-export const nativeOpenSystemSettings = async (destination: string): Promise<boolean> => {
-  if (!isTauriRuntime()) return false;
-  return invoke<boolean>("open_system_settings", { destination });
-};
-
-export const nativeOpenLogFolder = async (): Promise<boolean> => {
-  if (!isTauriRuntime()) return false;
-  return invoke<boolean>("open_log_folder");
-};
-
-export const nativeDataStoragePath = async (): Promise<string | undefined> => {
-  if (!isTauriRuntime()) return undefined;
-  return invoke<string>("data_storage_path");
-};
-
-export const nativeOpenDataFolder = async (): Promise<boolean> => {
-  if (!isTauriRuntime()) return false;
-  return invoke<boolean>("open_data_folder");
-};
-
-export const nativeCurrentLogFile = async (openFile: boolean): Promise<string | undefined> => {
-  if (!isTauriRuntime()) return undefined;
-  return invoke<string>("current_log_file", { openFile });
-};
-
-export const nativeAppendLogEntry = async (entry: Record<string, unknown>): Promise<string | undefined> => {
-  if (!isTauriRuntime()) return undefined;
-  return invoke<string>("append_log_entry", { entry });
 };
 
 export const nativeImportPetPack = async (): Promise<PetPackRecord[] | undefined> => {

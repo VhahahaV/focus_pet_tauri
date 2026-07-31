@@ -19,7 +19,7 @@ import {
   type UIStatus,
 } from "./ui";
 
-const statuses: UIStatus[] = ["focus", "distracted", "success", "away", "pet", "privacy", "warning", "error", "neutral"];
+const statuses: UIStatus[] = ["focus", "distracted", "success", "away", "pet", "info", "warning", "error", "neutral"];
 
 export const PrimitiveGallery = () => {
   const [segment, setSegment] = useState("focus");
@@ -55,7 +55,7 @@ export const PrimitiveGallery = () => {
 
       <section className="fp-gallery-grid fp-gallery-metrics">
         <MetricTile icon={<Activity size={16} />} value="3h 42m" label="今日专注" status="focus" />
-        <MetricTile icon={<MousePointer2 size={16} />} value="1,284" label="输入活动" status="privacy" />
+        <MetricTile icon={<MousePointer2 size={16} />} value="1,284" label="输入活动" status="info" />
         <InsetCard status="pet" selected><strong>Inset card</strong><small>selected state</small></InsetCard>
         <GlassSurface roleType="stage" status="pet"><strong>Stage glass</strong></GlassSurface>
         <HoverCard status="focus"><strong>Hover card</strong><span>精确详情</span></HoverCard>

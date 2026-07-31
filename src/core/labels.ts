@@ -11,6 +11,7 @@ import type {
 export const focusStateLabels: Record<FocusState, { title: string; symbol: string; short: string }> = {
   focus: { title: "专注", symbol: "checkmark.circle.fill", short: "稳" },
   distracted: { title: "走神", symbol: "eye.trianglebadge.exclamationmark", short: "散" },
+  break: { title: "旧状态", symbol: "archivebox.fill", short: "旧" },
   away: { title: "暂离", symbol: "moon.zzz.fill", short: "离" },
 };
 
@@ -30,7 +31,10 @@ export const ruleMatchKindLabels: Record<RuleMatchKind, string> = {
 export const nudgeReasonLabels: Record<NudgeReason, string> = {
   distractedOverThreshold: "注意力提醒",
   distractedStrong: "需要收束一下",
+  longFocusRest: "旧版提醒",
+  veryLongFocusRest: "旧版提醒",
   focusSessionCompleted: "专注完成",
+  breakEnding: "旧版提醒",
   welcomeBack: "回到电脑",
   frequentSwitching: "切换过多",
 };
@@ -38,10 +42,13 @@ export const nudgeReasonLabels: Record<NudgeReason, string> = {
 export const petIntentLabels: Record<PetIntentKind, string> = {
   quietCompanion: "安静陪伴",
   distractedObserve: "走神观察",
+  breakCompanion: "旧版动作",
   nudgeGentle: "温和提醒",
   nudgeStrong: "强提醒",
   taskCompleted: "任务完成",
+  focusRestHint: "旧版动作",
   sleep: "暂离睡觉",
+  breakEnding: "旧版动作",
   welcomeBack: "欢迎回来",
   moveLeft: "向左移动",
   moveRight: "向右移动",
