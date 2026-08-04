@@ -203,7 +203,39 @@ test("timeline density scales with its window and hover colors follow every them
   const firstAppCategory = page.locator(".today-app-category-picker").first();
   await expect(firstAppCategory.getByRole("button")).toHaveCount(1);
   await firstAppCategory.getByRole("button").click();
-  await page.getByRole("option", { name: "娱乐", exact: true }).click();
+  const categoryOptions = page.locator(".today-app-category-options");
+  await expect(categoryOptions).toBeVisible();
+  const categoryLayer = await categoryOptions.evaluate((options) => ({
+    parentClass: options.parentElement?.className,
+    position: getComputedStyle(options).position,
+    zIndex: Number(getComputedStyle(options).zIndex),
+    nativeRadioCount: options.querySelectorAll('input[type="radio"]').length,
+  }));
+  expect(categoryLayer).toMatchObject({
+    parentClass: "today-app-usage-card",
+    position: "absolute",
+    nativeRadioCount: 0,
+  });
+  expect(categoryLayer.zIndex).toBeLessThan(100);
+  await expect(categoryOptions.getByRole("menuitemradio")).toHaveCount(3);
+  await page.locator(".today-app-usage-list").evaluate((list) => {
+    // The browser fallback fixture has a single app. Add inert visual rows so
+    // this test exercises the same captured scroll path as native usage data.
+    const row = list.firstElementChild;
+    if (row) {
+      for (let index = 0; index < 5; index += 1) list.append(row.cloneNode(true));
+    }
+    list.setAttribute("style", "max-height: 96px; overflow-y: auto");
+    list.scrollTop = 24;
+    list.dispatchEvent(new Event("scroll"));
+  });
+  await expect(categoryOptions).toHaveCount(0);
+  await page.locator(".today-app-usage-list").evaluate((list) => {
+    list.scrollTop = 0;
+    list.dispatchEvent(new Event("scroll"));
+  });
+  await firstAppCategory.getByRole("button").click();
+  await page.getByRole("menuitemradio", { name: "娱乐", exact: true }).click();
   await expect(firstAppCategory.getByRole("button", { name: /娱乐/ })).toHaveAttribute("aria-expanded", "false");
 
   await dashboardNav.getByRole("button", { name: "设置" }).click();
@@ -284,9 +316,50 @@ test("desktop widget views render without the main runtime shell", async ({ page
   await loadBuiltApp(page, "https://focus-pet.local/?widget=petCompanion");
   await expect(page.locator(".window-pet")).toBeVisible();
   await expect(page.locator(".window-pet img")).toBeVisible();
+  const hitZoneBounds = await page.locator(".window-pet").evaluate((companion) => {
+    const button = companion.querySelector(".pet-avatar-button")?.getBoundingClientRect();
+    const hitZone = companion.querySelector(".pet-avatar-hit-zone")?.getBoundingClientRect();
+    if (!button || !hitZone) return undefined;
+    return {
+      contained: hitZone.left > button.left
+        && hitZone.top > button.top
+        && hitZone.right < button.right
+        && hitZone.bottom < button.bottom,
+      widthRatio: hitZone.width / button.width,
+      heightRatio: hitZone.height / button.height,
+    };
+  });
+  expect(hitZoneBounds?.contained).toBe(true);
+  expect(hitZoneBounds?.widthRatio).toBeLessThan(0.7);
+  expect(hitZoneBounds?.heightRatio).toBeLessThan(0.85);
+  const placementBounds = await page.locator(".window-pet").evaluate((companion) => {
+    const image = companion.querySelector("img");
+    if (!image) return [];
+    const placements = ["bottomRight", "bottomLeft", "topRight", "topLeft"];
+    return placements.map((placement) => {
+      for (const value of placements) companion.classList.remove(`placement-${value}`);
+      companion.classList.add(`placement-${placement}`);
+      const rect = image.getBoundingClientRect();
+      return { placement, left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    });
+  });
+  for (const bounds of placementBounds) {
+    expect(bounds.left, `${bounds.placement} left edge`).toBeGreaterThanOrEqual(0);
+    expect(bounds.top, `${bounds.placement} top edge`).toBeGreaterThanOrEqual(0);
+    expect(bounds.right, `${bounds.placement} right edge`).toBeLessThanOrEqual(330);
+    expect(bounds.bottom, `${bounds.placement} bottom edge`).toBeLessThanOrEqual(430);
+  }
   await page.locator(".window-pet").dispatchEvent("pointerover");
   await expect(page.getByRole("button", { name: "桌宠切换动作" })).toBeVisible();
   await expect(page.getByText("当前状态")).toBeVisible();
+  const codexPanelVisibility = await page.locator(".window-pet").evaluate((companion) => {
+    companion.classList.add("has-codex-panel");
+    const panel = document.createElement("div");
+    panel.className = "floating-pet-codex";
+    companion.append(panel);
+    return getComputedStyle(panel).visibility;
+  });
+  expect(codexPanelVisibility).toBe("hidden");
   await expect(page.getByText("专注", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "打开桌宠面板" })).toContainText("面板");
   const cyclePetAction = page.getByRole("button", { name: "桌宠切换动作" });
@@ -374,6 +447,7 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.getByText(/^(隐私与安全|Windows 隐私设置)$/)).toHaveCount(0);
   await expect(page.getByText("本机数据")).toHaveCount(0);
   await expect(page.getByText("启用日志")).toHaveCount(0);
+  await expect(page.getByText(/数据保留|保留天数|自动清理/)).toHaveCount(0);
 });
 
 test("appearance themes switch globally and persist their selection", async ({ page }) => {

@@ -77,18 +77,16 @@ addCheck("core Swift modules have React equivalents", () =>
     "src/core/types.ts",
     "src/store/localStore.ts",
   ]) &&
-  contains(projectRoot, "src/core/stateEngine.ts", [
+  contains(projectRoot, "src/core/types.ts", [
     "isSystemSleeping",
     "isScreenLocked",
+  ]) &&
+  contains(projectRoot, "src/core/stateEngine.ts", [
     "longInputIdleAway",
     "entertainmentStable",
     "recentInputRecovery",
   ]) &&
   contains(projectRoot, "src/core/settings.ts", [
-    "storeRawTitle",
-    "storeOnlyCategoryResult",
-    "pauseActivityRecording",
-    "stateRetentionDays",
     "idleAwaySeconds",
     "randomActionSwitchSeconds",
   ]),
@@ -104,12 +102,12 @@ addCheck("runtime orchestration migrated from FocusPetModel", () =>
   ]) &&
   contains(projectRoot, "src/app/useFocusPetApp.ts", [
     "nativeActivitySample",
-    "nativePermissionSnapshot",
+    "nativeInstallationSnapshot",
+    "nativeRuntimeSnapshot",
     "nativeSyncWidgetWindows",
     "nativeImportPetPack",
     "nativeDeliverNotification",
     "refreshRecognitionDiagnostics",
-    "writeDiagnosticsLogSnapshot",
   ]),
 );
 
@@ -137,18 +135,14 @@ addCheck("Tauri commands cover original native/storage feature surface", () =>
   contains(projectRoot, "src-tauri/src/lib.rs", [
     "load_snapshot",
     "save_snapshot",
-    "export_snapshot",
-    "delete_all_data",
-    "data_size",
+    "native_runtime_snapshot",
     "sample_activity",
-    "permission_snapshot",
+    "sample_system_metrics",
     "installation_snapshot",
-    "open_system_settings",
-    "open_log_folder",
-    "current_log_file",
     "choose_and_import_pet_pack",
     "import_pet_pack_from_path",
     "list_pet_packs",
+    "pet_pack_assets",
     "delete_pet_pack",
     "deliver_notification",
     "sync_widget_windows",
@@ -173,12 +167,11 @@ addCheck("macOS, Windows, and Linux native adapters are separated", () =>
     "osascript",
     "IOHIDSystem",
     "CGEventSourceSecondsSinceLastEventType",
-    "Privacy_ListenEvent",
+    "needs-accessibility-permission",
   ]) &&
   contains(projectRoot, "src-tauri/src/native/windows.rs", [
     "GetForegroundWindow",
     "GetLastInputInfo",
-    "ms-settings:privacy",
   ]) &&
   contains(projectRoot, "src-tauri/src/native/linux.rs", [
     "xdotool",

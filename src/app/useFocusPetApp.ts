@@ -19,7 +19,7 @@ import { dayBounds } from "../core/utils";
 import { intentKindForState, makePetIntent } from "../core/pet";
 import { codexBubble, onlyActiveCodexSessions, reduceActiveCodexEvents, reduceCodexEvents, type CodexIntegrationStatus, type CodexSessionSnapshot, type CodexSyncPreferences, type SshConnectionStatus, type SshHostCandidate, type SshHostDiagnostic } from "../core/codexSessions";
 import type { PetPackRecord } from "../resources/petPack";
-import { emptySnapshot, loadSnapshot, normalizeSnapshot, pruneSnapshotForRetention, saveSnapshot } from "../store/localStore";
+import { emptySnapshot, loadSnapshot, normalizeSnapshot, saveSnapshot } from "../store/localStore";
 import {
   nativeActivitySample,
   nativeConnectCodexSshHost,
@@ -46,6 +46,7 @@ import {
   nativeListPetPacks,
   nativePetPackAssets,
   nativeRuntimeSnapshot,
+  nativeSetClassificationRules,
   nativeSyncWidgetWindows,
   isTauriRuntime,
 } from "../store/native";
@@ -124,34 +125,34 @@ const sampleActivity = async (): Promise<NativeActivitySample | undefined> => {
 const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
   const now = new Date();
   const bounds = dayBounds(now);
-  const retained = pruneSnapshotForRetention(runtimeSnapshot(state), now).snapshot;
-  const retainedState = {
+  const normalized = normalizeSnapshot(runtimeSnapshot(state));
+  const normalizedState = {
     ...state,
-    settings: retained.settings,
-    classificationRules: retained.classificationRules,
-    stateSegments: retained.stateSegments,
-    appUsage: retained.appUsage,
-    inputActivity: retained.inputActivity,
-    focusSessions: retained.focusSessions,
-    breakSessions: retained.breakSessions,
-    nudges: retained.nudges,
+    settings: normalized.settings,
+    classificationRules: normalized.classificationRules,
+    stateSegments: normalized.stateSegments,
+    appUsage: normalized.appUsage,
+    inputActivity: normalized.inputActivity,
+    focusSessions: normalized.focusSessions,
+    breakSessions: normalized.breakSessions,
+    nudges: normalized.nudges,
   };
   return {
-    ...retainedState,
+    ...normalizedState,
     settings: {
-      ...retainedState.settings,
+      ...normalizedState.settings,
       desktopWidgetVisible:
-        retainedState.settings.desktopWidget.currentStatusVisible || retainedState.settings.desktopWidget.recentRhythmVisible,
+        normalizedState.settings.desktopWidget.currentStatusVisible || normalizedState.settings.desktopWidget.recentRhythmVisible,
     },
     summary: buildDailySummary(
       now,
-      retainedState.stateSegments,
-      retainedState.appUsage,
-      retainedState.focusSessions,
-      retainedState.nudges,
-      retainedState.breakSessions,
+      normalizedState.stateSegments,
+      normalizedState.appUsage,
+      normalizedState.focusSessions,
+      normalizedState.nudges,
+      normalizedState.breakSessions,
     ),
-    todayWorkload: inputWorkloadSummary(retainedState.inputActivity, bounds.start, bounds.end),
+    todayWorkload: inputWorkloadSummary(normalizedState.inputActivity, bounds.start, bounds.end),
   };
 };
 
@@ -271,7 +272,6 @@ const startupTimeout = async <T,>(
 
 type PersistPriority = "interactive" | "sample";
 const samplePersistIntervalMilliseconds = 15_000;
-const retentionPruneIntervalMilliseconds = 10 * 60_000;
 
 export const useFocusPetApp = (): FocusPetAppController => {
   const [bundle, setBundle] = useState<RuntimeBundle>(() => emptyRuntime());
@@ -293,7 +293,6 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const pendingSnapshot = useRef<LocalStoreSnapshot | undefined>(undefined);
   const saveInFlight = useRef<Promise<void> | undefined>(undefined);
   const lastPersistedAt = useRef(0);
-  const lastRetentionPruneAt = useRef(Date.now());
   const tickInFlight = useRef<Promise<void> | undefined>(undefined);
   const lastNativeRuntimeGeneration = useRef(-1);
   const nativeSampleUnavailable = useRef(false);
@@ -301,6 +300,8 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const physicalIntentResetTimer = useRef<number | undefined>(undefined);
   const hydratingPetPackIDs = useRef<Set<string>>(new Set());
   const hydratedPetPackIDs = useRef<Set<string>>(new Set());
+  const classificationCommitRequested = useRef(false);
+  const classificationSaveInFlight = useRef<Promise<void> | undefined>(undefined);
 
   const acceptNativeRuntimeEnvelope = useCallback((envelope: NativeRuntimeEnvelope | undefined) => {
     if (!envelope || envelope.generation <= lastNativeRuntimeGeneration.current) return;
@@ -323,6 +324,13 @@ export const useFocusPetApp = (): FocusPetAppController => {
       } finally {
         if (saveInFlight.current === request) saveInFlight.current = undefined;
         lastPersistedAt.current = Date.now();
+      }
+    }
+    while (classificationSaveInFlight.current) {
+      const request = classificationSaveInFlight.current;
+      await request.catch(() => undefined);
+      if (classificationSaveInFlight.current === request) {
+        classificationSaveInFlight.current = undefined;
       }
     }
   }, []);
@@ -442,6 +450,64 @@ export const useFocusPetApp = (): FocusPetAppController => {
     [persist],
   );
 
+  const mutateClassification = useCallback(
+    (updater: (state: AppRuntimeState) => AppRuntimeState) => {
+      classificationCommitRequested.current = true;
+      setBundle((current) => {
+        // Classification edits do not change historical totals. Keep the
+        // click path proportional to the small rules array instead of walking
+        // every stored history segment through recomputeDerived.
+        const nextState = updater(current.state);
+        if (nextState === current.state) {
+          classificationCommitRequested.current = false;
+          return current;
+        }
+        return { ...current, state: nextState };
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!classificationCommitRequested.current) return;
+    classificationCommitRequested.current = false;
+    const { classificationRules } = bundle.state;
+    if (!isTauriRuntime()) {
+      persist(runtimeSnapshot(bundle.state));
+      return;
+    }
+    // Send only the small rules document across IPC. Rust updates its live
+    // classifier immediately; the next resident five-second sample uses it.
+    // Avoid forcing an extra full-history snapshot through the WebView on the
+    // user's click path.
+    const previousRequest = classificationSaveInFlight.current;
+    const request = (previousRequest ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        const saved = await nativeSetClassificationRules(classificationRules);
+        if (!saved) throw new Error("原生分类规则服务不可用");
+      });
+    classificationSaveInFlight.current = request;
+    void request.then(
+      () => {
+        if (classificationSaveInFlight.current === request) {
+          classificationSaveInFlight.current = undefined;
+        }
+      },
+      (error) => {
+        if (classificationSaveInFlight.current !== request) return;
+        classificationSaveInFlight.current = undefined;
+        setBundle((current) => ({
+          ...current,
+          state: {
+            ...current.state,
+            statusMessage: `分类规则保存失败：${error instanceof Error ? error.message : String(error)}`,
+          },
+        }));
+      },
+    );
+  }, [bundle.state, bundle.state.classificationRules, persist]);
+
   const tick = useCallback((): Promise<void> => {
     if (isTauriRuntime()) {
       return nativeRuntimeSnapshot()
@@ -468,12 +534,10 @@ export const useFocusPetApp = (): FocusPetAppController => {
       nativeSampleUnavailable.current = false;
       setBundle((current) => {
         const next = advanceRuntime(current, sample, catalogRef.current);
-        const shouldPrune = Date.now() - lastRetentionPruneAt.current >= retentionPruneIntervalMilliseconds;
         const sampledState = recoveredFromUnavailable
           ? { ...next.state, statusMessage: "Windows 原生监控采样已恢复。" }
           : next.state;
-        const nextState = shouldPrune ? recomputeDerived(sampledState) : sampledState;
-        if (shouldPrune) lastRetentionPruneAt.current = Date.now();
+        const nextState = sampledState;
         persist(runtimeSnapshot(nextState), "sample");
         return { ...next, state: nextState };
       });
@@ -1035,13 +1099,13 @@ export const useFocusPetApp = (): FocusPetAppController => {
         mutate((state) => runtimeActions.updateSettings(state, updater));
       },
       addRule(pattern, matchKind, category) {
-        mutate((state) => runtimeActions.addRule(state, pattern, matchKind, category));
+        mutateClassification((state) => runtimeActions.addRule(state, pattern, matchKind, category));
       },
       deleteRule(id) {
-        mutate((state) => runtimeActions.deleteRule(state, id));
+        mutateClassification((state) => runtimeActions.deleteRule(state, id));
       },
       resetRecognitionRules() {
-        mutate(runtimeActions.resetRecognitionRules);
+        mutateClassification(runtimeActions.resetRecognitionRules);
       },
       async refreshRecognitionDiagnostics() {
         await refreshRecognitionDiagnostics();
@@ -1269,6 +1333,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
       flushPersist,
       installationNotice,
       mutate,
+      mutateClassification,
       persist,
       petPacks,
       refreshRecognitionDiagnostics,

@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { currentMonitor, cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Gauge,
@@ -21,7 +21,6 @@ import {
   sourceActionAssetsForID,
   type PetPackRecord,
 } from "../resources/petPack";
-import { useFocusPet } from "../app/AppContext";
 import type { NativeMenuAction } from "../app/nativeMenu";
 import {
   cyclePlayableSourceAction,
@@ -34,7 +33,7 @@ import {
   nativePerformMenuBarAction,
   nativeSetPetPanelIgnoresMouseEvents,
   nativeSetPetPanelPosition,
-  nativeSetPetWindowTrackingPaused,
+  nativePetPanelPointerPosition,
 } from "../store/native";
 import { nativeCodexSessionSnapshot } from "../store/native";
 import {
@@ -60,7 +59,6 @@ interface PetDragSession {
   startScreenY: number;
   origin?: { x: number; y: number };
   scaleFactor: number;
-  bounds?: { minX: number; maxX: number; minY: number; maxY: number };
   latestPointer?: { x: number; y: number };
   pendingPosition?: { x: number; y: number };
   frameID?: number;
@@ -73,8 +71,6 @@ type PetCompanionAction = "open-dashboard" | "open-pet";
 
 const placementClass = (placement: PetPlacementMode): string => `placement-${placement}`;
 
-const petInteractionSize = (petSize: number): number => Math.max(44, Math.min(petSize * 0.58, 76));
-
 const petActionToNativeMenuAction = (action: PetCompanionAction): NativeMenuAction => {
   switch (action) {
     case "open-dashboard":
@@ -84,12 +80,13 @@ const petActionToNativeMenuAction = (action: PetCompanionAction): NativeMenuActi
   }
 };
 
-export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }: PetCompanionRendererProps) => {
+const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }: PetCompanionRendererProps) => {
   const settings = state.petSettings;
   const usesNativeHitTesting = windowMode && "__TAURI_INTERNALS__" in window;
   const [isHovering, setIsHovering] = useState(false);
   const companionRef = useRef<HTMLElement>(null);
   const hitTargetRef = useRef<HTMLButtonElement>(null);
+  const petHitZoneRef = useRef<HTMLSpanElement>(null);
   const hoverPanelRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLElement>(null);
   const hoveringRef = useRef(false);
@@ -352,8 +349,12 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
     const unclampedX = session.origin.x + dx;
     const unclampedY = session.origin.y + dy;
     session.pendingPosition = {
-      x: session.bounds ? Math.max(session.bounds.minX, Math.min(session.bounds.maxX, unclampedX)) : unclampedX,
-      y: session.bounds ? Math.max(session.bounds.minY, Math.min(session.bounds.maxY, unclampedY)) : unclampedY,
+      // The native command selects the monitor under the requested origin and
+      // clamps the complete panel to that monitor's work area. Keeping a
+      // monitor-local bound here would trap a drag on the display where it
+      // started and make cross-screen dragging appear to jump back.
+      x: unclampedX,
+      y: unclampedY,
     };
     if (session.frameID !== undefined) return;
     session.frameID = window.requestAnimationFrame(() => {
@@ -385,7 +386,6 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
       }
     }
     draggingRef.current = false;
-    void nativeSetPetWindowTrackingPaused(false);
     window.setTimeout(() => {
       suppressClickRef.current = false;
     }, 0);
@@ -418,13 +418,9 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
 
   useEffect(() => {
     if (!windowMode || !("__TAURI_INTERNALS__" in window)) return undefined;
-    const currentWindow = getCurrentWindow();
     let disposed = false;
     let pending = false;
     let ignored: boolean | undefined;
-    let windowPosition: { x: number; y: number } | undefined;
-    let scaleFactor = 1;
-    let unlistenMoved: (() => void) | undefined;
     let lastDirectCaptureAt = 0;
 
     const contains = (rect: DOMRect, x: number, y: number): boolean =>
@@ -438,11 +434,10 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
       if (disposed || pending) return;
       pending = true;
       try {
-        windowPosition ??= await currentWindow.outerPosition();
-        const cursor = await cursorPosition();
-        const x = (cursor.x - windowPosition.x) / scaleFactor;
-        const y = (cursor.y - windowPosition.y) / scaleFactor;
-        const hitRect = hitTargetRef.current?.getBoundingClientRect();
+        const cursor = await nativePetPanelPointerPosition();
+        if (!cursor) return;
+        const { x, y } = cursor;
+        const hitRect = petHitZoneRef.current?.getBoundingClientRect();
         const panelRect = hoverPanelRef.current?.getBoundingClientRect();
         const bubbleRect = bubbleRef.current?.getBoundingClientRect();
         const overPet = Boolean(hitRect && contains(hitRect, x, y));
@@ -466,23 +461,12 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
       }
     };
 
-    void Promise.all([currentWindow.outerPosition(), currentWindow.scaleFactor()]).then(([position, factor]) => {
-      windowPosition = position;
-      scaleFactor = factor;
-      void refresh();
-    });
-    void currentWindow.onMoved((event) => {
-      windowPosition = event.payload;
-    }).then((dispose) => {
-      unlistenMoved = dispose;
-    });
     // Cursor reads cross the WebView/native boundary. 12.5Hz remains responsive
     // while leaving substantially more main-thread time for sprite animation.
     const interval = window.setInterval(() => void refresh(), 80);
     return () => {
       disposed = true;
       window.clearInterval(interval);
-      unlistenMoved?.();
       void nativeSetPetPanelIgnoresMouseEvents(false).catch(() => undefined);
     };
   }, [updateHovering, windowMode]);
@@ -499,8 +483,8 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
   return (
     <aside
       ref={companionRef}
-      className={`pet-companion ${windowMode ? "window-pet" : ""} ${placementClass(settings.placement)} ${isHovering ? "is-hovering" : ""}`}
-      style={{ "--pet-size": `${settings.size}px`, "--pet-hit-size": `${petInteractionSize(settings.size)}px`, "--pet-opacity": settings.opacity } as React.CSSProperties}
+      className={`pet-companion ${windowMode ? "window-pet" : ""} ${placementClass(settings.placement)} ${isHovering ? "is-hovering" : ""} ${showCodexPanel ? "has-codex-panel" : ""}`}
+      style={{ "--pet-size": `${settings.size}px`, "--pet-opacity": settings.opacity } as React.CSSProperties}
       aria-label="桌宠"
       onBlurCapture={(event) => {
         if (!windowMode && !event.currentTarget.contains(event.relatedTarget as Node | null)) updateHovering(false);
@@ -545,28 +529,16 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
             moved: false,
           };
           setPhysicalIntentImmediately("mouseSummon", 750);
-          void nativeSetPetWindowTrackingPaused(true);
           updateHovering(true);
           void nativeSetPetPanelIgnoresMouseEvents(false).catch(() => undefined);
           void Promise.all([
             currentWindow.outerPosition(),
-            currentWindow.outerSize(),
             currentWindow.scaleFactor(),
-            currentMonitor(),
-          ]).then(([origin, size, factor, monitor]) => {
+          ]).then(([origin, factor]) => {
             const session = dragSessionRef.current;
             if (!session || session.pointerID !== event.pointerId) return;
             session.origin = origin;
             session.scaleFactor = factor;
-            if (monitor) {
-              const work = monitor.workArea;
-              session.bounds = {
-                minX: work.position.x,
-                maxX: Math.max(work.position.x, work.position.x + work.size.width - size.width),
-                minY: work.position.y,
-                maxY: Math.max(work.position.y, work.position.y + work.size.height - size.height),
-              };
-            }
             if (session.latestPointer) movePetWindow(session.pointerID, session.latestPointer.x, session.latestPointer.y);
           }).catch(() => undefined);
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -585,6 +557,7 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
           void finishPetDrag(event.pointerId);
         }}
       >
+        <span ref={petHitZoneRef} className="pet-avatar-hit-zone" aria-hidden />
         <img src={currentFrame} alt="" draggable={false} />
       </button>
       {settings.hoverStatusEnabled ? (
@@ -622,27 +595,6 @@ export const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAc
         </div>
       ) : null}
     </aside>
-  );
-};
-
-export const PetCompanion = () => {
-  const { bundle, petPacks, setSelectedTab } = useFocusPet();
-  const handleAction = (action: PetCompanionAction) => {
-    switch (action) {
-      case "open-dashboard":
-        setSelectedTab("today");
-        break;
-      case "open-pet":
-        setSelectedTab("pet");
-        break;
-    }
-  };
-  return (
-    <PetCompanionRenderer
-      state={makePetCompanionViewState(bundle.state)}
-      petPacks={petPacks}
-      onAction={handleAction}
-    />
   );
 };
 

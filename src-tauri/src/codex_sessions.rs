@@ -365,6 +365,7 @@ struct RolloutObservation {
     runtime: String,
     lifecycle: String,
     process_open: bool,
+    scanned_bytes: u64,
 }
 
 #[derive(Default)]
@@ -1680,17 +1681,26 @@ fn discover_local_rollout_events(inner: &mut ManagerInner) -> Vec<CodexEventEnve
             .open_rollout_paths
             .as_ref()
             .is_some_and(|paths| paths.contains(&path));
-        let previous = inner.rollout_observations.get(&key);
-        let (runtime, lifecycle) = if previous.is_some_and(|observation| {
-            observation.modified_at == modified_at && observation.process_open == process_open
+        let file_length = fs::metadata(&path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let previous = inner.rollout_observations.get(&key).cloned();
+        let (runtime, lifecycle, scanned_bytes) = if previous.as_ref().is_some_and(|observation| {
+            observation.modified_at == modified_at
+                && observation.process_open == process_open
+                && observation.scanned_bytes >= file_length
         }) {
-            let observation = previous.expect("checked observation");
-            (observation.runtime.clone(), observation.lifecycle.clone())
+            let observation = previous.as_ref().expect("checked observation");
+            (
+                observation.runtime.clone(),
+                observation.lifecycle.clone(),
+                observation.scanned_bytes,
+            )
         } else {
-            let runtime = if process_open {
-                rollout_turn_runtime(&path)
+            let (runtime, scanned_bytes) = if process_open {
+                rollout_turn_runtime(&path, previous.as_ref())
             } else {
-                "idle".to_string()
+                ("idle".to_string(), file_length)
             };
             let lifecycle = if inner.open_rollout_paths.is_none() {
                 "unknown"
@@ -1699,7 +1709,7 @@ fn discover_local_rollout_events(inner: &mut ManagerInner) -> Vec<CodexEventEnve
             } else {
                 "closed"
             };
-            (runtime, lifecycle.to_string())
+            (runtime, lifecycle.to_string(), scanned_bytes)
         };
         let changed = inner
             .rollout_observations
@@ -1719,6 +1729,7 @@ fn discover_local_rollout_events(inner: &mut ManagerInner) -> Vec<CodexEventEnve
                     runtime: runtime.clone(),
                     lifecycle: lifecycle.clone(),
                     process_open,
+                    scanned_bytes,
                 },
             );
             events.push(CodexEventEnvelope {
@@ -1760,21 +1771,48 @@ fn discover_local_rollout_events(inner: &mut ManagerInner) -> Vec<CodexEventEnve
     events
 }
 
-fn rollout_turn_runtime(path: &Path) -> String {
-    const TAIL_BYTES: u64 = 256 * 1024;
+fn rollout_turn_runtime(path: &Path, previous: Option<&RolloutObservation>) -> (String, u64) {
     let Ok(mut file) = File::open(path) else {
-        return "idle".to_string();
+        return ("idle".to_string(), 0);
     };
     let length = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-    if length > TAIL_BYTES {
-        let _ = file.seek(SeekFrom::Start(length - TAIL_BYTES));
+    let start = previous
+        .map(|observation| observation.scanned_bytes)
+        .filter(|offset| *offset <= length)
+        .unwrap_or(0);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return (
+            previous
+                .map(|value| value.runtime.clone())
+                .unwrap_or_else(|| "idle".to_string()),
+            start,
+        );
     }
-    let mut bytes = Vec::new();
-    if file.read_to_end(&mut bytes).is_err() {
-        return "idle".to_string();
-    }
-    for line in String::from_utf8_lossy(&bytes).lines().rev() {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+    let mut runtime = if start == 0 {
+        "idle".to_string()
+    } else {
+        previous
+            .map(|value| value.runtime.clone())
+            .unwrap_or_else(|| "idle".to_string())
+    };
+    let mut scanned_bytes = start;
+    let mut reader = BufReader::new(file);
+    loop {
+        let mut line = Vec::new();
+        let bytes_read = match reader.read_until(b'\n', &mut line) {
+            Ok(bytes_read) => bytes_read,
+            Err(_) => return (runtime, scanned_bytes),
+        };
+        if bytes_read == 0 {
+            break;
+        }
+        // Advance only through complete JSONL records. If Codex is midway
+        // through a write, reconsider that unfinished record on the next pass.
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        scanned_bytes = scanned_bytes.saturating_add(bytes_read as u64);
+        let Ok(record) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
         if record.get("type").and_then(Value::as_str) != Some("event_msg") {
@@ -1785,12 +1823,12 @@ fn rollout_turn_runtime(path: &Path) -> String {
             .and_then(|payload| payload.get("type"))
             .and_then(Value::as_str)
         {
-            Some("task_started") => return "active".to_string(),
-            Some("task_complete" | "turn_aborted") => return "idle".to_string(),
+            Some("task_started") => runtime = "active".to_string(),
+            Some("task_complete" | "turn_aborted") => runtime = "idle".to_string(),
             _ => {}
         }
     }
-    "idle".to_string()
+    (runtime, scanned_bytes)
 }
 
 #[cfg(target_os = "macos")]
@@ -2499,9 +2537,10 @@ mod tests {
         apply_content_policy, compact_visible_text, focus_pet_hooks_are_installed,
         hooks_file_has_focus_pet_handlers, managed_completion_events,
         managed_status_events_from_thread_list, managed_stream_events, parse_hook_payload,
-        retained_journal_bytes, rollout_descriptor, run_managed_event_stream_once_with_command,
-        transcript_message_event, websocket_client_key, CodexEventEnvelope, CodexSessionManager,
-        CodexSyncPreferences, APP_SERVER_STREAM_POLL,
+        retained_journal_bytes, rollout_descriptor, rollout_turn_runtime,
+        run_managed_event_stream_once_with_command, transcript_message_event, websocket_client_key,
+        CodexEventEnvelope, CodexSessionManager, CodexSyncPreferences, RolloutObservation,
+        APP_SERVER_STREAM_POLL,
     };
     use base64::Engine as _;
     #[cfg(unix)]
@@ -2509,6 +2548,7 @@ mod tests {
     #[cfg(unix)]
     use std::{
         fs,
+        io::Write,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -2627,6 +2667,67 @@ mod tests {
         assert_eq!(descriptor.0, "session-from-rollout");
         assert_eq!(descriptor.1.as_deref(), Some("/work/focus-pet"));
         fs::remove_file(path).expect("remove rollout fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn long_open_rollout_keeps_early_active_marker_and_reads_only_new_records() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("focus-pet-long-rollout-{unique}.jsonl"));
+        let mut contents =
+            String::from("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n");
+        let filler = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\"}}\n";
+        while contents.len() <= 300 * 1024 {
+            contents.push_str(filler);
+        }
+        fs::write(&path, contents).expect("write long rollout fixture");
+
+        let (runtime, scanned_bytes) = rollout_turn_runtime(&path, None);
+        assert_eq!(runtime, "active");
+        assert!(scanned_bytes > 256 * 1024);
+
+        let previous = RolloutObservation {
+            modified_at: fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .expect("rollout modification time"),
+            runtime,
+            lifecycle: "open".to_string(),
+            process_open: true,
+            scanned_bytes,
+        };
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open rollout fixture for append");
+        file.write_all(b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n")
+            .expect("append completed record");
+
+        let (runtime, next_scanned_bytes) = rollout_turn_runtime(&path, Some(&previous));
+        assert_eq!(runtime, "idle");
+        assert!(next_scanned_bytes > scanned_bytes);
+
+        let idle_observation = RolloutObservation {
+            modified_at: fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .expect("rollout modification time"),
+            runtime,
+            lifecycle: "open".to_string(),
+            process_open: true,
+            scanned_bytes: next_scanned_bytes,
+        };
+        file.write_all(b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}")
+            .expect("append partial record");
+        let (runtime, partial_scanned_bytes) = rollout_turn_runtime(&path, Some(&idle_observation));
+        assert_eq!(runtime, "idle");
+        assert_eq!(partial_scanned_bytes, next_scanned_bytes);
+        file.write_all(b"\n").expect("finish partial record");
+        let (runtime, final_scanned_bytes) = rollout_turn_runtime(&path, Some(&idle_observation));
+        assert_eq!(runtime, "active");
+        assert!(final_scanned_bytes > next_scanned_bytes);
+        fs::remove_file(path).expect("remove long rollout fixture");
     }
 
     #[test]

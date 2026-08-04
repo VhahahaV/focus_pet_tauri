@@ -129,6 +129,12 @@ impl FocusPetStore {
         Ok(())
     }
 
+    pub fn save_classification_rules(&self, rules: &Value) -> io::Result<()> {
+        self.prepare_store_for_access(true)?;
+        self.write_metadata()?;
+        self.write_json("classification-rules.json", rules)
+    }
+
     fn prepare_store_for_access(&self, write_intent: bool) -> io::Result<bool> {
         self.migrate_legacy_root_if_needed()?;
         self.ensure_root()?;
@@ -874,6 +880,27 @@ mod tests {
         let snapshot = store.load_snapshot().unwrap();
         assert_eq!(snapshot["settings"]["focusTargetMinutes"], 50);
         assert!(!root.join("settings.json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn classification_rule_save_preserves_history_files() {
+        let root = temp_store_root("classification-rules-only");
+        let store = FocusPetStore::from_root(root.clone());
+        store
+            .save_snapshot(&json!({
+                "settings": {},
+                "classificationRules": [],
+                "stateSegments": [{"id": "kept-history"}]
+            }))
+            .unwrap();
+        store
+            .save_classification_rules(&json!([{"id": "rule-1", "category": "work"}]))
+            .unwrap();
+
+        let snapshot = store.load_snapshot().unwrap();
+        assert_eq!(snapshot["classificationRules"][0]["id"], "rule-1");
+        assert_eq!(snapshot["stateSegments"][0]["id"], "kept-history");
         let _ = fs::remove_dir_all(root);
     }
 

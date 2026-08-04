@@ -13,7 +13,8 @@ const selectorOwners = new Map();
 for (const { name } of files) {
   csstree.walk(asts.get(name), {
     visit: "Rule",
-    enter(node) {
+    enter: function (node) {
+      if (this.atrule?.name === "keyframes") return;
       if (node.prelude?.type !== "SelectorList") return;
       node.prelude.children.forEach((selector) => {
         const key = csstree.generate(selector);
@@ -45,14 +46,21 @@ const destinationFor = (selector, source) => {
 };
 
 const output = new Map(modules.map((name) => [name, []]));
+const emitted = new Map(modules.map((name) => [name, new Set()]));
 const wrap = (css, wrappers) => wrappers.reduceRight((inner, wrapper) => `@${wrapper.name}${wrapper.prelude ? ` ${wrapper.prelude}` : ""}{${inner}}`, css);
+const emit = (destination, css) => {
+  if (emitted.get(destination).has(css)) return;
+  emitted.get(destination).add(css);
+  output.get(destination).push(css);
+};
 
 const routeChildren = (children, source, wrappers = []) => {
   children.forEach((node) => {
     if (node.type === "Rule" && node.prelude?.type === "SelectorList") {
       node.prelude.children.forEach((selectorNode) => {
         const selector = csstree.generate(selectorNode);
-        output.get(destinationFor(selector, source)).push(wrap(`${selector}${csstree.generate(node.block)}`, wrappers));
+        const destination = destinationFor(selector, source);
+        emit(destination, wrap(`${selector}${csstree.generate(node.block)}`, wrappers));
       });
       return;
     }
@@ -60,7 +68,7 @@ const routeChildren = (children, source, wrappers = []) => {
       routeChildren(node.block.children, source, [...wrappers, { name: node.name, prelude: node.prelude ? csstree.generate(node.prelude) : "" }]);
       return;
     }
-    output.get(source).push(wrap(csstree.generate(node), wrappers));
+    emit(source, wrap(csstree.generate(node), wrappers));
   });
 };
 

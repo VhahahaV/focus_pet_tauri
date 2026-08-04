@@ -237,14 +237,6 @@ export interface SystemMonitorSettings {
   modules: SystemMonitorModule[];
 }
 
-export interface DataRetentionSettings {
-  stateRetentionDays: number;
-  appUsageRetentionDays: number;
-  inputActivityRetentionDays: number;
-  sessionRetentionDays: number;
-  nudgeRetentionDays: number;
-}
-
 export interface JudgmentSettings {
   inputIdleDistractedSeconds: number;
   entertainmentDistractedSeconds: number;
@@ -301,7 +293,6 @@ export interface AppSettings {
   appearance: AppearanceSettings;
   codex: CodexDisplaySettings;
   reminder: ReminderSettings;
-  retention: DataRetentionSettings;
   judgment: JudgmentSettings;
   pet: PetSettings;
   desktopWidget: DesktopWidgetSettings;

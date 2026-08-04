@@ -404,8 +404,20 @@ export const makeAttentionHistorySnapshot = (
   const currentMonthStart = firstDayOfMonth(today);
   const earliestWeek = new Date(currentWeekStart);
   earliestWeek.setDate(earliestWeek.getDate() - 11 * 7);
-  const earliestMonth = new Date(currentMonthStart);
-  earliestMonth.setMonth(earliestMonth.getMonth() - 5);
+  const earliestRecordedAt = stateSegments.reduce<number | undefined>((earliestValue, segment) => {
+    const start = new Date(segment.start).getTime();
+    const finish = new Date(segment.end).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(finish) || finish <= start || start > now.getTime()) {
+      return earliestValue;
+    }
+    return earliestValue === undefined ? start : Math.min(earliestValue, start);
+  }, undefined);
+  // Month view begins with the first month that actually contains a retained
+  // usage record. With no history yet, keep only the current month as an empty
+  // onboarding state instead of fabricating five earlier blank calendars.
+  const earliestMonth = earliestRecordedAt === undefined
+    ? currentMonthStart
+    : firstDayOfMonth(new Date(earliestRecordedAt));
   const earliest = new Date(Math.min(earliestWeek.getTime(), earliestMonth.getTime()));
   const end = new Date(today);
   end.setDate(end.getDate() + 1);
@@ -439,7 +451,14 @@ export const makeAttentionHistorySnapshot = (
     });
     return { start: start.toISOString(), days };
   });
-  const months: AttentionMonthCalendar[] = Array.from({ length: 6 }, (_, index) => {
+  const monthCount = Math.max(
+    1,
+    (currentMonthStart.getFullYear() - earliestMonth.getFullYear()) * 12
+      + currentMonthStart.getMonth()
+      - earliestMonth.getMonth()
+      + 1,
+  );
+  const months: AttentionMonthCalendar[] = Array.from({ length: monthCount }, (_, index) => {
     const start = new Date(earliestMonth);
     start.setMonth(start.getMonth() + index);
     const nextMonth = new Date(start);

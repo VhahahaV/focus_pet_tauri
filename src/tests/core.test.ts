@@ -20,7 +20,6 @@ import { applyDesktopWidgetMoved, widgetWindowSyncState } from "../app/widgetWin
 import {
   cyclePlayableSourceAction,
   loopingPetFrameIndex,
-  nextPetFrameIndex,
   petAnimationClockNeedsWake,
   petPreviewAnimationKey,
   resolveDisplaySourceAction,
@@ -34,7 +33,7 @@ import {
   reduceCodexEvents,
 } from "../core/codexSessions";
 import { activitySampleForRuntime } from "../app/activitySampling";
-import { maximumPointerActionsPerMinute, normalizeInputActivityBucket, pruneSnapshotForRetention } from "../store/localStore";
+import { maximumPointerActionsPerMinute, normalizeInputActivityBucket, normalizeSnapshot } from "../store/localStore";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -65,13 +64,7 @@ describe("Focus Pet migrated core", () => {
     expect(activitySampleForRuntime(nativeSample, true, now)).toBe(nativeSample);
   });
 
-  it("advances looping and one-shot pet animations without overrunning frames", () => {
-    expect(nextPetFrameIndex(0, 3, true, true)).toBe(1);
-    expect(nextPetFrameIndex(2, 3, true, true)).toBe(0);
-    expect(nextPetFrameIndex(2, 3, true, false)).toBe(2);
-    expect(nextPetFrameIndex(1, 3, false, true)).toBe(1);
-    expect(nextPetFrameIndex(99, 3, true, false)).toBe(2);
-    expect(nextPetFrameIndex(0, 0, true, true)).toBe(0);
+  it("derives looping pet animation frames from elapsed time", () => {
     expect(loopingPetFrameIndex(0, 4, 10)).toBe(0);
     expect(loopingPetFrameIndex(399, 4, 10)).toBe(3);
     expect(loopingPetFrameIndex(400, 4, 10)).toBe(0);
@@ -299,13 +292,33 @@ describe("Focus Pet migrated core", () => {
     );
 
     expect(history.weeks).toHaveLength(12);
-    expect(history.months).toHaveLength(6);
+    expect(history.months).toHaveLength(1);
     expect(history.focusSeconds).toBe(3600);
     expect(history.distractedSeconds).toBe(900);
     const currentWeekDays = history.weeks.at(-1)!.days;
     expect(currentWeekDays.find((day) => localDateKey(day.date) === "2026-07-06")?.focusSeconds).toBe(1800);
     expect(currentWeekDays.find((day) => localDateKey(day.date) === "2026-07-07")?.focusSeconds).toBe(1800);
     expect(currentWeekDays.find((day) => localDateKey(day.date) === "2026-07-07")?.distractedSeconds).toBe(900);
+  });
+
+  it("starts month history at the first recorded usage month", () => {
+    const history = makeAttentionHistorySnapshot(
+      [{
+        id: "first-record",
+        start: new Date(2026, 6, 18, 9, 0).toISOString(),
+        end: new Date(2026, 6, 18, 10, 0).toISOString(),
+        state: "focus",
+        appName: "Codex",
+        category: "work",
+        titleStored: false,
+        source: ["frontmostApplication"],
+      }],
+      new Date(2026, 7, 4, 9, 0),
+    );
+
+    expect(history.months.map((month) => month.title)).toEqual(["7月", "8月"]);
+    expect(history.months[0].focusSeconds).toBe(3600);
+    expect(history.months[1].focusSeconds).toBe(0);
   });
 
   it("tracks focus-session remaining time", () => {
@@ -855,12 +868,12 @@ describe("Focus Pet migrated core", () => {
     expect(restored.settings.pet.hiddenPackIDs).toEqual([]);
   });
 
-  it("prunes stored history according to migrated retention settings", () => {
+  it("keeps historical records and removes legacy retention metadata", () => {
     const oldStart = "2026-07-01T09:00:00.000Z";
     const oldEnd = "2026-07-01T09:10:00.000Z";
     const recentStart = "2026-07-07T09:00:00.000Z";
     const recentEnd = "2026-07-07T09:10:00.000Z";
-    const settings = {
+    const legacySettings = {
       ...defaultAppSettings(),
       retention: {
         stateRetentionDays: 2,
@@ -870,19 +883,9 @@ describe("Focus Pet migrated core", () => {
         nudgeRetentionDays: 2,
       },
     };
-    const oldFocus = finishFocusSession(
-      makeFocusSession("old", 25, new Date(oldStart)),
-      "completed",
-      new Date(oldEnd),
-    );
-    const recentFocus = finishFocusSession(
-      makeFocusSession("recent", 25, new Date(recentStart)),
-      "completed",
-      new Date(recentEnd),
-    );
-    const pruned = pruneSnapshotForRetention(
+    const normalized = normalizeSnapshot(
       {
-        settings,
+        settings: legacySettings,
         classificationRules: [],
         stateSegments: [
           { id: "old-state", start: oldStart, end: oldEnd, state: "focus", appName: "Old", category: "work", titleStored: false, source: ["frontmostApplication"] },
@@ -896,21 +899,23 @@ describe("Focus Pet migrated core", () => {
           { start: oldStart, end: oldEnd, keyboardCount: 1, pointerCount: 1, switchCount: 1 },
           { start: recentStart, end: recentEnd, keyboardCount: 2, pointerCount: 2, switchCount: 2 },
         ],
-        focusSessions: [oldFocus, recentFocus],
+        focusSessions: [
+          finishFocusSession(makeFocusSession("old", 25, new Date(oldStart)), "completed", new Date(oldEnd)),
+          finishFocusSession(makeFocusSession("recent", 25, new Date(recentStart)), "completed", new Date(recentEnd)),
+        ],
         breakSessions: [],
         nudges: [
           { id: "old-nudge", time: oldEnd, reason: "distractedOverThreshold", state: "distracted", appName: "Old", category: "entertainment", petIntent: "nudgeGentle", channel: "desktop", cooldownSeconds: 600, message: "old" },
           { id: "recent-nudge", time: recentEnd, reason: "distractedOverThreshold", state: "distracted", appName: "Recent", category: "entertainment", petIntent: "nudgeGentle", channel: "desktop", cooldownSeconds: 600, message: "recent" },
         ],
       },
-      new Date("2026-07-08T09:00:00.000Z"),
     );
-    expect(pruned.result.totalRemoved).toBe(5);
-    expect(pruned.snapshot.stateSegments.map((segment) => segment.id)).toEqual(["recent-state"]);
-    expect(pruned.snapshot.appUsage.map((segment) => segment.id)).toEqual(["recent-usage"]);
-    expect(pruned.snapshot.inputActivity[0].keyboardCount).toBe(2);
-    expect(pruned.snapshot.focusSessions.map((session) => session.taskName)).toEqual(["recent"]);
-    expect(pruned.snapshot.nudges.map((nudge) => nudge.id)).toEqual(["recent-nudge"]);
+    expect(normalized.settings).not.toHaveProperty("retention");
+    expect(normalized.stateSegments.map((segment) => segment.id)).toEqual(["old-state", "recent-state"]);
+    expect(normalized.appUsage.map((segment) => segment.id)).toEqual(["old-usage", "recent-usage"]);
+    expect(normalized.inputActivity).toHaveLength(2);
+    expect(normalized.focusSessions.map((session) => session.taskName)).toEqual(["old", "recent"]);
+    expect(normalized.nudges.map((nudge) => nudge.id)).toEqual(["old-nudge", "recent-nudge"]);
   });
 
   it("builds a compact desktop pet payload without persisted history", () => {

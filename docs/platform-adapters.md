@@ -38,6 +38,7 @@ File: `src-tauri/src/native/macos.rs`
 - Settings entry points: macOS Privacy/Input Monitoring and Notifications panes.
 - Notifications: AppleScript `display notification`; the permissions panel can send a test notification and reports the command result.
 - Pet-pack picker: AppleScript folder chooser.
+- Focused-display following: paired AppKit global/local left-mouse monitors detect a deliberate click in any application, then map the CoreGraphics global point through each Tauri monitor's own scale factor. The pet keeps its configured corner/Dock placement on the clicked display; custom positions preserve their relative work-area location. App-activation and Space-change notifications provide the keyboard-navigation fallback.
 
 ## Windows
 
@@ -102,9 +103,9 @@ Implemented in `src-tauri/src/pet_pack.rs`.
 - User-imported packs can be removed from the local library by id.
 - Validation checks `pet.json`, schema, id/name, action/source-action folders, PNG frame presence, `frameCount`, preview, license, distribution, and idle source-action references before copying any pack from a collection.
 
-## Retention And Logging
+## History And Logging
 
-- React normalizes the original retention settings (`stateRetentionDays`, `appUsageRetentionDays`, `inputActivityRetentionDays`, `sessionRetentionDays`, `nudgeRetentionDays`) and prunes old records on load, save, export, and runtime recomputation.
+- React keeps activity history indefinitely by default. Legacy snapshots that still contain a `retention` settings object are normalized without using it and the field is omitted from subsequent saves.
 - Attention-history snapshots split state segments into daily buckets for weekly/monthly heatmaps. Range-based history snapshots clip state, app-usage, and input buckets into 3/7/15/30/60 day windows, with optional weekend exclusion for workday-only views, so the React history tab can preserve the original attention-history workflow without native-side aggregation.
 - Logging enablement is part of persisted settings. Diagnostic snapshot writes respect `settings.logging.isEnabled`; native log-folder opening, current log-file opening, and log-path copying remain available for troubleshooting.
 - Native storage uses the per-user Focus Pet application-support root on each OS. The store writes `schema.json`, migrates legacy roots (`FocusPetMVP`, `FocusPetV0`, `FocusPetLegacy`) into the current root when safe, backs up missing/invalid/unsupported schema roots, and blocks writes for unsupported schemas while still allowing read fallback.

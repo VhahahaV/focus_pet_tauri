@@ -2,7 +2,6 @@ import type {
   AppSettings,
   AppearanceSettings,
   CodexDisplaySettings,
-  DataRetentionSettings,
   DesktopWidgetSettings,
   JudgmentSettings,
   PetSettings,
@@ -77,25 +76,6 @@ export const normalizeSystemMonitorSettings = (
       Math.abs(current - (settings.refreshSeconds ?? 2)) < Math.abs(best - (settings.refreshSeconds ?? 2)) ? current : best,
     ),
     modules: modules.length > 0 ? modules : defaultSystemMonitorSettings().modules,
-  };
-};
-
-export const defaultRetentionSettings = (): DataRetentionSettings => ({
-  stateRetentionDays: 30,
-  appUsageRetentionDays: 30,
-  inputActivityRetentionDays: 30,
-  sessionRetentionDays: 90,
-  nudgeRetentionDays: 30,
-});
-
-export const normalizeRetentionSettings = (settings: Partial<DataRetentionSettings> = {}): DataRetentionSettings => {
-  const base = { ...defaultRetentionSettings(), ...settings };
-  return {
-    stateRetentionDays: Math.max(1, base.stateRetentionDays),
-    appUsageRetentionDays: Math.max(1, base.appUsageRetentionDays),
-    inputActivityRetentionDays: Math.max(1, base.inputActivityRetentionDays),
-    sessionRetentionDays: Math.max(1, base.sessionRetentionDays),
-    nudgeRetentionDays: Math.max(1, base.nudgeRetentionDays),
   };
 };
 
@@ -229,7 +209,6 @@ export const defaultAppSettings = (): AppSettings => {
     appearance: defaultAppearanceSettings(),
     codex: defaultCodexDisplaySettings(),
     reminder: defaultReminderSettings(),
-    retention: defaultRetentionSettings(),
     judgment: defaultJudgmentSettings(),
     pet: defaultPetSettings(),
     desktopWidget,
@@ -240,24 +219,29 @@ export const defaultAppSettings = (): AppSettings => {
 };
 
 export const normalizeAppSettings = (settings: Partial<AppSettings> = {}): AppSettings => {
-  const desktopWidget = normalizeDesktopWidgetSettings(settings.desktopWidget);
-  if (settings.desktopWidgetVisible !== undefined && settings.desktopWidget === undefined) {
-    desktopWidget.currentStatusVisible = settings.desktopWidgetVisible;
-    desktopWidget.recentRhythmVisible = settings.desktopWidgetVisible;
+  // Older snapshots persisted a configurable retention object. Ignore it on
+  // read so history is now kept indefinitely and the legacy field disappears
+  // from the next saved snapshot.
+  const settingsWithoutLegacyRetention = { ...settings } as Partial<AppSettings> & { retention?: unknown };
+  delete settingsWithoutLegacyRetention.retention;
+  const desktopWidget = normalizeDesktopWidgetSettings(settingsWithoutLegacyRetention.desktopWidget);
+  const legacyDesktopWidgetVisible = settingsWithoutLegacyRetention.desktopWidgetVisible;
+  if (legacyDesktopWidgetVisible !== undefined && settingsWithoutLegacyRetention.desktopWidget === undefined) {
+    desktopWidget.currentStatusVisible = legacyDesktopWidgetVisible;
+    desktopWidget.recentRhythmVisible = legacyDesktopWidgetVisible;
   }
   return {
     ...defaultAppSettings(),
-    ...settings,
-    appearance: normalizeAppearanceSettings(settings.appearance),
-    codex: normalizeCodexDisplaySettings(settings.codex),
-    reminder: normalizeReminderSettings(settings.reminder),
-    retention: normalizeRetentionSettings(settings.retention),
-    judgment: normalizeJudgmentSettings(settings.judgment),
-    pet: normalizePetSettings(settings.pet),
+    ...settingsWithoutLegacyRetention,
+    appearance: normalizeAppearanceSettings(settingsWithoutLegacyRetention.appearance),
+    codex: normalizeCodexDisplaySettings(settingsWithoutLegacyRetention.codex),
+    reminder: normalizeReminderSettings(settingsWithoutLegacyRetention.reminder),
+    judgment: normalizeJudgmentSettings(settingsWithoutLegacyRetention.judgment),
+    pet: normalizePetSettings(settingsWithoutLegacyRetention.pet),
     desktopWidget,
-    systemMonitor: normalizeSystemMonitorSettings(settings.systemMonitor),
+    systemMonitor: normalizeSystemMonitorSettings(settingsWithoutLegacyRetention.systemMonitor),
     desktopWidgetVisible: desktopWidget.currentStatusVisible || desktopWidget.recentRhythmVisible,
-    focusTargetMinutes: Math.max(1, settings.focusTargetMinutes ?? 25),
+    focusTargetMinutes: Math.max(1, settingsWithoutLegacyRetention.focusTargetMinutes ?? 25),
   };
 };
 

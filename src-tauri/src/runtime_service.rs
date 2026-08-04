@@ -212,6 +212,29 @@ impl NativeRuntimeService {
             .map_err(|error| error.to_string())
     }
 
+    pub fn set_classification_rules(&self, app: &AppHandle, rules: Value) -> Result<bool, String> {
+        if !rules.is_array() {
+            return Err("classification rules must be an array".to_string());
+        }
+        let store = FocusPetStore::new(app).map_err(|error| error.to_string())?;
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Persist the tiny rules document before publishing it to the resident
+        // classifier. This keeps the click path independent from the months of
+        // history in the main snapshot and leaves memory unchanged on failure.
+        // Holding the runtime lock also serializes this write with the five-
+        // second full snapshot, so an older rules array cannot win the race.
+        store
+            .save_classification_rules(&rules)
+            .map_err(|error| error.to_string())?;
+        inner.snapshot["classificationRules"] = rules;
+        inner.rules = classification_rules(&inner.snapshot);
+        inner.generation = inner.generation.saturating_add(1);
+        Ok(true)
+    }
+
     fn tick(&self, app: &AppHandle) -> Result<(), String> {
         let sample = native::sample_activity();
         let store = FocusPetStore::new(app).map_err(|error| error.to_string())?;

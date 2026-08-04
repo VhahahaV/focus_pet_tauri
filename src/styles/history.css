@@ -244,7 +244,7 @@
 
 .swift-month-grid span.has-activity{background:linear-gradient(90deg,rgba(90,166,248,calc(0.2 + var(--intensity)*0.64)) calc(var(--ratio)*100%),rgba(222,127,105,calc(0.18 + var(--intensity)*0.58))0),rgba(247,250,253,0.92);border-color:rgba(128,177,226,0.52)}
 
-.swift-month-heatmap{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.swift-month-heatmap{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:10px}
 
 .swift-month-panel{display:grid;gap:7px;padding:9px;border:1px solid var(--border-default);border-radius:10px;background:rgba(247,250,253,0.72)}
 

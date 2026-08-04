@@ -1,6 +1,6 @@
 [package]
 name = "focus-pet"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first desktop focus pet rebuilt with Tauri and React"
 authors = ["Focus Pet"]
 license = ""
@@ -37,7 +37,7 @@ block2 = "0.6"
 core-foundation = "0.10"
 core-graphics = "0.24"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSColor", "NSGraphics", "NSPanel", "NSRunningApplication", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSColor", "NSEvent", "NSGraphics", "NSPanel", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", features = ["NSNotification", "NSOperation", "NSString"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

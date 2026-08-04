@@ -43,7 +43,10 @@ for (const path of cssFiles) {
     const ast = csstree.parse(source, { filename: file, positions: true });
     csstree.walk(ast, {
       visit: "Rule",
-      enter(node) {
+      enter: function (node) {
+        // Keyframe steps such as `from` and `to` are parsed as rules too, but
+        // they are local to their animation and are not stylesheet selectors.
+        if (this.atrule?.name === "keyframes") return;
         if (node.prelude?.type !== "SelectorList") return;
         node.prelude.children.forEach((selectorNode) => {
           const selector = csstree.generate(selectorNode);

@@ -5,17 +5,11 @@ html[data-focus-pet-surface="widget"]{width:100vw;height:100vh;min-width:0;min-h
 
 body[data-focus-pet-surface="widget"]{width:100vw;height:100vh;min-width:0;min-height:0;overflow:hidden;background:transparent}
 
-body[data-focus-pet-surface="widget"] #root{min-height:0}
+body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:0;overflow:hidden}
 
 @media (prefers-reduced-transparency:reduce){.widget-card{background:var(--card)!important;backdrop-filter:none!important}}
 
 @media (prefers-reduced-transparency:reduce){.menu-bar-card{background:var(--card)!important;backdrop-filter:none!important}}
-
-html[data-focus-pet-surface="widget"]{width:100vw;height:100vh;min-width:0;min-height:0;overflow:hidden;background:transparent}
-
-body[data-focus-pet-surface="widget"]{width:100vw;height:100vh;min-width:0;min-height:0;overflow:hidden;background:transparent}
-
-body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:0;overflow:hidden}
 
 .widget-rhythm-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:12px}
 
@@ -70,10 +64,6 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 @media (hover:hover) and (pointer:fine){.menu-action-button:hover{border-color:var(--border-strong);background-color:var(--card);box-shadow:0 6px 16px rgba(37,53,70,0.07)}}
 
-@media (prefers-reduced-transparency:reduce){.widget-card{background:var(--card);backdrop-filter:none}}
-
-@media (prefers-reduced-transparency:reduce){.menu-bar-card{background:var(--card);backdrop-filter:none}}
-
 @media (prefers-reduced-transparency:reduce){.pet-hover-panel{background:var(--card);backdrop-filter:none}}
 
 @media (prefers-reduced-motion:reduce){.pet-hover-panel{transition-duration:140ms}}
@@ -98,7 +88,9 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .pet-companion.window-pet{inset:0;display:grid;place-items:end center;padding:12px;background:transparent;pointer-events:auto}
 
-.pet-companion .pet-avatar-button{position:relative;pointer-events:auto;border:0;background:transparent;padding:0;width:var(--pet-hit-size,var(--pet-size));height:var(--pet-hit-size,var(--pet-size))}
+.pet-companion .pet-avatar-button{position:relative;pointer-events:auto;border:0;background:transparent;padding:0;width:var(--pet-size);height:var(--pet-size)}
+
+.pet-avatar-hit-zone{position:absolute;inset:12% 17% 6%;pointer-events:none}
 
 .pet-companion .pet-avatar-button img{position:absolute;left:50%;bottom:0;width:var(--pet-size);height:var(--pet-size);object-fit:contain;filter:drop-shadow(0 14px 20px rgba(60,78,98,0.18));pointer-events:none;transform:translateX(-50%);transform-origin:50% 100%;animation:pet-companion-breathe 2.8s cubic-bezier(0.77,0,0.175,1) infinite;will-change:transform;user-select:none}
 
@@ -381,6 +373,21 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
   max-height:min(370px,calc(100vh - var(--pet-size) - 26px));
   transform:translateX(50%);
   pointer-events:auto;
+  opacity:1;
+  visibility:visible;
+  transition:opacity 140ms cubic-bezier(.23,1,.32,1),transform 160ms cubic-bezier(.23,1,.32,1),visibility 0s linear;
+}
+
+/* The status card and the hover controls share the same spatial anchor. While
+   the user is intentionally opening the controls, yield that layer completely
+   and restore Codex as soon as the pointer leaves. This keeps both surfaces
+   readable without making the transparent native window even larger. */
+.window-pet.has-codex-panel.is-hovering .floating-pet-codex{
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transform:translateX(50%) translateY(-4px) scale(.985);
+  transition:opacity 100ms cubic-bezier(.23,1,.32,1),transform 120ms cubic-bezier(.23,1,.32,1),visibility 0s linear 120ms;
 }
 
 .codex-session-panel{
@@ -487,8 +494,8 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 }
 .codex-session-tab.is-selected{border-color:color-mix(in srgb,var(--focus-500) 48%,var(--border-default));background:var(--focus-100)}
 .codex-session-tab.is-active em,.codex-session-tab.is-active>svg{color:var(--focus-600)}
-.codex-session-tab.is-complete em{color:var(--success-600,#38895e)}
-.codex-session-tab.is-error em{color:var(--danger-600,#c44949)}
+.codex-session-tab.is-complete em{color:var(--success-600)}
+.codex-session-tab.is-error em{color:var(--error)}
 
 .codex-session-message{
   min-height:76px;
@@ -652,6 +659,11 @@ body[data-focus-pet-surface="widget"]::after{display:none;content:none}
   right:auto;
   left:10px;
   transform:translateY(5px) scale(.985);
+}
+
+.window-pet.has-codex-panel:is(.placement-bottomRight,.placement-topRight,.placement-dock).is-hovering .floating-pet-codex,
+.window-pet.has-codex-panel:is(.placement-bottomLeft,.placement-topLeft).is-hovering .floating-pet-codex{
+  transform:translateY(-4px) scale(.985);
 }
 
 .window-pet:is(.placement-bottomRight,.placement-topRight,.placement-dock).is-hovering .pet-hover-panel,

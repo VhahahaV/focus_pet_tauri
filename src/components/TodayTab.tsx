@@ -1,5 +1,6 @@
-import { AppWindow, Bot, ChevronDown, ChevronRight, Clock3, Globe2, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { AppWindow, Bot, Check, ChevronDown, ChevronRight, Clock3, Globe2, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { loopingPetFrameIndex, petPreviewAnimationKey, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { focusStateLabels, petIntentLabels } from "../core/labels";
@@ -36,7 +37,7 @@ const appCategoryOptions: Array<{ value: Exclude<ActivityCategory, "neutral">; l
 const stateChartColors: Record<FocusState, string> = {
   focus: "var(--focus-500)",
   distracted: "var(--distracted-500)",
-  break: "var(--warning-500, #d97706)",
+  break: "var(--warning)",
   away: "var(--away-500)",
 };
 
@@ -311,6 +312,125 @@ const TodayAppMiniMeter = ({ item, maxSeconds }: { item: TodayAppInsightItem; ma
   );
 };
 
+interface CategoryMenuLayer {
+  host: HTMLElement;
+  left: number;
+  top: number;
+  side: "top" | "bottom";
+}
+
+const TodayAppCategoryPicker = ({
+  item,
+  open,
+  onOpenChange,
+  onCategoryChange,
+}: {
+  item: TodayAppInsightItem;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCategoryChange: (item: TodayAppInsightItem, category: Exclude<ActivityCategory, "neutral">) => void;
+}) => {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [layer, setLayer] = useState<CategoryMenuLayer>();
+  const selected = appCategoryOptions.find((option) => option.value === item.category) ?? appCategoryOptions[2];
+  const menuID = `today-app-category-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const dismissOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      onOpenChange(false);
+    };
+    const dismissWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      onOpenChange(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("keydown", dismissWithKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside, true);
+      document.removeEventListener("keydown", dismissWithKeyboard);
+    };
+  }, [onOpenChange, open]);
+
+  const toggleMenu = () => {
+    if (!open) {
+      const trigger = triggerRef.current;
+      const host = trigger?.closest<HTMLElement>(".today-app-usage-card");
+      if (trigger && host) {
+        const triggerBounds = trigger.getBoundingClientRect();
+        const hostBounds = host.getBoundingClientRect();
+        const menuWidth = 116;
+        const menuHeight = 106;
+        const roomBelow = hostBounds.bottom - triggerBounds.bottom - 8;
+        const roomAbove = triggerBounds.top - hostBounds.top - 8;
+        const side = roomBelow < menuHeight && roomAbove > roomBelow ? "top" : "bottom";
+        const anchoredTop = side === "top"
+          ? triggerBounds.top - hostBounds.top - menuHeight - 5
+          : triggerBounds.bottom - hostBounds.top + 5;
+        setLayer({
+          host,
+          left: Math.max(8, Math.min(triggerBounds.left - hostBounds.left, hostBounds.width - menuWidth - 8)),
+          top: Math.max(8, Math.min(anchoredTop, hostBounds.height - menuHeight - 8)),
+          side,
+        });
+      }
+    }
+    onOpenChange(!open);
+  };
+
+  return (
+    <div className="today-app-category-picker">
+      <button
+        ref={triggerRef}
+        className="today-app-category-trigger"
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? menuID : undefined}
+        aria-haspopup="menu"
+        aria-label={`${item.appName}：${selected.label}，更改分类`}
+        onClick={toggleMenu}
+      >
+        {selected.label}
+        <ChevronDown size={12} aria-hidden />
+      </button>
+      {open && layer ? createPortal(
+        <div
+          ref={menuRef}
+          id={menuID}
+          className="today-app-category-options"
+          role="menu"
+          aria-label={`${item.appName} 的分类选项`}
+          data-side={layer.side}
+          style={{ left: layer.left, top: layer.top }}
+        >
+          {appCategoryOptions.map((option) => (
+            <button
+              className={item.category === option.value ? "active" : ""}
+              key={option.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={item.category === option.value}
+              onClick={() => {
+                onCategoryChange(item, option.value);
+                onOpenChange(false);
+              }}
+            >
+              <span className="today-app-category-dot" data-category={option.value} aria-hidden />
+              <span>{option.label}</span>
+              <Check className="today-app-category-check" size={13} strokeWidth={2.5} aria-hidden />
+            </button>
+          ))}
+        </div>,
+        layer.host,
+      ) : null}
+    </div>
+  );
+};
+
 const TodayInsightsGrid = ({
   snapshot,
   onCategoryChange,
@@ -320,6 +440,7 @@ const TodayInsightsGrid = ({
 }) => {
   const maxAppSeconds = Math.max(1, ...snapshot.appItems.map((item) => item.seconds));
   const [openCategoryMenu, setOpenCategoryMenu] = useState<string | null>(null);
+  const appListScrollTopRef = useRef(0);
   const dominant = snapshot.rhythmItems
     .filter((item) => item.seconds > 0)
     .sort((lhs, rhs) => rhs.seconds - lhs.seconds)[0] ?? { state: "focus" as FocusState, seconds: 0 };
@@ -334,49 +455,31 @@ const TodayInsightsGrid = ({
         {snapshot.appItems.length === 0 ? (
           <div className="today-insight-empty">暂无应用记录。</div>
         ) : (
-          <div className="today-app-usage-list" role="list" aria-label="应用使用排行，显示五行高度，可滚动查看更多">
+          <div
+            className="today-app-usage-list"
+            role="list"
+            aria-label="应用使用排行，显示五行高度，可滚动查看更多"
+            onScroll={(event) => {
+              if (event.currentTarget !== event.target) return;
+              const nextScrollTop = event.currentTarget.scrollTop;
+              if (Math.abs(nextScrollTop - appListScrollTopRef.current) > 0.5) {
+                setOpenCategoryMenu(null);
+              }
+              appListScrollTopRef.current = nextScrollTop;
+            }}
+          >
             {snapshot.appItems.map((item, index) => (
               <div className="today-app-usage-row" key={item.id}>
                 <em>{index + 1}</em>
                 <AppIcon className="today-app-icon" appName={item.appName} bundleID={item.bundleID} category={item.category} />
                 <div className="today-app-name">
                   <strong>{item.appName}</strong>
-                  <div className="today-app-category-picker">
-                    <button
-                      className="today-app-category-trigger"
-                      type="button"
-                      aria-expanded={openCategoryMenu === item.id}
-                      aria-haspopup="listbox"
-                      aria-label={`${item.appName}：${appCategoryOptions.find((option) => option.value === item.category)?.label ?? "不参与"}，更改分类`}
-                      onPointerDown={() => setOpenCategoryMenu((openMenu) => openMenu === item.id ? null : item.id)}
-                    >
-                      {appCategoryOptions.find((option) => option.value === item.category)?.label ?? "不参与"}
-                      <ChevronDown size={12} aria-hidden />
-                    </button>
-                    {openCategoryMenu === item.id ? (
-                      <div
-                        className="today-app-category-options"
-                        role="listbox"
-                        aria-label={`${item.appName} 的分类选项`}
-                      >
-                        {appCategoryOptions.map((option) => (
-                          <button
-                            className={item.category === option.value ? "active" : ""}
-                            key={option.value}
-                            type="button"
-                            role="option"
-                            aria-selected={item.category === option.value}
-                            onClick={() => {
-                              onCategoryChange(item, option.value);
-                              setOpenCategoryMenu(null);
-                            }}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
+                  <TodayAppCategoryPicker
+                    item={item}
+                    open={openCategoryMenu === item.id}
+                    onOpenChange={(open) => setOpenCategoryMenu(open ? item.id : null)}
+                    onCategoryChange={onCategoryChange}
+                  />
                 </div>
                 <TodayAppMiniMeter item={item} maxSeconds={maxAppSeconds} />
                 <strong className="today-app-duration">{formatDuration(item.seconds)}</strong>
@@ -561,7 +664,6 @@ export const TodayTab = () => {
 
   const handleAppCategoryChange = (item: TodayAppInsightItem, category: Exclude<ActivityCategory, "neutral">) => {
     actions.addRule(item.bundleID ?? item.appName, item.bundleID ? "bundleID" : "appName", category);
-    void actions.tick();
   };
 
   const stateHoverDetail = (range: InputTimelineStateRange): TimelineHoverDetail => {

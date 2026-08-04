@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AgentCompletionEvent, InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, NativeRuntimeEnvelope, SystemMetricsSample } from "../core/types";
+import type { AgentCompletionEvent, ClassificationRule, InstallationSnapshot, LocalStoreSnapshot, NativeActivitySample, NativeRuntimeEnvelope, SystemMetricsSample } from "../core/types";
 import type { CodexEventEnvelope, CodexHookConfigurationResult, CodexIntegrationStatus, CodexSessionSnapshot, CodexSyncPreferences, SshConnectionStatus, SshHostCandidate, SshHostDiagnostic, SshProvisionResult, SshUninstallResult } from "../core/codexSessions";
 import type { PetPackRecord, PetSourceActionAssets } from "../resources/petPack";
 import { importedPetPackRecord } from "../resources/petPack";
@@ -16,6 +16,11 @@ export const nativeSaveSnapshot = async (snapshot: LocalStoreSnapshot): Promise<
   return invoke<boolean>("save_snapshot", { snapshot });
 };
 
+export const nativeSetClassificationRules = async (rules: ClassificationRule[]): Promise<boolean> => {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("set_classification_rules", { rules });
+};
+
 export const nativeQuitApp = async (): Promise<boolean> => {
   if (!isTauriRuntime()) return false;
   return invoke<boolean>("quit_app");
@@ -26,11 +31,6 @@ export const nativePerformMenuBarAction = async (action: string): Promise<boolea
   return invoke<boolean>("perform_menu_bar_action", { action });
 };
 
-export const nativeSetPetWindowTrackingPaused = async (paused: boolean): Promise<boolean> => {
-  if (!isTauriRuntime()) return false;
-  return invoke<boolean>("set_pet_window_tracking_paused", { paused });
-};
-
 export const nativeSetPetPanelPosition = async (x: number, y: number): Promise<boolean> => {
   if (!isTauriRuntime()) return false;
   return invoke<boolean>("set_pet_panel_position", { x, y });
@@ -39,6 +39,11 @@ export const nativeSetPetPanelPosition = async (x: number, y: number): Promise<b
 export const nativeSetPetPanelIgnoresMouseEvents = async (ignores: boolean): Promise<boolean> => {
   if (!isTauriRuntime()) return false;
   return invoke<boolean>("set_pet_panel_ignores_mouse_events", { ignores });
+};
+
+export const nativePetPanelPointerPosition = async (): Promise<{ x: number; y: number } | undefined> => {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<{ x: number; y: number } | undefined>("pet_panel_pointer_position");
 };
 
 export const nativeActivitySample = async (): Promise<NativeActivitySample | undefined> => {

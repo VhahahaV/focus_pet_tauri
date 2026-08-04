@@ -341,11 +341,27 @@
 
 .today-app-category-trigger:hover{background:var(--card-hover)}
 
-.today-app-category-options{position:absolute;z-index:20;top:calc(100% + 4px);left:0;display:grid;min-width:98px;gap:2px;padding:4px;border:1px solid var(--border-default);border-radius:10px;background:var(--card);box-shadow:var(--shadow-raised)}
+.today-app-category-options{position:absolute;z-index:20;display:grid;min-width:116px;gap:2px;padding:5px;border:1px solid var(--border-default);border-radius:10px;background:var(--card);box-shadow:var(--shadow-raised);transform-origin:top left}
 
-.today-app-category-options button{min-height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary);font-size:10px;font-weight:760;line-height:1;text-align:left;white-space:nowrap;cursor:pointer}
+.today-app-category-options[data-side="top"]{transform-origin:bottom left}
 
-.today-app-category-options button:hover,.today-app-category-options button.active{background:var(--status-soft,var(--focus-100));color:var(--text-primary)}
+.today-app-category-options button{min-height:29px;display:grid;grid-template-columns:7px minmax(0,1fr) 13px;align-items:center;gap:7px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary);font:inherit;font-size:10px;font-weight:760;line-height:1;text-align:left;white-space:nowrap;cursor:pointer}
+
+.today-app-category-options button.active{background:var(--status-soft,var(--focus-100));color:var(--text-primary)}
+
+.today-app-category-dot{width:7px;height:7px;border-radius:50%;background:var(--away-500)}
+
+.today-app-category-dot[data-category="work"]{background:var(--focus-500)}
+
+.today-app-category-dot[data-category="entertainment"]{background:var(--distracted-500)}
+
+.today-app-category-check{opacity:0;color:var(--focus-600)}
+
+.today-app-category-options button.active .today-app-category-check{opacity:1}
+
+@media (hover:hover) and (pointer:fine){.today-app-category-options button:hover{background:var(--status-soft,var(--focus-100));color:var(--text-primary)}}
+
+.today-app-category-options button:active{transform:scale(.98)}
 
 .today-app-category-picker button:focus-visible{outline:2px solid var(--focus-400);outline-offset:1px}
 
