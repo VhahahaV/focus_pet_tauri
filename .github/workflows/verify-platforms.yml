@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: verify-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: ${{ matrix.name }}
