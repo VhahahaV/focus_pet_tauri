@@ -46,6 +46,7 @@ jobs:
             rpm \
             xdotool \
             xprintidle \
+            libnotify-bin \
             zenity \
             xvfb \
             x11-utils
@@ -81,7 +82,7 @@ jobs:
 
       - name: Preflight native helpers on Linux
         if: runner.os == 'Linux'
-        run: xvfb-run -a npm run verify:preflight
+        run: npm run verify:preflight
 
       - name: Smoke native adapters on Linux
         if: runner.os == 'Linux'
@@ -93,7 +94,7 @@ jobs:
 
       - name: Verify platform on Linux
         if: runner.os == 'Linux'
-        run: xvfb-run -a npm run verify:platform
+        run: npm run verify:platform
 
       - name: Upload desktop bundles
         if: always()
