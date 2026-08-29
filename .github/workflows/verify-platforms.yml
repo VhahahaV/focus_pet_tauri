@@ -86,7 +86,7 @@ jobs:
 
       - name: Smoke native adapters on Linux
         if: runner.os == 'Linux'
-        run: xvfb-run -a npm run verify:native
+        run: npm run verify:native
 
       - name: Verify platform
         if: runner.os != 'Linux'
