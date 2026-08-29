@@ -212,18 +212,19 @@ test("timeline density scales with its window and hover colors follow every them
   });
   await expect(categoryOptions).toBeVisible();
   const categoryLayer = await categoryOptions.evaluate((options) => ({
-    parentClass: options.parentElement?.className,
+    parentTag: options.parentElement?.tagName,
     position: getComputedStyle(options).position,
     zIndex: Number(getComputedStyle(options).zIndex),
     nativeRadioCount: options.querySelectorAll('input[type="radio"]').length,
   }));
   expect(categoryLayer).toMatchObject({
-    parentClass: "today-app-usage-card",
-    position: "absolute",
+    parentTag: "BODY",
+    position: "fixed",
     nativeRadioCount: 0,
   });
   expect(categoryLayer.zIndex).toBeLessThan(100);
   await expect(categoryOptions.getByRole("menuitemradio")).toHaveCount(3);
+  const initialMenuTop = await categoryOptions.evaluate((options) => options.getBoundingClientRect().top);
   await page.locator(".today-app-usage-list").evaluate((list) => {
     // The browser fallback fixture has a single app. Add inert visual rows so
     // this test exercises the same captured scroll path as native usage data.
@@ -235,12 +236,13 @@ test("timeline density scales with its window and hover colors follow every them
     list.scrollTop = 24;
     list.dispatchEvent(new Event("scroll"));
   });
-  await expect(categoryOptions).toHaveCount(0);
+  await expect(categoryOptions).toBeVisible();
+  await expect.poll(() => categoryOptions.evaluate((options) => options.getBoundingClientRect().top))
+    .not.toBe(initialMenuTop);
   await page.locator(".today-app-usage-list").evaluate((list) => {
     list.scrollTop = 0;
     list.dispatchEvent(new Event("scroll"));
   });
-  await firstAppCategory.getByRole("button").click();
   await page.getByRole("menuitemradio", { name: "娱乐", exact: true }).click();
   await expect(firstAppCategory.getByRole("button", { name: /娱乐/ })).toHaveAttribute("aria-expanded", "false");
 
@@ -379,10 +381,28 @@ test("desktop widget views render without the main runtime shell", async ({ page
   await expect(page.getByRole("button", { name: "打开桌宠设置" })).toContainText("设置");
   const hoverPanelStyle = await page.locator(".pet-hover-panel").evaluate((panel) => {
     const style = getComputedStyle(panel);
-    return { width: panel.getBoundingClientRect().width, background: style.backgroundColor };
+    return { width: panel.getBoundingClientRect().width, height: panel.getBoundingClientRect().height, background: style.backgroundColor };
   });
-  expect(hoverPanelStyle.width).toBeGreaterThanOrEqual(268);
+  expect(hoverPanelStyle.width).toBeGreaterThanOrEqual(230);
+  expect(hoverPanelStyle.width).toBeLessThanOrEqual(242);
+  expect(hoverPanelStyle.height).toBeLessThan(175);
   expect(hoverPanelStyle.background).not.toMatch(/\/ 0\.|rgba\([^)]*,\s*0\./);
+  const avatarBounds = await page.locator(".pet-avatar-button").boundingBox();
+  expect(avatarBounds).toBeTruthy();
+  await page.mouse.move(
+    (avatarBounds?.x ?? 0) + (avatarBounds?.width ?? 0) / 2,
+    (avatarBounds?.y ?? 0) + (avatarBounds?.height ?? 0) / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".window-pet")).toHaveClass(/is-dragging/);
+  await expect(page.locator(".window-pet")).not.toHaveClass(/is-hovering/);
+  const hiddenWhileDragging = await page.locator(".pet-hover-panel").evaluate((panel) => ({
+    opacity: getComputedStyle(panel).opacity,
+    pointerEvents: getComputedStyle(panel).pointerEvents,
+  }));
+  expect(hiddenWhileDragging).toEqual({ opacity: "0", pointerEvents: "none" });
+  await page.mouse.up();
+  await expect(page.locator(".window-pet")).not.toHaveClass(/is-dragging/);
 
   await page.setViewportSize({ width: 360, height: 374 });
   await loadBuiltApp(page, "https://focus-pet.local/?widget=menuBar");

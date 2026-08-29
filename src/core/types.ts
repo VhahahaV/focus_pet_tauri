@@ -2,6 +2,8 @@ export type FocusState = "focus" | "distracted" | "break" | "away";
 
 export type ActivityCategory = "work" | "entertainment" | "ignore" | "neutral";
 
+export type ActivityClassificationSource = "userRule" | "catalogRule" | "fallbackRule" | "unmatched";
+
 export type ActivitySignalSource =
   | "frontmostApplication"
   | "windowTitle"
@@ -18,6 +20,7 @@ export type StateReason =
   | "inputIdleDistracted"
   | "activeFocusSession"
   | "workCategory"
+  | "explicitEntertainmentRule"
   | "entertainmentStable"
   | "entertainmentGrace"
   | "frequentSwitching"
@@ -63,6 +66,7 @@ export interface ActivitySnapshot {
   titleStored: boolean;
   titleDisplay?: string;
   category: ActivityCategory;
+  classificationSource?: ActivityClassificationSource;
   idleSeconds: number;
   switchCountLast5Min: number;
   switchCountLast15Min: number;
@@ -499,11 +503,17 @@ export interface LocalStoreSnapshot {
 
 export interface NativeRuntimeEnvelope {
   generation: number;
-  snapshot: LocalStoreSnapshot;
+  snapshot?: LocalStoreSnapshot;
+  delta?: NativeRuntimeDelta;
   currentSnapshot: ActivitySnapshot;
   currentDecision: StateDecision;
   latestNudge?: NudgeEvent;
 }
+
+export type NativeRuntimeDelta = Partial<Pick<
+  LocalStoreSnapshot,
+  "stateSegments" | "appUsage" | "inputActivity" | "focusSessions" | "breakSessions" | "nudges"
+>>;
 
 export interface SystemMonitorCoreSample {
   name: string;

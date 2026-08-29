@@ -65,6 +65,7 @@ import type { MenuBarPayload } from "./menuBarPayload";
 import { makePetCompanionViewState } from "./petCompanionPayload";
 import type { DashboardTab } from "./types";
 import { applyDesktopWidgetMoved, widgetOrigin, type DesktopWidgetMoveLabel } from "./widgetWindows";
+import { mergeNativeRuntimeDelta } from "./nativeRuntimeDelta";
 
 export interface FocusPetAppController {
   bundle: RuntimeBundle;
@@ -125,18 +126,10 @@ const sampleActivity = async (): Promise<NativeActivitySample | undefined> => {
 const recomputeDerived = (state: AppRuntimeState): AppRuntimeState => {
   const now = new Date();
   const bounds = dayBounds(now);
-  const normalized = normalizeSnapshot(runtimeSnapshot(state));
-  const normalizedState = {
-    ...state,
-    settings: normalized.settings,
-    classificationRules: normalized.classificationRules,
-    stateSegments: normalized.stateSegments,
-    appUsage: normalized.appUsage,
-    inputActivity: normalized.inputActivity,
-    focusSessions: normalized.focusSessions,
-    breakSessions: normalized.breakSessions,
-    nudges: normalized.nudges,
-  };
+  // Snapshots are normalized once at the storage/native boundary. Repeating
+  // that pass here mapped every retained input bucket on every five-second
+  // sample and made interactions degrade with history length.
+  const normalizedState = state;
   return {
     ...normalizedState,
     settings: {
@@ -160,7 +153,9 @@ const applyNativeRuntimeEnvelope = (
   current: RuntimeBundle,
   envelope: NativeRuntimeEnvelope,
 ): RuntimeBundle => {
-  const normalized = normalizeSnapshot(envelope.snapshot);
+  const normalized = envelope.snapshot
+    ? normalizeSnapshot(envelope.snapshot)
+    : mergeNativeRuntimeDelta(runtimeSnapshot(current.state), envelope.delta);
   const now = new Date(envelope.currentDecision.timestamp);
   const stateChanged = current.state.currentDecision.state !== envelope.currentDecision.state;
   const intentExpired = current.state.currentPetIntent.expiresAt
@@ -294,6 +289,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   const saveInFlight = useRef<Promise<void> | undefined>(undefined);
   const lastPersistedAt = useRef(0);
   const tickInFlight = useRef<Promise<void> | undefined>(undefined);
+  const fullSnapshotInFlight = useRef<Promise<void> | undefined>(undefined);
   const lastNativeRuntimeGeneration = useRef(-1);
   const nativeSampleUnavailable = useRef(false);
   const lastNotificationID = useRef<string | undefined>(undefined);
@@ -477,7 +473,8 @@ export const useFocusPetApp = (): FocusPetAppController => {
       return;
     }
     // Send only the small rules document across IPC. Rust updates its live
-    // classifier immediately; the next resident five-second sample uses it.
+    // classifier and triggers an immediate resident sample, so the current
+    // app reflects the manual category without waiting for the next tick.
     // Avoid forcing an extra full-history snapshot through the WebView on the
     // user's click path.
     const previousRequest = classificationSaveInFlight.current;
@@ -553,6 +550,16 @@ export const useFocusPetApp = (): FocusPetAppController => {
     if (!ready || !isTauriRuntime()) return undefined;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const refreshFullSnapshot = () => {
+      if (disposed || document.visibilityState === "hidden" || fullSnapshotInFlight.current) return;
+      const request = nativeRuntimeSnapshot()
+        .then(acceptNativeRuntimeEnvelope)
+        .catch(() => undefined);
+      fullSnapshotInFlight.current = request;
+      void request.finally(() => {
+        if (fullSnapshotInFlight.current === request) fullSnapshotInFlight.current = undefined;
+      });
+    };
     void listen<NativeRuntimeEnvelope>("focus-pet-native-runtime", (event) => {
       acceptNativeRuntimeEnvelope(event.payload);
     }).then((dispose) => {
@@ -561,13 +568,17 @@ export const useFocusPetApp = (): FocusPetAppController => {
         return;
       }
       unlisten = dispose;
-      void nativeRuntimeSnapshot()
-        .then(acceptNativeRuntimeEnvelope)
-        .catch(() => undefined);
+      refreshFullSnapshot();
     });
+    window.addEventListener("focus", refreshFullSnapshot);
+    document.addEventListener("visibilitychange", refreshFullSnapshot);
+    const fullRefreshInterval = window.setInterval(refreshFullSnapshot, 30 * 60_000);
     return () => {
       disposed = true;
       unlisten?.();
+      window.clearInterval(fullRefreshInterval);
+      window.removeEventListener("focus", refreshFullSnapshot);
+      document.removeEventListener("visibilitychange", refreshFullSnapshot);
     };
   }, [acceptNativeRuntimeEnvelope, ready]);
 
@@ -1078,7 +1089,7 @@ export const useFocusPetApp = (): FocusPetAppController => {
   useEffect(() => {
     if (!ready || !isTauriRuntime() || petSettings.hidden) return;
     void emitTo("widget-pet-companion", "focus-pet-companion-packs", petPacks);
-  }, [petPacks, petSettings.hidden, ready]);
+  }, [petPacks, petSettings.hidden, petSettings.selectedPackID, ready]);
 
   const actions = useMemo<FocusPetAppController["actions"]>(
     () => ({

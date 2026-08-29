@@ -1,16 +1,17 @@
 import { AppWindow, Bot, Check, ChevronDown, ChevronRight, Clock3, Globe2, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { loopingPetFrameIndex, petPreviewAnimationKey, resolveDisplaySourceAction } from "../app/petCompanionLogic";
 import { focusStateLabels, petIntentLabels } from "../core/labels";
 import { formatClock, formatCount, formatDuration, formatPercentage } from "../core/formatters";
 import { remainingFocusSeconds } from "../core/sessions";
 import { summaryTotalSeconds } from "../core/summary";
-import { makeInputTimelineSnapshot } from "../core/timeline";
+import { makeInputTimelineSnapshot, stateSegmentCountsForAttention } from "../core/timeline";
 import type {
   ActivityCategory,
   AppUsageSegment,
+  FocusSession,
   FocusState,
   InputTimelineInputBar,
   InputTimelineSnapshot,
@@ -27,6 +28,88 @@ import { sourceActionAssetsForID } from "../resources/petPack";
 import { codexSessionIsActive, codexStatusLabel } from "../core/codexSessions";
 
 const timelineWindows = [2, 4, 6, 8, 12, 24] as const;
+
+const TodayMiniPetAvatar = ({
+  frames,
+  fps,
+  animationKey,
+  enabled,
+}: {
+  frames: string[];
+  fps: number;
+  animationKey: string;
+  enabled: boolean;
+}) => {
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    setFrameIndex(0);
+    for (const source of frames) {
+      const image = new Image();
+      image.src = source;
+    }
+  }, [animationKey, frames]);
+
+  useEffect(() => {
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (!enabled || reducedMotion || frames.length <= 1) return undefined;
+    const startedAt = performance.now();
+    let frameID = 0;
+    let lastRenderedIndex = -1;
+    const render = (now: number) => {
+      const nextIndex = loopingPetFrameIndex(now - startedAt, frames.length, fps);
+      if (nextIndex !== lastRenderedIndex) {
+        lastRenderedIndex = nextIndex;
+        setFrameIndex(nextIndex);
+      }
+      frameID = window.requestAnimationFrame(render);
+    };
+    frameID = window.requestAnimationFrame(render);
+    return () => window.cancelAnimationFrame(frameID);
+  }, [animationKey, enabled, fps, frames.length]);
+
+  return (
+    <span
+      className={`today-mini-pet-avatar${frames.length > 1 ? " is-animated" : ""}`}
+      data-frame-count={frames.length}
+    >
+      <img src={frames[frameIndex % frames.length]} alt="" draggable={false} />
+    </span>
+  );
+};
+
+const TodaySessionControls = ({
+  activeFocus,
+  stableDuration,
+  onFinish,
+}: {
+  activeFocus?: FocusSession;
+  stableDuration: number;
+  onFinish: () => void;
+}) => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!activeFocus) return undefined;
+    setNow(new Date());
+    const timer = window.setInterval(() => setNow(new Date()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [activeFocus]);
+
+  return (
+    <div className="today-session-controls">
+      <span>
+        {activeFocus
+          ? `${activeFocus.taskName} · 剩余 ${formatDuration(remainingFocusSeconds(activeFocus, now))}`
+          : `当前状态已持续 ${formatDuration(stableDuration)}`}
+      </span>
+      {activeFocus ? (
+        <SoftButton size="small" status="focus" onClick={onFinish}>
+          完成专注
+        </SoftButton>
+      ) : null}
+    </div>
+  );
+};
 
 const appCategoryOptions: Array<{ value: Exclude<ActivityCategory, "neutral">; label: string }> = [
   { value: "work", label: "工作" },
@@ -90,6 +173,8 @@ const normalizedCategory = (category: ActivityCategory): ActivityCategory => cat
 
 const appInsightKey = (appName: string, bundleID?: string): string => (bundleID?.trim() || appName.trim()).toLowerCase();
 
+const appMenuKey = (appName: string): string => appName.trim().toLowerCase();
+
 const emptyStateBreakdown = (): Record<FocusState, number> => ({ focus: 0, distracted: 0, break: 0, away: 0 });
 
 const emptyCategorySeconds = (): Record<ActivityCategory, number> => ({ work: 0, entertainment: 0, ignore: 0, neutral: 0 });
@@ -130,6 +215,7 @@ const makeTodayInsightSnapshot = (
   const durations: Record<FocusState, number> = { focus: 0, distracted: 0, break: 0, away: 0 };
   const apps = new Map<string, TodayAppInsightAccumulator>();
   const indexedStateSegments = stateSegments
+    .filter(stateSegmentCountsForAttention)
     .map((segment) => ({
       segment,
       startMs: Math.max(startMs, new Date(segment.start).getTime()),
@@ -335,6 +421,62 @@ const TodayAppCategoryPicker = ({
   const [layer, setLayer] = useState<CategoryMenuLayer>();
   const selected = appCategoryOptions.find((option) => option.value === item.category) ?? appCategoryOptions[2];
   const menuID = `today-app-category-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const positionRevision = `${item.id}|${item.appName}|${Math.floor(item.seconds)}`;
+
+  const positionMenu = useCallback(() => {
+    if (!open) return;
+    void positionRevision;
+    const trigger = triggerRef.current;
+    if (!trigger?.closest(".today-app-usage-card")) return;
+    const triggerBounds = trigger.getBoundingClientRect();
+    const menuWidth = 116;
+    const menuHeight = 106;
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+    const roomBelow = viewportHeight - triggerBounds.bottom - 8;
+    const roomAbove = triggerBounds.top - 8;
+    const side = roomBelow < menuHeight && roomAbove > roomBelow ? "top" : "bottom";
+    const anchoredTop = side === "top"
+      ? triggerBounds.top - menuHeight - 5
+      : triggerBounds.bottom + 5;
+    const nextLayer: CategoryMenuLayer = {
+      host: document.body,
+      left: Math.max(8, Math.min(triggerBounds.left, viewportWidth - menuWidth - 8)),
+      top: Math.max(8, Math.min(anchoredTop, viewportHeight - menuHeight - 8)),
+      side,
+    };
+    setLayer((current) => current
+      && current.host === nextLayer.host
+      && current.left === nextLayer.left
+      && current.top === nextLayer.top
+      && current.side === nextLayer.side
+      ? current
+      : nextLayer);
+  }, [open, positionRevision]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setLayer(undefined);
+      return;
+    }
+    positionMenu();
+  }, [open, positionMenu]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    let frameID = 0;
+    const schedulePosition = () => {
+      window.cancelAnimationFrame(frameID);
+      frameID = window.requestAnimationFrame(positionMenu);
+    };
+    document.addEventListener("scroll", schedulePosition, true);
+    window.addEventListener("resize", schedulePosition);
+    return () => {
+      window.cancelAnimationFrame(frameID);
+      document.removeEventListener("scroll", schedulePosition, true);
+      window.removeEventListener("resize", schedulePosition);
+    };
+  }, [open, positionMenu]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -357,28 +499,6 @@ const TodayAppCategoryPicker = ({
   }, [onOpenChange, open]);
 
   const toggleMenu = () => {
-    if (!open) {
-      const trigger = triggerRef.current;
-      const host = trigger?.closest<HTMLElement>(".today-app-usage-card");
-      if (trigger && host) {
-        const triggerBounds = trigger.getBoundingClientRect();
-        const hostBounds = host.getBoundingClientRect();
-        const menuWidth = 116;
-        const menuHeight = 106;
-        const roomBelow = hostBounds.bottom - triggerBounds.bottom - 8;
-        const roomAbove = triggerBounds.top - hostBounds.top - 8;
-        const side = roomBelow < menuHeight && roomAbove > roomBelow ? "top" : "bottom";
-        const anchoredTop = side === "top"
-          ? triggerBounds.top - hostBounds.top - menuHeight - 5
-          : triggerBounds.bottom - hostBounds.top + 5;
-        setLayer({
-          host,
-          left: Math.max(8, Math.min(triggerBounds.left - hostBounds.left, hostBounds.width - menuWidth - 8)),
-          top: Math.max(8, Math.min(anchoredTop, hostBounds.height - menuHeight - 8)),
-          side,
-        });
-      }
-    }
     onOpenChange(!open);
   };
 
@@ -440,7 +560,6 @@ const TodayInsightsGrid = ({
 }) => {
   const maxAppSeconds = Math.max(1, ...snapshot.appItems.map((item) => item.seconds));
   const [openCategoryMenu, setOpenCategoryMenu] = useState<string | null>(null);
-  const appListScrollTopRef = useRef(0);
   const dominant = snapshot.rhythmItems
     .filter((item) => item.seconds > 0)
     .sort((lhs, rhs) => rhs.seconds - lhs.seconds)[0] ?? { state: "focus" as FocusState, seconds: 0 };
@@ -459,17 +578,6 @@ const TodayInsightsGrid = ({
             className="today-app-usage-list"
             role="list"
             aria-label="应用使用排行，显示五行高度，可滚动查看更多"
-            onScroll={(event) => {
-              if (event.currentTarget !== event.target) return;
-              const nextScrollTop = event.currentTarget.scrollTop;
-              // Opening the anchored category menu can move the list by one
-              // layout pixel on WebKit/Chromium. Ignore that rounding jitter,
-              // but still dismiss the menu for an intentional list scroll.
-              if (Math.abs(nextScrollTop - appListScrollTopRef.current) > 4) {
-                setOpenCategoryMenu(null);
-              }
-              appListScrollTopRef.current = nextScrollTop;
-            }}
           >
             {snapshot.appItems.map((item, index) => (
               <div className="today-app-usage-row" key={item.id}>
@@ -479,8 +587,8 @@ const TodayInsightsGrid = ({
                   <strong>{item.appName}</strong>
                   <TodayAppCategoryPicker
                     item={item}
-                    open={openCategoryMenu === item.id}
-                    onOpenChange={(open) => setOpenCategoryMenu(open ? item.id : null)}
+                    open={openCategoryMenu === appMenuKey(item.appName)}
+                    onOpenChange={(open) => setOpenCategoryMenu(open ? appMenuKey(item.appName) : null)}
                     onCategoryChange={onCategoryChange}
                   />
                 </div>
@@ -563,13 +671,6 @@ export const TodayTab = () => {
   const { bundle, petPacks, actions, activeFocus } = useFocusPet();
   const [windowHours, setWindowHours] = useState<(typeof timelineWindows)[number]>(4);
   const [detailsReady, setDetailsReady] = useState(false);
-  const [sessionNow, setSessionNow] = useState(() => new Date());
-  useEffect(() => {
-    if (!activeFocus) return undefined;
-    setSessionNow(new Date());
-    const timer = window.setInterval(() => setSessionNow(new Date()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [activeFocus]);
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setDetailsReady(true));
     return () => window.cancelAnimationFrame(frame);
@@ -615,42 +716,6 @@ export const TodayTab = () => {
       key: petPreviewAnimationKey(selectedPet?.id, action?.id, resolvedFrames),
     };
   }, [bundle.state.currentPetIntent, bundle.state.settings.pet, selectedPet]);
-  const [miniPetFrameIndex, setMiniPetFrameIndex] = useState(0);
-
-  useEffect(() => {
-    setMiniPetFrameIndex(0);
-  }, [miniPetAnimation.key]);
-
-  useEffect(() => {
-    miniPetAnimation.frames.forEach((source) => {
-      const image = new Image();
-      image.src = source;
-    });
-  }, [miniPetAnimation.frames]);
-
-  useEffect(() => {
-    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    if (!bundle.state.settings.pet.animationEnabled || reducedMotion || miniPetAnimation.frames.length <= 1) return undefined;
-    const startedAt = performance.now();
-    let frameID = 0;
-    let lastRenderedIndex = -1;
-    const render = (now: number) => {
-      const nextIndex = loopingPetFrameIndex(
-        now - startedAt,
-        miniPetAnimation.frames.length,
-        miniPetAnimation.fps,
-      );
-      if (nextIndex !== lastRenderedIndex) {
-        lastRenderedIndex = nextIndex;
-        setMiniPetFrameIndex(nextIndex);
-      }
-      frameID = window.requestAnimationFrame(render);
-    };
-    frameID = window.requestAnimationFrame(render);
-    return () => window.cancelAnimationFrame(frameID);
-  }, [bundle.state.settings.pet.animationEnabled, miniPetAnimation.fps, miniPetAnimation.frames.length, miniPetAnimation.key]);
-
-  const miniPetURL = miniPetAnimation.frames[miniPetFrameIndex % miniPetAnimation.frames.length];
   const hourTicks = useMemo(() => timelineHourTicks(inputTimeline), [inputTimeline]);
   const [timelineHover, setTimelineHover] = useState<TimelineHoverDetail | null>(null);
 
@@ -724,18 +789,11 @@ export const TodayTab = () => {
               <p className="swift-section-kicker">今日态势</p>
               <Badge compact status={decision.state} className="today-current-state">{focusStateLabels[decision.state].title}</Badge>
             </div>
-            <div className="today-session-controls">
-              <span>
-                {activeFocus
-                  ? `${activeFocus.taskName} · 剩余 ${formatDuration(remainingFocusSeconds(activeFocus, sessionNow))}`
-                  : `当前状态已持续 ${formatDuration(decision.stableDuration)}`}
-              </span>
-              {activeFocus ? (
-                <SoftButton size="small" status="focus" onClick={() => actions.finishFocusSession(true)}>
-                  完成专注
-                </SoftButton>
-              ) : null}
-            </div>
+            <TodaySessionControls
+              activeFocus={activeFocus}
+              stableDuration={decision.stableDuration}
+              onFinish={() => actions.finishFocusSession(true)}
+            />
           </div>
           <div className="today-focus-dashboard">
             <div className="today-focus-hero">
@@ -744,10 +802,12 @@ export const TodayTab = () => {
                 <span>今日专注</span>
               </div>
               <div className="today-mini-pet" aria-label={`桌宠：${petIntentLabels[bundle.state.currentPetIntent.kind]}`}>
-                <span
-                  className={`today-mini-pet-avatar${miniPetAnimation.frames.length > 1 ? " is-animated" : ""}`}
-                  data-frame-count={miniPetAnimation.frames.length}
-                ><img src={miniPetURL} alt="" draggable={false} /></span>
+                <TodayMiniPetAvatar
+                  frames={miniPetAnimation.frames}
+                  fps={miniPetAnimation.fps}
+                  animationKey={miniPetAnimation.key}
+                  enabled={bundle.state.settings.pet.animationEnabled}
+                />
                 <span className="today-mini-pet-copy">
                   <small>桌宠状态</small>
                   <strong>{petIntentLabels[bundle.state.currentPetIntent.kind]}</strong>

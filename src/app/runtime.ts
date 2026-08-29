@@ -155,6 +155,8 @@ const applyStability = (
 ) => {
   const applyImmediately =
     decision.state === "away" ||
+    decision.reason.includes("explicitEntertainmentRule") ||
+    (memory.previousState === "distracted" && decision.state === "focus") ||
     decision.reason.includes("systemSleep") ||
     decision.reason.includes("screenLocked") ||
     decision.reason.includes("longInputIdleAway");
@@ -231,7 +233,8 @@ export const advanceRuntime = (
   const inferredSystemSleepGap = backfilledAwaySeconds > 0 && sleepLikeGap && !nativeSample.isScreenLocked;
   const activeFocus = activeFocusSession(runtime.focusSessions);
   const classifier = new ActivityClassifier(runtime.classificationRules, catalogEntries);
-  const category = classifier.classify(nativeSample.appName, nativeSample.bundleID, nativeSample.windowTitle);
+  const classification = classifier.classifyDetailed(nativeSample.appName, nativeSample.bundleID, nativeSample.windowTitle);
+  const category = classification.category;
   const categoryKey = `${category}`;
   const appKey = `${nativeSample.bundleID ?? ""}|${nativeSample.appName}`;
   if (backfilledAwaySeconds > 0 && !nativeSample.isSystemSleeping && !nativeSample.isScreenLocked) {
@@ -248,6 +251,7 @@ export const advanceRuntime = (
   }
   const context = {
     category,
+    classificationSource: classification.source,
     activeCategoryDuration: secondsBetween(memory.activeCategorySince, now),
     activeAppDuration: secondsBetween(memory.activeAppSince, now),
     isFocusSessionActive: Boolean(activeFocus),
@@ -332,12 +336,13 @@ export const advanceRuntime = (
   if (activeFocus) {
     const index = runtime.focusSessions.findIndex((session) => session.id === activeFocus.id);
     const updated = { ...activeFocus };
+    const classifiedForAttention = activitySnapshot.category === "work" || activitySnapshot.category === "entertainment";
     updated.awaySeconds += backfilledAwaySeconds;
-    if (stabilized.decision.state === "focus") updated.effectiveFocusSeconds += currentTickSeconds;
-    if (stabilized.decision.state === "distracted") updated.distractedSeconds += currentTickSeconds;
+    if (classifiedForAttention && stabilized.decision.state === "focus") updated.effectiveFocusSeconds += currentTickSeconds;
+    if (classifiedForAttention && stabilized.decision.state === "distracted") updated.distractedSeconds += currentTickSeconds;
     if (stabilized.decision.state === "away") updated.awaySeconds += currentTickSeconds;
     updated.switchCount += nativeSample.switchCount;
-    if (stabilized.decision.state === "distracted" && previousState !== "distracted") updated.interruptionCount += 1;
+    if (classifiedForAttention && stabilized.decision.state === "distracted" && previousState !== "distracted") updated.interruptionCount += 1;
     if (!updated.mainAppName && activitySnapshot.category === "work") updated.mainAppName = activitySnapshot.appName;
     if (remainingFocusSeconds(updated, now) <= 0) {
       const completed = finishFocusSession(updated, "completed", now, updated.mainAppName);

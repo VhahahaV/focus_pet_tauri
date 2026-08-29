@@ -17,6 +17,23 @@ export interface ResolvedPetSourceAction {
   randomState: RandomSourceActionState;
 }
 
+/**
+ * Resolve the user's selected pack without silently substituting another pet.
+ *
+ * The companion is a separate WebView and can receive its settings event a
+ * moment before its pack-list event. In that interval, falling back to the
+ * first list item made the bundled Luo Xiaohei preview appear to override
+ * every selected imported pack. A blank selection is the only case where the
+ * first available pack is a valid default.
+ */
+export const resolveSelectedPetPack = (
+  records: PetPackRecord[],
+  selectedPackID: string,
+): PetPackRecord | undefined => {
+  const selected = records.find((record) => record.id === selectedPackID);
+  return selected ?? (selectedPackID ? undefined : records[0]);
+};
+
 export const loopingPetFrameIndex = (
   elapsedMilliseconds: number,
   frameCount: number,

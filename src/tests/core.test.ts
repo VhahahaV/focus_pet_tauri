@@ -8,11 +8,12 @@ import { makeActivityHistorySnapshot, makeAttentionHistorySnapshot, recordInputA
 import { buildDailySummary } from "../core/summary";
 import { defaultAppSettings, judgmentPresetSettings, matchingJudgmentPreset, normalizePetSettings } from "../core/settings";
 import type { ActivitySnapshot, FocusStateSnapshot, StateDecision } from "../core/types";
-import { importedPetPackRecord, normalizePetPack, validatePetPack } from "../resources/petPack";
+import { demoPetPackRecords, importedPetPackRecord, normalizePetPack, validatePetPack } from "../resources/petPack";
 import {
   advanceRuntime,
   emptyRuntime,
   inputMonitoringPermissionTitle,
+  runtimeFromSnapshot,
   runtimeActions,
 } from "../app/runtime";
 import { applyNativeMenuAction, nativeMenuTab } from "../app/nativeMenu";
@@ -22,6 +23,7 @@ import {
   loopingPetFrameIndex,
   petAnimationClockNeedsWake,
   petPreviewAnimationKey,
+  resolveSelectedPetPack,
   resolveDisplaySourceAction,
 } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
@@ -34,6 +36,7 @@ import {
 } from "../core/codexSessions";
 import { activitySampleForRuntime } from "../app/activitySampling";
 import { maximumPointerActionsPerMinute, normalizeInputActivityBucket, normalizeSnapshot } from "../store/localStore";
+import { mergeNativeRuntimeDelta } from "../app/nativeRuntimeDelta";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   timestamp: "2026-07-07T10:00:00.000Z",
@@ -91,6 +94,14 @@ describe("Focus Pet migrated core", () => {
       .not.toBe(petPreviewAnimationKey("pet", "idle", frames));
   });
 
+  it("never replaces a selected desktop pet with the first preview while packs are syncing", () => {
+    const records = demoPetPackRecords();
+
+    expect(resolveSelectedPetPack(records, "preview-xiaodai")?.id).toBe("preview-xiaodai");
+    expect(resolveSelectedPetPack(records, "imported-someone-else")).toBeUndefined();
+    expect(resolveSelectedPetPack(records, "")?.id).toBe("preview-luo-xiaohei");
+  });
+
   it("distinguishes an open idle Codex session from an ended session", () => {
     const open = reduceCodexEvents([], [{
       schemaVersion: 1,
@@ -139,6 +150,126 @@ describe("Focus Pet migrated core", () => {
     ]);
     expect(classifier.classify("Safari", undefined, "YouTube 教程 - React")).toBe("work");
     expect(classifier.classify("Safari", undefined, "YouTube 首页")).toBe("entertainment");
+  });
+
+  it("treats a manual entertainment classification as an immediate high-confidence signal", () => {
+    const classifier = new ActivityClassifier([
+      { id: "wechat-entertainment", matchKind: "bundleID", pattern: "com.tencent.xinWeChat", category: "entertainment", priority: 0 },
+    ]);
+    const classification = classifier.classifyDetailed("微信", "com.tencent.xinWeChat");
+    expect(classification).toMatchObject({ category: "entertainment", source: "userRule" });
+
+    const decision = evaluateState(baseSnapshot({
+      appName: "微信",
+      bundleID: "com.tencent.xinWeChat",
+      category: classification.category,
+      classificationSource: classification.source,
+      activeCategoryDuration: 0,
+    }), "focus");
+    expect(decision.state).toBe("distracted");
+    expect(decision.reason).toEqual(["explicitEntertainmentRule"]);
+  });
+
+  it("propagates a Time Went Where rule through a typing sample into runtime history", () => {
+    const startedAt = new Date("2026-07-07T10:00:00.000Z");
+    const initial = runtimeFromSnapshot(normalizeSnapshot(), [], startedAt);
+    const classified = {
+      ...initial,
+      state: runtimeActions.addRule(
+        initial.state,
+        "com.tencent.xinWeChat",
+        "bundleID",
+        "entertainment",
+      ),
+    };
+    const next = advanceRuntime(classified, {
+      timestamp: "2026-07-07T10:00:05.000Z",
+      platform: "test",
+      sampleQuality: "exact",
+      appName: "微信",
+      bundleID: "com.tencent.xinWeChat",
+      windowTitle: "聊天",
+      idleSeconds: 0,
+      inputMonitoringStatus: "available",
+      keyboardCount: 24,
+      pointerCount: 2,
+      switchCount: 0,
+      isSystemSleeping: false,
+      isScreenLocked: false,
+    }, []);
+
+    expect(next.state.currentSnapshot).toMatchObject({
+      appName: "微信",
+      category: "entertainment",
+      classificationSource: "userRule",
+    });
+    expect(next.state.currentDecision).toMatchObject({
+      state: "distracted",
+      reason: ["explicitEntertainmentRule"],
+    });
+    expect(next.state.stateSegments.at(-1)).toMatchObject({
+      state: "distracted",
+      category: "entertainment",
+      appName: "微信",
+    });
+    expect(next.state.inputActivity.at(-1)?.keyboardCount).toBe(24);
+  });
+
+  it("does not turn ignored input into focus or include it in attention totals", () => {
+    expect(evaluateState(baseSnapshot({ category: "ignore", idleSeconds: 0 }), "distracted").state).toBe("distracted");
+    const ignoredSegment = recordStateSegment(
+      {
+        timestamp: "2026-07-07T10:00:10.000Z",
+        state: "focus",
+        category: "ignore",
+        confidence: 0.45,
+        reason: ["ignoredActivity"],
+        stableDuration: 10,
+      },
+      baseSnapshot({ timestamp: "2026-07-07T10:00:10.000Z", appName: "微信", category: "ignore" }),
+      [],
+      10,
+    );
+    const summary = buildDailySummary(new Date("2026-07-07T12:00:00.000Z"), ignoredSegment, [], [], []);
+    expect(summary.focusSeconds).toBe(0);
+    expect(makeAttentionHistorySnapshot(ignoredSegment, new Date("2026-07-07T12:00:00.000Z")).focusSeconds).toBe(0);
+  });
+
+  it("merges bounded native runtime deltas without replacing retained history", () => {
+    const current = normalizeSnapshot({
+      stateSegments: [{
+        id: "state-1",
+        start: "2026-07-07T10:00:00.000Z",
+        end: "2026-07-07T10:00:05.000Z",
+        state: "focus",
+        appName: "Editor",
+        category: "work",
+        titleStored: false,
+        source: ["frontmostApplication"],
+      }],
+    });
+    const merged = mergeNativeRuntimeDelta(current, {
+      stateSegments: [
+        { ...current.stateSegments[0], end: "2026-07-07T10:00:10.000Z" },
+        {
+          ...current.stateSegments[0],
+          id: "state-2",
+          start: "2026-07-07T10:00:10.000Z",
+          end: "2026-07-07T10:00:15.000Z",
+          state: "distracted",
+          category: "entertainment",
+        },
+      ],
+    });
+    expect(merged.stateSegments).toHaveLength(2);
+    expect(merged.stateSegments[0].end).toBe("2026-07-07T10:00:10.000Z");
+    expect(merged.stateSegments[1].state).toBe("distracted");
+    expect(merged.appUsage).toBe(current.appUsage);
+
+    const unchanged = mergeNativeRuntimeDelta(current, {
+      stateSegments: [{ ...current.stateSegments[0] }],
+    });
+    expect(unchanged.stateSegments).toBe(current.stateSegments);
   });
 
   it("stores only redacted window-title display data", () => {

@@ -51,14 +51,14 @@ export const evaluateState = (
     case "work":
       return decision(snapshot, "focus", 0.84, ["workCategory"], snapshot.activeCategoryDuration);
     case "entertainment":
+      if (snapshot.classificationSource === "userRule") {
+        return decision(snapshot, "distracted", 0.96, ["explicitEntertainmentRule"], snapshot.activeCategoryDuration);
+      }
       if (snapshot.activeCategoryDuration >= thresholds.distractedSeconds) {
         return decision(snapshot, "distracted", 0.84, ["entertainmentStable"], snapshot.activeCategoryDuration);
       }
       return decision(snapshot, activeCarryState, 0.58, ["entertainmentGrace", "previousStateHeld"], snapshot.activeCategoryDuration);
     case "ignore":
-      if (previousStableState === "distracted" && snapshot.idleSeconds <= thresholds.uiStabilitySeconds) {
-        return decision(snapshot, "focus", 0.62, ["recentInputRecovery"], snapshot.activeCategoryDuration);
-      }
       return decision(snapshot, activeCarryState, 0.45, ["ignoredActivity", "previousStateHeld"], snapshot.activeCategoryDuration);
     case "neutral":
       if (previousStableState === "distracted" && snapshot.idleSeconds <= thresholds.uiStabilitySeconds) {

@@ -18,7 +18,10 @@ pub struct NativeRuntimeService {
 #[serde(rename_all = "camelCase")]
 pub struct NativeRuntimeEnvelope {
     pub generation: u64,
-    pub snapshot: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<Value>,
     pub current_snapshot: ActivitySnapshot,
     pub current_decision: StateDecision,
     pub latest_nudge: Option<Value>,
@@ -35,6 +38,7 @@ pub struct ActivitySnapshot {
     pub title_stored: bool,
     pub title_display: Option<String>,
     pub category: String,
+    pub classification_source: String,
     pub idle_seconds: f64,
     pub switch_count_last5_min: u64,
     pub switch_count_last15_min: u64,
@@ -88,6 +92,7 @@ struct ClassificationRule {
     pattern: String,
     category: String,
     priority: i64,
+    is_user: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -193,7 +198,11 @@ impl NativeRuntimeService {
     }
 
     pub fn snapshot(&self) -> Value {
-        self.envelope().snapshot
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.snapshot.clone()
     }
 
     pub fn persist_snapshot(&self, app: &AppHandle, mut snapshot: Value) -> Result<(), String> {
@@ -247,7 +256,7 @@ impl NativeRuntimeService {
             store
                 .save_snapshot(&inner.snapshot)
                 .map_err(|error| error.to_string())?;
-            inner.envelope()
+            inner.event_envelope()
         };
         app.emit("focus-pet-native-runtime", &envelope)
             .map_err(|error| error.to_string())
@@ -285,7 +294,7 @@ impl NativeRuntimeService {
             store
                 .save_snapshot(&inner.snapshot)
                 .map_err(|error| error.to_string())?;
-            inner.envelope()
+            inner.event_envelope()
         };
         app.emit("focus-pet-native-runtime", &envelope)
             .map_err(|error| error.to_string())
@@ -300,7 +309,23 @@ impl RuntimeInner {
     fn envelope(&self) -> NativeRuntimeEnvelope {
         NativeRuntimeEnvelope {
             generation: self.generation,
-            snapshot: self.snapshot.clone(),
+            snapshot: Some(self.snapshot.clone()),
+            delta: None,
+            current_snapshot: self.current_snapshot.clone(),
+            current_decision: self.current_decision.clone(),
+            latest_nudge: self
+                .latest_nudge
+                .as_ref()
+                .filter(|event| nudge_is_recent(event, Utc::now()))
+                .cloned(),
+        }
+    }
+
+    fn event_envelope(&self) -> NativeRuntimeEnvelope {
+        NativeRuntimeEnvelope {
+            generation: self.generation,
+            snapshot: None,
+            delta: Some(runtime_delta(&self.snapshot)),
             current_snapshot: self.current_snapshot.clone(),
             current_decision: self.current_decision.clone(),
             latest_nudge: self
@@ -365,7 +390,7 @@ impl RuntimeInner {
         };
 
         let active_focus = active_session(&self.snapshot, "focusSessions").is_some();
-        let category = classify(&self.rules, &sample);
+        let (category, classification_source) = classify(&self.rules, &sample);
         let app_key = format!(
             "{}|{}",
             sample.bundle_id.as_deref().unwrap_or_default(),
@@ -414,6 +439,7 @@ impl RuntimeInner {
             title_stored: false,
             title_display: title.map(redacted_title),
             category: category.clone(),
+            classification_source,
             idle_seconds: sample.idle_seconds.max(0.0),
             switch_count_last5_min,
             switch_count_last15_min,
@@ -523,6 +549,7 @@ impl RuntimeInner {
             title_stored: false,
             title_display: None,
             category: "ignore".to_string(),
+            classification_source: "unmatched".to_string(),
             idle_seconds: seconds_between(start, end),
             switch_count_last5_min: 0,
             switch_count_last15_min: 0,
@@ -916,6 +943,35 @@ fn array_mut<'a>(snapshot: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
         .expect("normalized snapshot array")
 }
 
+/// Runtime events only need the records touched by the latest five-second
+/// sample. Sending the complete retained history through WebView IPC made
+/// every UI update progressively more expensive as months accumulated.
+fn runtime_delta(snapshot: &Value) -> Value {
+    let mut delta = serde_json::Map::new();
+    for key in [
+        "stateSegments",
+        "appUsage",
+        "inputActivity",
+        "focusSessions",
+        "breakSessions",
+        "nudges",
+    ] {
+        if let Some(items) = snapshot.get(key).and_then(Value::as_array) {
+            let recent = items
+                .iter()
+                .rev()
+                .take(3)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>();
+            if !recent.is_empty() {
+                delta.insert(key.to_string(), Value::Array(recent));
+            }
+        }
+    }
+    Value::Object(delta)
+}
+
 fn placeholder_activity(now: DateTime<Utc>) -> ActivitySnapshot {
     ActivitySnapshot {
         timestamp: iso(now),
@@ -925,6 +981,7 @@ fn placeholder_activity(now: DateTime<Utc>) -> ActivitySnapshot {
         title_stored: false,
         title_display: None,
         category: "work".to_string(),
+        classification_source: "fallbackRule".to_string(),
         idle_seconds: 0.0,
         switch_count_last5_min: 0,
         switch_count_last15_min: 0,
@@ -969,6 +1026,7 @@ fn classification_rules(snapshot: &Value) -> Vec<ClassificationRule> {
                                 pattern: pattern.trim().to_lowercase(),
                                 category: category.to_string(),
                                 priority,
+                                is_user: false,
                             });
                         }
                     }
@@ -1004,10 +1062,14 @@ fn parse_rule(rule: &Value, elevated_priority: Option<i64>) -> Option<Classifica
             .unwrap_or("ignore")
             .to_string(),
         priority: elevated_priority.map_or(priority, |value| value.max(priority)),
+        is_user: elevated_priority.is_some(),
     })
 }
 
-fn classify(rules: &[ClassificationRule], sample: &native::NativeActivitySample) -> String {
+fn classify(
+    rules: &[ClassificationRule],
+    sample: &native::NativeActivitySample,
+) -> (String, String) {
     let app_name = sample.app_name.to_lowercase();
     let bundle_id = sample
         .bundle_id
@@ -1029,8 +1091,18 @@ fn classify(rules: &[ClassificationRule], sample: &native::NativeActivitySample)
             };
             haystack.contains(&rule.pattern)
         })
-        .map(|rule| rule.category.clone())
-        .unwrap_or_else(|| "ignore".to_string())
+        .map(|rule| {
+            (
+                rule.category.clone(),
+                if rule.is_user {
+                    "userRule"
+                } else {
+                    "catalogRule"
+                }
+                .to_string(),
+            )
+        })
+        .unwrap_or_else(|| ("ignore".to_string(), "unmatched".to_string()))
 }
 
 fn thresholds(snapshot: &Value) -> Thresholds {
@@ -1107,6 +1179,12 @@ fn evaluate_state(
             &["workCategory"],
             snapshot.active_category_duration,
         ),
+        "entertainment" if snapshot.classification_source == "userRule" => decision(
+            "distracted",
+            0.96,
+            &["explicitEntertainmentRule"],
+            snapshot.active_category_duration,
+        ),
         "entertainment" if snapshot.active_category_duration >= thresholds.distracted_seconds => {
             decision(
                 "distracted",
@@ -1121,17 +1199,6 @@ fn evaluate_state(
             &["entertainmentGrace", "previousStateHeld"],
             snapshot.active_category_duration,
         ),
-        "ignore"
-            if previous == Some("distracted")
-                && snapshot.idle_seconds <= thresholds.ui_stability_seconds =>
-        {
-            decision(
-                "focus",
-                0.62,
-                &["recentInputRecovery"],
-                snapshot.active_category_duration,
-            )
-        }
         "ignore" => decision(
             carry,
             0.45,
@@ -1172,6 +1239,7 @@ fn stabilize(
             matches!(
                 reason.as_str(),
                 "recentInputRecovery"
+                    | "explicitEntertainmentRule"
                     | "inputIdleDistracted"
                     | "systemSleep"
                     | "screenLocked"
@@ -1244,14 +1312,16 @@ fn account_focus_session(
         "awaySeconds",
         backfilled_away_seconds.round() as u64,
     );
-    match decision.state.as_str() {
-        "focus" => add_u64(active, "effectiveFocusSeconds", tick_seconds.round() as u64),
-        "distracted" => add_u64(active, "distractedSeconds", tick_seconds.round() as u64),
-        "away" => add_u64(active, "awaySeconds", tick_seconds.round() as u64),
+    let classified_for_attention = matches!(activity.category.as_str(), "work" | "entertainment");
+    match (classified_for_attention, decision.state.as_str()) {
+        (true, "focus") => add_u64(active, "effectiveFocusSeconds", tick_seconds.round() as u64),
+        (true, "distracted") => add_u64(active, "distractedSeconds", tick_seconds.round() as u64),
+        (_, "away") => add_u64(active, "awaySeconds", tick_seconds.round() as u64),
         _ => {}
     }
     add_u64(active, "switchCount", switch_count);
-    if decision.state == "distracted" && previous_state != "distracted" {
+    if classified_for_attention && decision.state == "distracted" && previous_state != "distracted"
+    {
         add_u64(active, "interruptionCount", 1);
     }
     if active
@@ -1490,9 +1560,11 @@ fn seconds_between(start: DateTime<Utc>, end: DateTime<Utc>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        account_focus_session, evaluate_nudge, evaluate_state, merge_client_snapshot, parse_time,
-        ActivitySnapshot, StateDecision, Thresholds,
+        account_focus_session, classification_rules, evaluate_nudge, evaluate_state,
+        merge_client_snapshot, normalize_snapshot_shape, parse_time, placeholder_activity,
+        ActivitySnapshot, RuntimeInner, RuntimeMemory, StateDecision, Thresholds,
     };
+    use crate::native;
     use serde_json::json;
 
     fn snapshot(category: &str) -> ActivitySnapshot {
@@ -1504,6 +1576,7 @@ mod tests {
             title_stored: false,
             title_display: None,
             category: category.to_string(),
+            classification_source: "catalogRule".to_string(),
             idle_seconds: 0.0,
             switch_count_last5_min: 0,
             switch_count_last15_min: 0,
@@ -1541,6 +1614,127 @@ mod tests {
         let decision = evaluate_state(&activity, Some("focus"), thresholds());
         assert_eq!(decision.state, "distracted");
         assert_eq!(decision.reason, vec!["entertainmentStable"]);
+    }
+
+    #[test]
+    fn manual_entertainment_rule_is_immediate_even_before_grace_threshold() {
+        let mut activity = snapshot("entertainment");
+        activity.classification_source = "userRule".to_string();
+        activity.active_category_duration = 0.0;
+        let decision = evaluate_state(&activity, Some("focus"), thresholds());
+        assert_eq!(decision.state, "distracted");
+        assert_eq!(decision.reason, vec!["explicitEntertainmentRule"]);
+    }
+
+    #[test]
+    fn resident_runtime_applies_manual_wechat_entertainment_rule_while_typing() {
+        let now = parse_time("2026-07-31T00:00:05.000Z").unwrap();
+        let mut persisted = json!({
+            "classificationRules": [{
+                "id": "wechat-entertainment",
+                "matchKind": "bundleID",
+                "pattern": "com.tencent.xinWeChat",
+                "category": "entertainment",
+                "priority": 0
+            }]
+        });
+        normalize_snapshot_shape(&mut persisted);
+        let rules = classification_rules(&persisted);
+        let initial_activity = placeholder_activity(now);
+        let mut runtime = RuntimeInner {
+            snapshot: persisted,
+            current_snapshot: initial_activity,
+            current_decision: StateDecision {
+                timestamp: "2026-07-31T00:00:00.000Z".to_string(),
+                state: "focus".to_string(),
+                category: "work".to_string(),
+                confidence: 0.84,
+                reason: vec!["workCategory".to_string()],
+                stable_duration: 60.0,
+            },
+            memory: RuntimeMemory {
+                previous_state: "focus".to_string(),
+                candidate_state: "focus".to_string(),
+                candidate_since: now,
+                stable_state_since: now,
+                last_tick_at: Some(now - chrono::Duration::seconds(5)),
+                active_category: None,
+                active_category_since: now,
+                active_app: None,
+                active_app_since: now,
+                sleep_started_at: None,
+            },
+            generation: 0,
+            id_sequence: 0,
+            rules,
+            latest_nudge: None,
+        };
+
+        runtime.advance(native::NativeActivitySample {
+            timestamp: "2026-07-31T00:00:05.000Z".to_string(),
+            platform: "test".to_string(),
+            sample_quality: "exact".to_string(),
+            app_name: "微信".to_string(),
+            bundle_id: Some("com.tencent.xinWeChat".to_string()),
+            window_title: Some("聊天".to_string()),
+            idle_seconds: 0.0,
+            input_monitoring_status: "available".to_string(),
+            keyboard_count: 24,
+            pointer_count: 2,
+            switch_count: 0,
+            is_system_sleeping: false,
+            is_screen_locked: false,
+        });
+
+        assert_eq!(runtime.current_snapshot.category, "entertainment");
+        assert_eq!(runtime.current_snapshot.classification_source, "userRule");
+        assert_eq!(runtime.current_decision.state, "distracted");
+        assert_eq!(
+            runtime.current_decision.reason,
+            vec!["explicitEntertainmentRule"]
+        );
+        assert_eq!(runtime.snapshot["stateSegments"][0]["state"], "distracted");
+        assert_eq!(runtime.snapshot["inputActivity"][0]["keyboardCount"], 24);
+    }
+
+    #[test]
+    fn ignored_app_does_not_advance_effective_focus_session_time() {
+        let now = parse_time("2026-07-31T00:01:00.000Z").unwrap();
+        let mut persisted = json!({
+            "focusSessions": [{
+                "id": "focus-ignored",
+                "taskName": "Write",
+                "start": "2026-07-31T00:00:00.000Z",
+                "targetDurationSeconds": 1500,
+                "status": "active",
+                "effectiveFocusSeconds": 0,
+                "distractedSeconds": 0,
+                "awaySeconds": 0,
+                "interruptionCount": 0,
+                "switchCount": 0
+            }]
+        });
+        let activity = snapshot("ignore");
+        let decision = StateDecision {
+            timestamp: activity.timestamp.clone(),
+            state: "focus".to_string(),
+            category: "ignore".to_string(),
+            confidence: 0.45,
+            reason: vec!["ignoredActivity".to_string()],
+            stable_duration: 60.0,
+        };
+        assert!(account_focus_session(
+            &mut persisted,
+            &decision,
+            &activity,
+            5.0,
+            0.0,
+            0,
+            "focus",
+            now,
+        )
+        .is_none());
+        assert_eq!(persisted["focusSessions"][0]["effectiveFocusSeconds"], 0);
     }
 
     #[test]

@@ -1,16 +1,17 @@
 use serde::Serialize;
 #[cfg(target_os = "macos")]
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use sysinfo::{Components, Disks, System};
 
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct SystemMonitorState {
-    system: Mutex<System>,
+    system: Arc<Mutex<System>>,
     #[cfg(target_os = "windows")]
-    windows_gpu: Mutex<Option<WindowsGpuSampler>>,
+    windows_gpu: Arc<Mutex<Option<WindowsGpuSampler>>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -69,9 +70,9 @@ impl SystemMonitorState {
         system.refresh_cpu_all();
         system.refresh_memory();
         Self {
-            system: Mutex::new(system),
+            system: Arc::new(Mutex::new(system)),
             #[cfg(target_os = "windows")]
-            windows_gpu: Mutex::new(WindowsGpuSampler::new()),
+            windows_gpu: Arc::new(Mutex::new(WindowsGpuSampler::new())),
         }
     }
 

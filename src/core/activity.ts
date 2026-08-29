@@ -1,5 +1,6 @@
 import type {
   ActivityCategory,
+  ActivityClassificationSource,
   ActivitySignalSource,
   ActivitySnapshot,
   NativeActivitySample,
@@ -22,6 +23,7 @@ export const sanitizeWindowTitle = (
 
 export interface SnapshotContext {
   category: ActivityCategory;
+  classificationSource?: ActivityClassificationSource;
   activeCategoryDuration: number;
   activeAppDuration: number;
   isFocusSessionActive: boolean;
@@ -44,6 +46,7 @@ export const makeActivitySnapshot = (sample: NativeActivitySample, context: Snap
     titleStored: sanitized.titleStored,
     titleDisplay: sanitized.titleDisplay,
     category: context.category,
+    classificationSource: context.classificationSource,
     idleSeconds: Math.max(0, sample.idleSeconds),
     switchCountLast5Min: Math.max(0, context.switchCountLast5Min),
     switchCountLast15Min: Math.max(0, context.switchCountLast15Min),

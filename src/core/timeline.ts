@@ -43,6 +43,16 @@ export const stateDurationSeconds = (segment: StateSegment): number => secondsBe
 
 export const appUsageDurationSeconds = (segment: AppUsageSegment): number => secondsBetween(segment.start, segment.end);
 
+/** Ignore-classified apps remain visible in app usage, but must never inflate
+ * focus/distracted totals. Away and break segments still count regardless of
+ * category because they represent system-level state rather than app intent. */
+export const stateSegmentCountsForAttention = (
+  segment: Pick<StateSegment, "state" | "category">,
+): boolean => segment.state === "away"
+  || segment.state === "break"
+  || segment.category === "work"
+  || segment.category === "entertainment";
+
 export const recordStateSegment = (
   decision: StateDecision,
   snapshot: {
@@ -225,6 +235,7 @@ export const makeInputTimelineSnapshot = (
   const stateDurations: Partial<Record<FocusState, number>> = {};
   const rawStateRanges: InputTimelineStateRange[] = [];
   for (const segment of byStart(stateSegments)) {
+    if (!stateSegmentCountsForAttention(segment)) continue;
     const segmentStart = new Date(segment.start);
     const segmentEnd = new Date(segment.end);
     if (segmentStart >= windowEnd || segmentEnd <= windowStart) continue;
@@ -424,6 +435,7 @@ export const makeAttentionHistorySnapshot = (
   const buckets = new Map<string, AttentionDayBucket>();
 
   for (const segment of byStart(stateSegments)) {
+    if (!stateSegmentCountsForAttention(segment)) continue;
     if (new Date(segment.end) <= earliest || new Date(segment.start) >= end) continue;
     let cursor = new Date(Math.max(new Date(segment.start).getTime(), earliest.getTime()));
     const segmentEnd = new Date(Math.min(new Date(segment.end).getTime(), end.getTime()));
@@ -531,6 +543,7 @@ export const makeActivityHistorySnapshot = (
   const breakdown = emptyBreakdown();
 
   for (const segment of stateSegments) {
+    if (!stateSegmentCountsForAttention(segment)) continue;
     const seconds = includedOverlapSeconds(segment.start, segment.end, bounds, includedDayKeys);
     if (seconds <= 0) continue;
     const next = addBreakdown(breakdown, segment.state, seconds);

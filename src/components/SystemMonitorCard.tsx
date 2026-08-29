@@ -10,7 +10,7 @@ import {
   Settings2,
   Thermometer,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { makeMockSystemMetrics } from "../app/mockNative";
 import type { SystemMetricsSample, SystemMonitorModule } from "../core/types";
@@ -119,14 +119,19 @@ export const SystemMonitorCard = () => {
   const [sample, setSample] = useState<SystemMetricsSample>();
   const [error, setError] = useState<string>();
   const [isCustomizing, setIsCustomizing] = useState(false);
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     try {
       const next = await nativeSystemMetrics();
       setSample(next ?? makeMockSystemMetrics());
       setError(undefined);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      refreshInFlight.current = false;
     }
   }, []);
 

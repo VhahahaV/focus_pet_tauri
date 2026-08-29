@@ -26,6 +26,7 @@ import {
   cyclePlayableSourceAction,
   loopingPetFrameIndex,
   petAnimationClockNeedsWake,
+  resolveSelectedPetPack,
   resolveDisplaySourceAction,
   type RandomSourceActionState,
 } from "../app/petCompanionLogic";
@@ -65,8 +66,6 @@ interface PetDragSession {
   moved: boolean;
 }
 
-const fallbackPreviewURL = `${import.meta.env.BASE_URL}assets/pet-luo-xiaohei.png`;
-
 type PetCompanionAction = "open-dashboard" | "open-pet";
 
 const placementClass = (placement: PetPlacementMode): string => `placement-${placement}`;
@@ -84,6 +83,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   const settings = state.petSettings;
   const usesNativeHitTesting = windowMode && "__TAURI_INTERNALS__" in window;
   const [isHovering, setIsHovering] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const companionRef = useRef<HTMLElement>(null);
   const hitTargetRef = useRef<HTMLButtonElement>(null);
   const petHitZoneRef = useRef<HTMLSpanElement>(null);
@@ -104,7 +104,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   const codexSessions = windowMode
     ? nativeCodexSessions
     : onlyActiveCodexSessions(state.codexSessions);
-  const selectedPack = petPacks.find((record) => record.id === settings.selectedPackID) ?? petPacks[0];
+  const selectedPack = resolveSelectedPetPack(petPacks, settings.selectedPackID);
   const effectivePetIntent = localPhysicalIntent ?? state.currentPetIntent;
   const resolvedSourceAction = resolveDisplaySourceAction(
     effectivePetIntent,
@@ -113,8 +113,8 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
     randomState,
   );
   const sourceAction = resolvedSourceAction.action;
-  const assets = sourceActionAssetsForID(selectedPack, sourceAction?.id);
-  const frames = usePetFrames(assets?.frameURLs ?? [], selectedPack?.previewURL ?? fallbackPreviewURL);
+  const assets = selectedPack ? sourceActionAssetsForID(selectedPack, sourceAction?.id) : undefined;
+  const frames = usePetFrames(assets?.frameURLs ?? [], selectedPack?.previewURL);
   const sourceFps = sourceAction?.fps ?? 8;
   // A state transition should not make an otherwise animated pet appear frozen.
   const effectiveFps = Math.max(6, Math.min(sourceFps, isHovering ? 12 : 10));
@@ -126,8 +126,8 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   const animationStartedAtRef = useRef(performance.now());
   // Codex status is a continuous external-runtime signal, so it remains visible
   // in the transparent desktop-pet window. Manual interactions still win.
-  const visibleBubble = manualBubble ?? (windowMode ? undefined : state.latestPetBubble);
-  const showCodexPanel = windowMode && !manualBubble && codexSessions.length > 0;
+  const visibleBubble = isDragging ? undefined : manualBubble ?? (windowMode ? undefined : state.latestPetBubble);
+  const showCodexPanel = windowMode && !isDragging && !manualBubble && codexSessions.length > 0;
   const hoverItems = useMemo(
     () => [
       { title: "专注", value: formatCompactDuration(state.summary.focusSeconds), Icon: Target },
@@ -334,7 +334,6 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
     if (!session.moved && Math.hypot(dx, dy) < 1.5 * session.scaleFactor) return;
     if (!session.moved) {
       session.moved = true;
-      draggingRef.current = true;
       suppressClickRef.current = true;
       // Drag duration is user-controlled. Keep the dragged action looping
       // until pointer-up instead of expiring mid-drag after a fixed timeout.
@@ -370,11 +369,11 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
     if (!session || session.pointerID !== pointerID) return;
     dragSessionRef.current = undefined;
     if (session.frameID !== undefined) window.cancelAnimationFrame(session.frameID);
-    const currentWindow = getCurrentWindow();
     if (session.pendingPosition) {
       await nativeSetPetPanelPosition(session.pendingPosition.x, session.pendingPosition.y).catch(() => undefined);
     }
-    if (session.moved) {
+    if (session.moved && "__TAURI_INTERNALS__" in window) {
+      const currentWindow = getCurrentWindow();
       setPhysicalIntentImmediately("landing", 1_800);
       const position = await currentWindow.outerPosition().catch(() => session.pendingPosition ?? session.origin);
       if (position) {
@@ -386,6 +385,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
       }
     }
     draggingRef.current = false;
+    setIsDragging(false);
     window.setTimeout(() => {
       suppressClickRef.current = false;
     }, 0);
@@ -434,6 +434,11 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
       if (disposed || pending) return;
       pending = true;
       try {
+        if (draggingRef.current) {
+          updateHovering(false);
+          await applyCapture(true);
+          return;
+        }
         const cursor = await nativePetPanelPointerPosition();
         if (!cursor) return;
         const { x, y } = cursor;
@@ -452,7 +457,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
         const now = performance.now();
         if (directCapture) lastDirectCaptureAt = now;
         const hoverGrace = hoveringRef.current && now - lastDirectCaptureAt < 90;
-        const capture = draggingRef.current || directCapture || hoverGrace;
+        const capture = directCapture || hoverGrace;
         if (overPet || overPanel || hoverFocusWithin) updateHovering(true);
         else if (!hoverGrace && !draggingRef.current) updateHovering(false);
         await applyCapture(capture);
@@ -472,7 +477,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   }, [updateHovering, windowMode]);
 
   if (settings.hidden && !windowMode) return null;
-  const currentFrame = frames[Math.min(frameIndex, frames.length - 1)] ?? fallbackPreviewURL;
+  const currentFrame = frames[Math.min(frameIndex, frames.length - 1)];
   const cycleAction = () => {
     const next = cyclePlayableSourceAction(selectedPack, sourceAction?.id);
     if (!next.action) return;
@@ -483,14 +488,18 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   return (
     <aside
       ref={companionRef}
-      className={`pet-companion ${windowMode ? "window-pet" : ""} ${placementClass(settings.placement)} ${isHovering ? "is-hovering" : ""} ${showCodexPanel ? "has-codex-panel" : ""}`}
+      className={`pet-companion ${windowMode ? "window-pet" : ""} ${placementClass(settings.placement)} ${isHovering ? "is-hovering" : ""} ${isDragging ? "is-dragging" : ""} ${showCodexPanel ? "has-codex-panel" : ""}`}
       style={{ "--pet-size": `${settings.size}px`, "--pet-opacity": settings.opacity } as React.CSSProperties}
       aria-label="桌宠"
       onBlurCapture={(event) => {
         if (!windowMode && !event.currentTarget.contains(event.relatedTarget as Node | null)) updateHovering(false);
       }}
-      onFocusCapture={() => updateHovering(true)}
-      onPointerEnter={usesNativeHitTesting ? undefined : () => updateHovering(true)}
+      onFocusCapture={() => {
+        if (!draggingRef.current) updateHovering(true);
+      }}
+      onPointerEnter={usesNativeHitTesting ? undefined : () => {
+        if (!draggingRef.current) updateHovering(true);
+      }}
       onPointerLeave={usesNativeHitTesting ? undefined : () => updateHovering(false)}
     >
       {showCodexPanel ? (
@@ -519,8 +528,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
           }, 220);
         }}
         onPointerDown={(event) => {
-          if (!windowMode || !("__TAURI_INTERNALS__" in window) || event.button !== 0) return;
-          const currentWindow = getCurrentWindow();
+          if (!windowMode || event.button !== 0) return;
           dragSessionRef.current = {
             pointerID: event.pointerId,
             startScreenX: event.screenX,
@@ -528,19 +536,24 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
             scaleFactor: 1,
             moved: false,
           };
+          draggingRef.current = true;
+          setIsDragging(true);
           setPhysicalIntentImmediately("mouseSummon", 750);
-          updateHovering(true);
+          updateHovering(false);
           void nativeSetPetPanelIgnoresMouseEvents(false).catch(() => undefined);
-          void Promise.all([
-            currentWindow.outerPosition(),
-            currentWindow.scaleFactor(),
-          ]).then(([origin, factor]) => {
-            const session = dragSessionRef.current;
-            if (!session || session.pointerID !== event.pointerId) return;
-            session.origin = origin;
-            session.scaleFactor = factor;
-            if (session.latestPointer) movePetWindow(session.pointerID, session.latestPointer.x, session.latestPointer.y);
-          }).catch(() => undefined);
+          if ("__TAURI_INTERNALS__" in window) {
+            const currentWindow = getCurrentWindow();
+            void Promise.all([
+              currentWindow.outerPosition(),
+              currentWindow.scaleFactor(),
+            ]).then(([origin, factor]) => {
+              const session = dragSessionRef.current;
+              if (!session || session.pointerID !== event.pointerId) return;
+              session.origin = origin;
+              session.scaleFactor = factor;
+              if (session.latestPointer) movePetWindow(session.pointerID, session.latestPointer.x, session.latestPointer.y);
+            }).catch(() => undefined);
+          }
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerMove={(event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -558,7 +571,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
         }}
       >
         <span ref={petHitZoneRef} className="pet-avatar-hit-zone" aria-hidden />
-        <img src={currentFrame} alt="" draggable={false} />
+        {currentFrame ? <img src={currentFrame} alt="" draggable={false} /> : null}
       </button>
       {settings.hoverStatusEnabled ? (
         <div
@@ -566,8 +579,10 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
           className="pet-hover-panel"
           role="group"
           aria-label="桌宠快捷操作"
-          aria-hidden={!isHovering}
-          onPointerEnter={() => updateHovering(true)}
+          aria-hidden={!isHovering || isDragging}
+          onPointerEnter={() => {
+            if (!draggingRef.current) updateHovering(true);
+          }}
         >
           <div className="pet-hover-heading">
             <span aria-hidden />
@@ -632,10 +647,35 @@ export const PetCompanionWindow = () => {
     let disposed = false;
     let unlistenState: (() => void) | undefined;
     let unlistenPacks: (() => void) | undefined;
+    let syncRetryTimer: number | undefined;
+    let syncRequestCount = 0;
+    let receivedState = false;
+    let receivedPacks = false;
+    const requestSync = () => {
+      if (disposed || (receivedState && receivedPacks)) {
+        window.clearInterval(syncRetryTimer);
+        syncRetryTimer = undefined;
+        return;
+      }
+      syncRequestCount += 1;
+      void getCurrentWindow().emitTo("main", "focus-pet-companion-ready", {});
+      // Avoid keeping a hidden/orphaned companion WebView alive with an
+      // unbounded timer if the main window is no longer available.
+      if (syncRequestCount >= 20) {
+        window.clearInterval(syncRetryTimer);
+        syncRetryTimer = undefined;
+      }
+    };
     void Promise.all([
-      listen<PetCompanionViewState>("focus-pet-companion-state", (event) => setState(event.payload)),
-      listen<PetPackRecord[]>("focus-pet-companion-packs", (event) => setPetPacks(event.payload)),
-    ]).then(async ([disposeState, disposePacks]) => {
+      listen<PetCompanionViewState>("focus-pet-companion-state", (event) => {
+        receivedState = true;
+        setState(event.payload);
+      }),
+      listen<PetPackRecord[]>("focus-pet-companion-packs", (event) => {
+        receivedPacks = true;
+        setPetPacks(event.payload);
+      }),
+    ]).then(([disposeState, disposePacks]) => {
       if (disposed) {
         disposeState();
         disposePacks();
@@ -643,10 +683,12 @@ export const PetCompanionWindow = () => {
       }
       unlistenState = disposeState;
       unlistenPacks = disposePacks;
-      await getCurrentWindow().emitTo("main", "focus-pet-companion-ready", {});
+      requestSync();
+      syncRetryTimer = window.setInterval(requestSync, 500);
     });
     return () => {
       disposed = true;
+      window.clearInterval(syncRetryTimer);
       unlistenState?.();
       unlistenPacks?.();
     };

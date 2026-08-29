@@ -72,7 +72,13 @@ export const redactWindowTitle = (title: string): string => {
   return capped.replace(/[A-Za-z0-9._%+-]{2,}/g, "•");
 };
 
-export const byStart = <T extends { start: string }>(items: T[]): T[] =>
-  [...items].sort((lhs, rhs) => new Date(lhs.start).getTime() - new Date(rhs.start).getTime());
+export const byStart = <T extends { start: string }>(items: T[]): T[] => {
+  for (let index = 1; index < items.length; index += 1) {
+    if (new Date(items[index - 1].start).getTime() > new Date(items[index].start).getTime()) {
+      return [...items].sort((lhs, rhs) => new Date(lhs.start).getTime() - new Date(rhs.start).getTime());
+    }
+  }
+  return items;
+};
 
 export const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);

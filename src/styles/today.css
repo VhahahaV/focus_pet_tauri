@@ -341,7 +341,7 @@
 
 .today-app-category-trigger:hover{background:var(--card-hover)}
 
-.today-app-category-options{position:absolute;z-index:20;display:grid;min-width:116px;gap:2px;padding:5px;border:1px solid var(--border-default);border-radius:10px;background:var(--card);box-shadow:var(--shadow-raised);transform-origin:top left}
+.today-app-category-options{position:fixed;z-index:80;display:grid;min-width:116px;gap:2px;padding:5px;border:1px solid var(--border-default);border-radius:10px;background:var(--card);box-shadow:var(--shadow-raised);transform-origin:top left;pointer-events:auto}
 
 .today-app-category-options[data-side="top"]{transform-origin:bottom left}
 

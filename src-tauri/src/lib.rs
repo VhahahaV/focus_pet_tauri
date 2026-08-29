@@ -195,10 +195,13 @@ fn is_native_menu_action(action: &str) -> bool {
 }
 
 #[tauri::command]
-fn sample_system_metrics(
+async fn sample_system_metrics(
     state: tauri::State<'_, SystemMonitorState>,
 ) -> Result<SystemMetricsSample, String> {
-    state.sample()
+    let sampler = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || sampler.sample())
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -377,16 +380,25 @@ async fn set_classification_rules(
     runtime: tauri::State<'_, NativeRuntimeService>,
 ) -> Result<bool, String> {
     let runtime = runtime.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || runtime.set_classification_rules(&app, rules))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.set_classification_rules(&app, rules)?;
+        // Re-sample immediately so changing the current app to entertainment
+        // is observable without waiting for the next resident five-second tick.
+        runtime.refresh_now(&app)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn native_runtime_snapshot(
+async fn native_runtime_snapshot(
     runtime: tauri::State<'_, NativeRuntimeService>,
-) -> NativeRuntimeEnvelope {
-    runtime.envelope()
+) -> Result<NativeRuntimeEnvelope, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || runtime.envelope())
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -889,8 +901,7 @@ fn sync_widget_windows(
         204.0,
         recent_rhythm_origin_x.zip(recent_rhythm_origin_y),
     )?;
-    let pet_window_width = pet_size.max((pet_size + 280.0).min(420.0));
-    let pet_window_height = pet_size + 390.0;
+    let (pet_window_width, pet_window_height) = pet_companion_window_size(pet_size);
     let requested_pet_origin = pet_origin_x.zip(pet_origin_y);
     let pet_origin = requested_pet_origin
         .filter(|(x, y)| pet_origin_is_visible(&app, *x, *y, pet_window_width, pet_window_height))
@@ -944,6 +955,15 @@ fn toggle_menu_bar_window(app: &tauri::AppHandle) {
             window.set_focus().ok();
         }
     }
+}
+
+fn pet_companion_window_size(pet_size: f64) -> (f64, f64) {
+    // Keep enough room for the compact hover controls/Codex card without
+    // making an invisible 420×540 host constrain where the pet can be placed.
+    (
+        pet_size.max((pet_size + 210.0).min(360.0)),
+        pet_size + 260.0,
+    )
 }
 
 fn default_menu_bar_origin(app: &tauri::AppHandle, width: f64, height: f64) -> Option<(f64, f64)> {
@@ -1157,8 +1177,7 @@ fn follow_pet_to_monitor(app: &tauri::AppHandle, target: &tauri::Monitor) {
         return;
     }
 
-    let width = config.size.max((config.size + 280.0).min(420.0));
-    let height = config.size + 390.0;
+    let (width, height) = pet_companion_window_size(config.size);
     let next_origin = if config.placement == "custom" {
         window.outer_position().ok().map(|position| {
             remap_pet_origin_between_monitors(
@@ -2078,7 +2097,7 @@ mod tests {
         clamp_origin_to_work_area, default_pet_origin_for_rects,
         global_logical_point_in_physical_rect, installation_snapshot_for_path,
         is_native_menu_action, is_running_from_mounted_volume_path, mapped_position,
-        normalized_position, rect_contains_origin, Rect,
+        normalized_position, pet_companion_window_size, rect_contains_origin, Rect,
     };
     use std::path::Path;
     #[cfg(target_os = "windows")]
@@ -2108,6 +2127,13 @@ mod tests {
         }
         assert!(!is_native_menu_action("delete-all-data"));
         assert!(!is_native_menu_action(""));
+    }
+
+    #[test]
+    fn pet_companion_host_tracks_pet_size_without_restoring_the_oversized_hit_area() {
+        assert_eq!(pet_companion_window_size(150.0), (360.0, 410.0));
+        assert_eq!(pet_companion_window_size(96.0), (306.0, 356.0));
+        assert_eq!(pet_companion_window_size(220.0), (360.0, 480.0));
     }
 
     #[test]

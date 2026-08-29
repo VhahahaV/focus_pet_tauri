@@ -1,9 +1,9 @@
 import { BarChart3, CalendarDays, Clock3, Keyboard, MousePointer2, Percent, SquareStack, Zap } from "lucide-react";
-import { useMemo, useState, type CSSProperties, type PointerEvent } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import { useFocusPet } from "../app/AppContext";
 import { focusStateLabels } from "../core/labels";
 import { formatCount, formatDate, formatDuration, formatPercentage } from "../core/formatters";
-import { makeActivityHistorySnapshot, makeAttentionHistorySnapshot } from "../core/timeline";
+import { makeActivityHistorySnapshot, makeAttentionHistorySnapshot, stateSegmentCountsForAttention } from "../core/timeline";
 import type { AttentionDayBucket, FocusState, StateSegment } from "../core/types";
 import { secondsBetween } from "../core/utils";
 import { Heatmap, HourlyBars, type HeatmapCell } from "./charts";
@@ -33,6 +33,30 @@ interface HourHoverState {
   x: number;
   y: number;
 }
+
+const retainedHistoryRevision = (
+  items: ReadonlyArray<{ id?: string; start: string; end: string; state?: string; category?: string }>,
+): string => {
+  const first = items[0];
+  const last = items.at(-1);
+  const lastMinute = last ? Math.floor(new Date(last.end).getTime() / 60_000) : 0;
+  return [
+    items.length,
+    first?.id ?? first?.start ?? "",
+    last?.id ?? last?.start ?? "",
+    last?.state ?? "",
+    last?.category ?? "",
+    lastMinute,
+  ].join("|");
+};
+
+const useRevisionMemo = <T,>(revision: string, compute: () => T): T => {
+  const cache = useRef<{ revision: string; value: T } | undefined>(undefined);
+  if (!cache.current || cache.current.revision !== revision) {
+    cache.current = { revision, value: compute() };
+  }
+  return cache.current.value;
+};
 
 const attentionSeconds = (bucket: Pick<AttentionDayBucket, "focusSeconds" | "distractedSeconds">): number =>
   bucket.focusSeconds + bucket.distractedSeconds;
@@ -86,6 +110,7 @@ const makeHourlyBuckets = (
   const included = includedDayKeys(bounds, skipsWeekends);
   const buckets = Array.from({ length: 24 }, (_, hour) => ({ hour, focusSeconds: 0, distractedSeconds: 0 }));
   for (const segment of segments) {
+    if (!stateSegmentCountsForAttention(segment)) continue;
     if (segment.state !== "focus" && segment.state !== "distracted") continue;
     let cursor = new Date(Math.max(new Date(segment.start).getTime(), bounds.start.getTime()));
     const end = new Date(Math.min(new Date(segment.end).getTime(), bounds.end.getTime()));
@@ -117,6 +142,7 @@ const makePeakFocusSeconds = (segments: StateSegment[], rangeDays: number, skips
   const included = includedDayKeys(bounds, skipsWeekends);
   const daily = new Map<string, number>();
   for (const segment of segments) {
+    if (!stateSegmentCountsForAttention(segment)) continue;
     if (segment.state !== "focus") continue;
     let cursor = new Date(Math.max(new Date(segment.start).getTime(), bounds.start.getTime()));
     const end = new Date(Math.min(new Date(segment.end).getTime(), bounds.end.getTime()));
@@ -224,18 +250,24 @@ export const SessionsTab = () => {
   const [heatmapScope, setHeatmapScope] = useState<HeatmapScope>("week");
   const [heatmapHover, setHeatmapHover] = useState<HeatmapHoverState | null>(null);
   const [hourHover, setHourHover] = useState<HourHoverState | null>(null);
-  const attentionHistory = useMemo(() => makeAttentionHistorySnapshot(state.stateSegments), [state.stateSegments]);
-  const history = useMemo(
+  // History views aggregate by minute/day. Recomputing months of retained
+  // records for every five-second extension of the active segment made hover,
+  // range and tab interactions stall as the store grew.
+  const stateRevision = retainedHistoryRevision(state.stateSegments);
+  const appUsageRevision = retainedHistoryRevision(state.appUsage);
+  const inputRevision = retainedHistoryRevision(state.inputActivity);
+  const attentionHistory = useRevisionMemo(stateRevision, () => makeAttentionHistorySnapshot(state.stateSegments));
+  const history = useRevisionMemo(
+    [appUsageRevision, historyRangeDays, inputRevision, skipsWeekends, stateRevision].join("|"),
     () => makeActivityHistorySnapshot(historyRangeDays, state.stateSegments, state.appUsage, state.inputActivity, new Date(), skipsWeekends),
-    [historyRangeDays, skipsWeekends, state.appUsage, state.inputActivity, state.stateSegments],
   );
-  const hourlyBuckets = useMemo(
+  const hourlyBuckets = useRevisionMemo(
+    [history.dayCount, historyRangeDays, skipsWeekends, stateRevision].join("|"),
     () => makeHourlyBuckets(state.stateSegments, historyRangeDays, skipsWeekends, history.dayCount),
-    [history.dayCount, historyRangeDays, skipsWeekends, state.stateSegments],
   );
-  const peakFocusSeconds = useMemo(
+  const peakFocusSeconds = useRevisionMemo(
+    [historyRangeDays, skipsWeekends, stateRevision].join("|"),
     () => makePeakFocusSeconds(state.stateSegments, historyRangeDays, skipsWeekends),
-    [historyRangeDays, skipsWeekends, state.stateSegments],
   );
   const maxHeatmapAttentionSeconds = useMemo(
     () => Math.max(

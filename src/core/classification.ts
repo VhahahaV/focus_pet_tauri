@@ -1,4 +1,9 @@
-import type { ActivityCategory, ClassificationCatalogEntry, ClassificationRule } from "./types";
+import type {
+  ActivityCategory,
+  ActivityClassificationSource,
+  ClassificationCatalogEntry,
+  ClassificationRule,
+} from "./types";
 import { makeID } from "./utils";
 
 const fallbackRules: ClassificationRule[] = [
@@ -47,12 +52,22 @@ export const userRulesFromStored = (
   return storedRules.filter((rule) => !builtInKeys.has(ruleKey(rule)) && rule.category !== "neutral");
 };
 
+export interface ActivityClassification {
+  category: ActivityCategory;
+  source: ActivityClassificationSource;
+  ruleID?: string;
+}
+
 export class ActivityClassifier {
   readonly catalogEntries: ClassificationCatalogEntry[];
   readonly defaultRules: ClassificationRule[];
   readonly rules: ClassificationRule[];
+  private readonly userRuleIDs: Set<string>;
+  private readonly catalogBacked: boolean;
 
   constructor(userRules: ClassificationRule[] = [], catalogEntries: ClassificationCatalogEntry[] = []) {
+    this.userRuleIDs = new Set(userRules.map((rule) => rule.id));
+    this.catalogBacked = catalogEntries.length > 0;
     this.catalogEntries = catalogEntries;
     this.defaultRules = catalogEntries.length > 0 ? rulesFromCatalog(catalogEntries) : fallbackRules;
     const elevatedUserRules = userRules.map((rule, offset) => ({
@@ -68,6 +83,10 @@ export class ActivityClassifier {
   }
 
   classify(appName: string, bundleID?: string, windowTitle?: string): ActivityCategory {
+    return this.classifyDetailed(appName, bundleID, windowTitle).category;
+  }
+
+  classifyDetailed(appName: string, bundleID?: string, windowTitle?: string): ActivityClassification {
     const name = appName.toLowerCase();
     const bundle = bundleID?.toLowerCase() ?? "";
     const title = windowTitle?.toLowerCase() ?? "";
@@ -79,9 +98,19 @@ export class ActivityClassifier {
           : rule.matchKind === "bundleID"
             ? bundle.includes(pattern)
             : title.includes(pattern);
-      if (matches) return rule.category;
+      if (matches) {
+        return {
+          category: rule.category,
+          source: this.userRuleIDs.has(rule.id)
+            ? "userRule"
+            : this.catalogBacked
+              ? "catalogRule"
+              : "fallbackRule",
+          ruleID: rule.id,
+        };
+      }
     }
-    return "ignore";
+    return { category: "ignore", source: "unmatched" };
   }
 }
 

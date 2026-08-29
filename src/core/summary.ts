@@ -10,7 +10,7 @@ import type {
   NudgeEvent,
   StateSegment,
 } from "./types";
-import { appUsageDurationSeconds, stateDurationSeconds } from "./timeline";
+import { appUsageDurationSeconds, stateDurationSeconds, stateSegmentCountsForAttention } from "./timeline";
 import { dayBounds, dateKey, overlapSeconds, overlaps } from "./utils";
 
 const hiddenSystemUsage = (appName: string, bundleID?: string): boolean => {
@@ -29,6 +29,7 @@ const normalizedCategory = (category: ActivityCategory): ActivityCategory => (ca
 
 const clippedStateSegments = (segments: StateSegment[], bounds: { start: Date; end: Date }): StateSegment[] =>
   segments.flatMap((segment) => {
+    if (!stateSegmentCountsForAttention(segment)) return [];
     const start = new Date(Math.max(new Date(segment.start).getTime(), bounds.start.getTime()));
     const end = new Date(Math.min(new Date(segment.end).getTime(), bounds.end.getTime()));
     if (end <= start) return [];

@@ -76,6 +76,7 @@ export const stateReasonLabels: Record<StateReason, string> = {
   inputIdleDistracted: "输入空闲",
   activeFocusSession: "专注会话",
   workCategory: "工作分类",
+  explicitEntertainmentRule: "手动设为娱乐",
   entertainmentStable: "娱乐内容持续",
   entertainmentGrace: "娱乐宽限",
   frequentSwitching: "频繁切换",
