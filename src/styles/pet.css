@@ -49,7 +49,7 @@
 
 @media (max-width:560px){.random-action-panel{grid-template-columns:1fr}}
 
-.pet-stage{min-height:250px;position:relative;display:grid;place-items:center;border-radius:var(--radius-panel);border:1px solid var(--border-soft);background:linear-gradient(180deg,rgba(255,255,255,0.45),rgba(255,255,255,0.85)),url(../assets/focus-pet-dashboard.png)center/cover;overflow:hidden}
+.pet-stage{min-height:250px;position:relative;display:grid;place-items:center;border-radius:var(--radius-panel);border:1px solid var(--border-soft);background:linear-gradient(180deg,rgba(255,255,255,0.45),rgba(255,255,255,0.85)),url(../assets/focus-pet-dashboard.webp)center/cover;overflow:hidden}
 
 .pet-pack-card{position:relative}
 

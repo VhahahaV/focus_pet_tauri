@@ -1,94 +1,107 @@
-# Focus Pet Tauri
+# Focus Pet
 
-Focus Pet has been migrated into a Tauri + React architecture. The new app keeps the original product split:
+**A local-first cross-platform desktop focus companion with a responsive virtual pet.**
 
-- `src/core`: state model, classifier, privacy sanitizing, state engine, sessions, nudges, timelines, summaries.
-- `src/store`: browser/Tauri storage bridge and redacted export helpers.
-- `src/resources`: `pet.json` parsing, source-action resolution, validation, and preview records.
-- `src/app`: runtime orchestration, sampling ticks, persistence, user actions, native menu action routing, widget sync, and companion-pet action selection.
-- `src/components`: React dashboard, history, pet, settings, widget views, and floating companion UI.
-- `src-tauri/src`: native command layer, local JSON store, pet-pack importer, notification bridge, widget windows, and platform adapters.
-- `local-pet-packs`: migrated local pet-pack archives from the Swift app, kept as importer verification fixtures rather than bundled defaults.
-- `docs/original-swift`: original Swift-era design, resource, and release notes preserved for migration traceability.
+Focus Pet turns foreground-app context, input rhythm, idle time, and switching frequency into four understandable states: **focused**, **distracted**, **on break**, and **away**. A floating pet, lightweight reminders, desktop cards, and readable history all respond to the same local state engine.
 
-## Platform Modules
+[Project page](https://vhahahav.github.io/projects/focus-pet/) · [Previous Swift + SwiftUI implementation](https://github.com/VhahahaV/focus_pet) · [Platform validation](docs/target-machine-validation.md) · [Implementation notes](docs/IMPLEMENTATION-NOTES.md)
 
-The Tauri backend exposes one stable command surface to React, with OS-specific implementations under:
+![Focus Pet dashboard showing attention history, heatmaps, app activity, and focus rhythm](src/assets/focus-pet-dashboard.webp)
 
-- `src-tauri/src/native/macos.rs`
-- `src-tauri/src/native/windows.rs`
-- `src-tauri/src/native/linux.rs`
+## What it does
 
-Current commands:
+- **Recognizes attention rhythm locally.** Focus Pet combines app context, idle time, input activity, and app-switching signals without requiring users to maintain task forms.
+- **Keeps data on the device.** Timeline records, statistics, settings, and imported pet packs live in per-user application data outside the app bundle.
+- **Separates state from expression.** The state engine produces semantic pet intents; each validated pet pack maps those intents to its own frames, audio, and actions.
+- **Connects one state model to multiple surfaces.** The dashboard, history, tray/menu, notifications, status cards, and floating companion share the same runtime state.
 
-- `load_snapshot`, `save_snapshot`, `native_runtime_snapshot`
-- `sample_activity`, `sample_system_metrics`
-- `choose_and_import_pet_pack`, `import_pet_pack_from_path`
-- `list_pet_packs`, `delete_pet_pack`
-- `deliver_notification`
-- `sync_widget_windows`
-- Codex lifecycle, SSH discovery, and active-session streaming commands
+## Product highlights
 
-The macOS adapter reads the frontmost app/window through System Events, reads HID idle time through `ioreg`, detects lock state with a read-only session check, and uses CoreGraphics idle-event timestamps as a keyboard/pointer fallback. Windows calls Win32 directly for foreground-window metadata, idle time, lock state, and low-level keyboard/pointer hooks; PowerShell is retained only for the notification delivery fallback. Linux uses X11/KDE-friendly command adapters (`xdotool`, `xprop`, `xprintidle`, `qdbus`) with a clear Wayland-limited status when compositor restrictions apply. A shared native tracker computes app-switch deltas and conservative idle-based input fallback counts when a platform cannot provide direct events.
+| Area | Evidence in the repository |
+| --- | --- |
+| Cross-platform desktop shell | Tauri 2, React, TypeScript, and Rust with dedicated macOS, Windows, and Linux adapters |
+| Native activity sampling | Foreground app, idle/lock state, input counters, system metrics, and platform-specific fallbacks |
+| Pet-pack system | Folder, manifest, single-archive, and collection-archive import with schema, frame, preview, license-metadata, and action-reference validation |
+| Desktop integration | Tray/menu actions, system notifications, movable status-card windows, and a multi-display companion pet |
+| Local data safety | Schema metadata, legacy migration, unsupported-version backup/write blocking, redacted export, and scoped data deletion |
+| Verification | Vitest, Rust tests, Playwright desktop/mobile flows, native adapter probes, contract audits, and bundle checks |
 
-Pet packs can be imported through the native picker or by path from a pack folder, `pet.json`, a single-pack `.zip`, or a collection `.zip` containing multiple packs. The importer extracts archives into a temporary directory, validates every `pet.json`, action folder, PNG frame set, `frameCount`, preview, license, distribution, and idle source-action reference before copying anything into local app data, then returns normalized records and per-action frame/audio assets to React. The app scans the local `PetPacks` library on launch, restores imported packs into the picker, plays mapped source-action frames in the floating pet window, supports hover status/actions, hides built-in/preview packs by id, physically deletes user-imported packs when available, and rotates playable source actions at the configured random-action interval. Reimporting a pack removes the matching hidden id, matching the original recovery behavior.
+## Architecture
 
-Desktop status cards and the companion pet are real Tauri webview windows (`widget-current-status`, `widget-recent-rhythm`, `widget-pet-companion`) that render lightweight React views and receive state from the main runtime. The status cards respect the original fixed/free movement mode, report their physical window position back to the main runtime when freely moved, and restore those positions on the next sync. The companion pet can be placed in screen corners, near the OS Dock/taskbar/panel using each monitor's work area, or dragged into a custom position. System notifications are bridged through per-OS native commands and can be verified from the permissions panel with a test notification.
+```mermaid
+flowchart LR
+  A[Native platform signals] --> B[Recognition and state engine]
+  B --> C[Focused / Distracted / Break / Away]
+  C --> D[PetIntent]
+  D --> E[Floating pet and bubbles]
+  C --> F[Dashboard and history]
+  C --> G[Widgets, tray, and notifications]
+  F --> H[Local versioned store]
+  G --> H
+```
 
-The migrated settings surface includes recognition sensitivity presets, recognition thresholds, recognition diagnostics refresh/reset controls, focus target minutes, break duration, auto-start break, reminder channels/thresholds/cooldowns/pause duration, privacy/data export/delete controls, logging enablement, permissions refresh/test-notification/log diagnostics, desktop card visibility/rhythm window/movement mode, and pet display/audio/hover/random-action/placement controls. Activity history is maintained indefinitely by default.
+The frontend and native backend meet through a stable Tauri command surface. Platform differences stay under `src-tauri/src/native/`; product logic remains testable in `src/core`, `src/app`, and `src/store`.
 
-The history page now mirrors the original attention-history intent with weekly/monthly attention heatmaps, 3/7/15/30/60 day range switching, optional weekend exclusion, daily average focus/distracted/break/away time, app active time, input active time, and top-app ranking computed from clipped timeline records.
+## Platform status
 
-The runtime also backfills long sampling gaps as away time, so sleep, lock, and extended inactivity do not get counted as focus time. When welcome-back nudges are enabled, a long away backfill can emit the same `welcomeBack` pet intent and reminder used by the original wake/unlock flow.
+| Platform | Automated and observed evidence | Remaining sign-off |
+| --- | --- | --- |
+| macOS | Automated checks, native probes, universal app/DMG build, bundle audit, and launch smoke have been run | Developer ID signing, notarization, and final distribution policy |
+| Windows | Direct adapter tests, release build, canonical data directory, pet-pack import, and NSIS install/uninstall/reinstall smoke were observed on Windows x86_64 | Complete tray/notification/long-running monitoring/pet-action smoke and elevated MSI install |
+| Linux | Source adapter, helper preflight, and CI build/test path are maintained with an explicit Wayland-limited state | Real target-desktop validation and AppImage/deb/rpm launch smoke |
 
-User data is stored outside the app bundle under the per-user Focus Pet application-support directory (`Focus Pet` on each OS). The store writes schema metadata, migrates legacy roots such as `FocusPetMVP` when the current root is empty, backs up data that is missing/using an unsupported schema, and blocks writes for unknown future schemas so older builds do not damage newer data.
-
-The desktop launch flow also preserves the original installation safety notices. When the app is opened directly from a mounted macOS DMG, the dashboard shows a warning to move it into Applications first; when an installed build is launched for the first time or after an update, it shows the ready/update notice once per build.
-
-The desktop shell also installs a native menu/tray entry. The tray can reopen the main dashboard, jump to pet/settings tabs, toggle all desktop status cards, show or hide the floating pet, pause reminders, start/end a break, and quit. Closing the main window hides it instead of terminating the app, matching the original always-available menu bar behavior.
-
-See `docs/platform-adapters.md` for the per-OS sampling design and validation boundary. Use `docs/target-machine-validation.md` when recording real macOS, Windows, and Linux desktop verification evidence.
+CI proves non-interactive build and test behavior. It does **not** replace visible desktop validation for permissions, notifications, tray interaction, widget windows, pet movement, or platform installers. See [Target Machine Validation](docs/target-machine-validation.md) and the [Windows handoff](docs/windows-compatibility-handoff-2026-07-18.md).
 
 ## Development
 
+Requirements:
+
+- Node.js 24
+- Rust stable (minimum declared Rust version: 1.77.2)
+- Tauri 2 platform dependencies for the current OS
+
 ```bash
-npm install
-npm run build
-npm test
-npm run test:ui
-npm run verify:native
-npm run verify:native:notify
-npm run verify:tauri-contract
-npm run verify:migration
-npm run verify:preflight
-npm run verify:platform
-cargo check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri:build
+npm ci
 npm run tauri:dev
 ```
 
-## Verification
+Core verification:
 
-Verified in this workspace:
+```bash
+npm run build
+npm test
+npm run lint
+npm run test:ui
+cargo check --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
+```
 
-- `npm run build`
-- `npm test`
-- `cargo check` in `src-tauri`
-- `npm run test:ui`
-- `cargo test` in `src-tauri`
-- `npm run tauri:build -- --target universal-apple-darwin --bundles dmg`
-- macOS DMG mount, universal-binary, embedded-theme, and code-signature audit
+Platform verification:
 
-The Vitest suite covers core behavior: classification, recognition sensitivity presets, recognition exception reset, state engine, timeline recording, range-based history snapshots, attention heatmap buckets, long-gap away backfill, welcome-back nudges, daily summary, sessions, nudges, indefinite history persistence, active Codex session rendering, Markdown, pet-pack records, companion animation, native menu actions, widget sync, and pet-pack validation. The Rust suite verifies frontend/backend command serialization contracts, native app-switch/input fallback deltas, snapshot shape, store schema metadata, legacy store migration, unsupported-schema backup/write blocking, folder and zip pet-pack import validation, frame-asset discovery, multi-pack archive import, launch-time library listing, notification command exit-status handling, installation-path notice detection, Codex/SSH streaming, and companion-pet cross-display placement. The Playwright suite verifies the built React dashboard on desktop and mobile viewports, including tab navigation, history rendering, focus sessions, recognition/reminder/desktop movement/pet controls, theme persistence, retired-settings removal, and widget views.
+```bash
+npm run verify:preflight
+npm run verify:native
+npm run verify:tauri-contract
+npm run verify:migration
+npm run verify:platform
+```
 
-For target-machine validation on macOS, Windows, and Linux, run `npm run verify:preflight` first to check native helper availability and print the OS-specific smoke checklist. Run `npm run verify:native` to exercise the native adapter probes for the current OS without showing a notification; on a visible desktop session run `npm run verify:native:notify` to also verify notification delivery. Then run `npm run verify:platform`; it executes the automated build/test/bundle sequence and prints the same manual native smoke checklist for notifications, foreground-app sampling, widget windows, tray/menu actions, pet-pack import, persistence, and Codex session discovery.
+`npm run verify:native:notify` displays a real system notification and should only be used in a visible desktop session.
 
-The repository also includes `.github/workflows/verify-platforms.yml`, which runs the same automated verification on macOS, Windows, and Linux runners and uploads the generated desktop bundles. Linux runners install the WebKitGTK, app-indicator, xdo, packaging, desktop opener, notification, and picker helpers required for Tauri and Focus Pet native adapters.
+## Repository map
 
-`npm run verify:migration` audits the migrated Swift-era module map, classification catalog, image assets, original docs, local pet-pack archives, Tauri command surface, platform adapter split, and verification entry points. When the original `/Users/vhahahav/Code/focus_pet` project is available, it also compares catalog, image, and pet-pack archive hashes against the source project.
+- `src/core` — state model, classification, sessions, nudges, timelines, and summaries.
+- `src/app` — runtime orchestration, persistence, user actions, native menu routing, widgets, and companion selection.
+- `src/store` — browser/Tauri storage bridge and redacted export helpers.
+- `src/resources` — pet-pack parsing, validation, source-action resolution, and preview records.
+- `src/components` — dashboard, history, pet, settings, widgets, and companion UI.
+- `src-tauri/src` — native commands, local JSON storage, import, notifications, windows, and platform adapters.
+- `docs` — platform boundaries, migration evidence, validation checklists, and the preserved implementation narrative.
 
-Current macOS release artifacts:
+## Release and licensing status
 
-- `release/Focus-Pet-0.1.1-macos-universal-20260804.dmg`
-- `release/Focus-Pet-0.1.1-macos-universal-20260804.dmg.sha256`
+- Version `0.1.1` macOS universal DMG artifacts have been built and smoke-tested in the original workspace, but no public GitHub Release is currently published.
+- The repository is public source; a code license has not yet been selected.
+- Third-party pet resources are importer fixtures or local validation material and are not automatically covered by a future code license. Their distribution terms must remain separate.
+
+Do not redistribute third-party character assets unless their upstream license or author permission explicitly allows it.

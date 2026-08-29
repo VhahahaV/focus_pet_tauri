@@ -185,6 +185,7 @@ test("Today summary remains readable when the main window is narrowed", async ({
 });
 
 test("timeline density scales with its window and hover colors follow every theme", async ({ page }) => {
+  test.setTimeout(process.env.CI ? 90_000 : 30_000);
   await loadBuiltApp(page);
   const dashboardNav = page.getByRole("navigation", { name: "Dashboard" });
   const barDensity = async () => page.locator(".input-stack").first().evaluate((bar) =>
@@ -204,6 +205,11 @@ test("timeline density scales with its window and hover colors follow every them
   await expect(firstAppCategory.getByRole("button")).toHaveCount(1);
   await firstAppCategory.getByRole("button").click();
   const categoryOptions = page.locator(".today-app-category-options");
+  await expect(categoryOptions).toBeVisible({ timeout: process.env.CI ? 15_000 : 5_000 });
+  await page.locator(".today-app-usage-list").evaluate((list) => {
+    list.scrollTop = 1;
+    list.dispatchEvent(new Event("scroll"));
+  });
   await expect(categoryOptions).toBeVisible();
   const categoryLayer = await categoryOptions.evaluate((options) => ({
     parentClass: options.parentElement?.className,

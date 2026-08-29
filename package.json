@@ -2,6 +2,15 @@
   "name": "focus_pet_tauri",
   "private": true,
   "version": "0.1.1",
+  "description": "A local-first cross-platform desktop focus companion with a responsive virtual pet.",
+  "homepage": "https://vhahahav.github.io/projects/focus-pet/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VhahahaV/focus_pet_tauri.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -462,7 +462,10 @@ const TodayInsightsGrid = ({
             onScroll={(event) => {
               if (event.currentTarget !== event.target) return;
               const nextScrollTop = event.currentTarget.scrollTop;
-              if (Math.abs(nextScrollTop - appListScrollTopRef.current) > 0.5) {
+              // Opening the anchored category menu can move the list by one
+              // layout pixel on WebKit/Chromium. Ignore that rounding jitter,
+              // but still dismiss the menu for an intentional list scroll.
+              if (Math.abs(nextScrollTop - appListScrollTopRef.current) > 4) {
                 setOpenCategoryMenu(null);
               }
               appListScrollTopRef.current = nextScrollTop;
