@@ -1,6 +1,5 @@
 use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +47,22 @@ mod unsupported;
 mod windows;
 
 pub fn sample_activity() -> NativeActivitySample {
-    enrich_sample(platform::sample_activity())
+    let sample = enrich_sample(platform::sample_activity());
+    *latest_sample().lock().unwrap_or_else(|e| e.into_inner()) = Some(sample.clone());
+    sample
+}
+
+fn latest_sample() -> &'static Mutex<Option<NativeActivitySample>> {
+    static LATEST: OnceLock<Mutex<Option<NativeActivitySample>>> = OnceLock::new();
+    LATEST.get_or_init(|| Mutex::new(None))
+}
+
+/// Read the last resident sample; diagnostics must never drain the input tap.
+pub fn activity_snapshot() -> Option<NativeActivitySample> {
+    latest_sample()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 pub fn frontmost_window_center() -> Option<(f64, f64)> {
@@ -98,10 +112,7 @@ fn enrich_sample(raw: RawActivitySample) -> NativeActivitySample {
     let mut tracker = activity_tracker()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let allow_idle_input_fallback =
-        raw.sample_quality.contains("fallback") || raw.input_monitoring_status.contains("fallback");
-    let (switch_count, keyboard_count, pointer_count) =
-        tracker.update(&raw, allow_idle_input_fallback);
+    let switch_count = tracker.update(&raw);
     NativeActivitySample {
         timestamp: raw.timestamp,
         platform: raw.platform,
@@ -111,8 +122,8 @@ fn enrich_sample(raw: RawActivitySample) -> NativeActivitySample {
         window_title: raw.window_title,
         idle_seconds: raw.idle_seconds,
         input_monitoring_status: raw.input_monitoring_status,
-        keyboard_count: raw.keyboard_count.max(keyboard_count),
-        pointer_count: raw.pointer_count.max(pointer_count),
+        keyboard_count: raw.keyboard_count,
+        pointer_count: raw.pointer_count,
         switch_count: raw.switch_count.max(switch_count),
         is_system_sleeping: raw.is_system_sleeping,
         is_screen_locked: raw.is_screen_locked,
@@ -127,39 +138,17 @@ fn activity_tracker() -> &'static Mutex<ActivityDeltaTracker> {
 #[derive(Default)]
 struct ActivityDeltaTracker {
     current_identity: Option<String>,
-    last_idle_seconds: Option<f64>,
-    last_sample_at: Option<Instant>,
 }
 
 impl ActivityDeltaTracker {
-    fn update(
-        &mut self,
-        sample: &RawActivitySample,
-        allow_idle_input_fallback: bool,
-    ) -> (u32, u32, u32) {
+    fn update(&mut self, sample: &RawActivitySample) -> u32 {
         let identity = app_identity(sample);
-        let switch_count = match self.current_identity.as_deref() {
-            Some(previous) if previous != identity => 1,
-            Some(_) => 0,
-            None => 0,
-        };
+        let switched = self
+            .current_identity
+            .as_deref()
+            .is_some_and(|previous| previous != identity);
         self.current_identity = Some(identity.to_string());
-
-        let now = Instant::now();
-        let elapsed = self
-            .last_sample_at
-            .map(|last| now.saturating_duration_since(last).as_secs_f64())
-            .unwrap_or(1.0);
-        let fallback_has_input = allow_idle_input_fallback
-            && self.last_idle_seconds.is_some_and(|previous_idle| {
-                sample.idle_seconds <= previous_idle || sample.idle_seconds <= elapsed + 1.5
-            });
-        self.last_idle_seconds = Some(sample.idle_seconds.max(0.0));
-        self.last_sample_at = Some(now);
-
-        let keyboard_count = u32::from(fallback_has_input);
-        let pointer_count = u32::from(fallback_has_input);
-        (switch_count, keyboard_count, pointer_count)
+        u32::from(switched)
     }
 }
 
@@ -230,16 +219,16 @@ mod tests {
     }
 
     #[test]
-    fn activity_delta_tracker_counts_app_switches_and_idle_fallback_input() {
+    fn activity_delta_tracker_counts_only_app_switches() {
         let mut tracker = ActivityDeltaTracker::default();
         let first = raw_sample("Code", Some("com.microsoft.VSCode"), 12.0);
-        assert_eq!(tracker.update(&first, true), (0, 0, 0));
+        assert_eq!(tracker.update(&first), 0);
 
         let second = raw_sample("Code", Some("com.microsoft.VSCode"), 0.2);
-        assert_eq!(tracker.update(&second, true), (0, 1, 1));
+        assert_eq!(tracker.update(&second), 0);
 
         let third = raw_sample("Browser", Some("com.apple.Safari"), 0.5);
-        assert_eq!(tracker.update(&third, true).0, 1);
+        assert_eq!(tracker.update(&third), 1);
         assert_eq!(app_identity(&third), "com.apple.Safari");
     }
 
@@ -247,10 +236,10 @@ mod tests {
     fn activity_delta_tracker_does_not_invent_input_when_native_hooks_are_available() {
         let mut tracker = ActivityDeltaTracker::default();
         let first = raw_sample("Code", Some("com.microsoft.VSCode"), 12.0);
-        assert_eq!(tracker.update(&first, false), (0, 0, 0));
+        assert_eq!(tracker.update(&first), 0);
 
         let recent_input = raw_sample("Code", Some("com.microsoft.VSCode"), 0.1);
-        assert_eq!(tracker.update(&recent_input, false), (0, 0, 0));
+        assert_eq!(tracker.update(&recent_input), 0);
     }
 
     #[cfg(unix)]

@@ -1,4 +1,4 @@
-use super::{now_iso, run_text_command, RawActivitySample};
+use super::{now_iso, RawActivitySample};
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
@@ -13,7 +13,6 @@ use core_graphics::window::{
     kCGWindowName, kCGWindowOwnerPID,
 };
 use std::ffi::c_void;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,11 +24,7 @@ static INPUT_MONITOR_TAP: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut(
 static INPUT_MONITOR_LAST_ATTEMPT_MS: AtomicU64 = AtomicU64::new(0);
 static KEYBOARD_COUNT: AtomicU32 = AtomicU32::new(0);
 static POINTER_COUNT: AtomicU32 = AtomicU32::new(0);
-static LAST_POINTER_MOTION_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_POINTER_SCROLL_MS: AtomicU64 = AtomicU64::new(0);
-static LAST_POINTER_DRAG_MS: AtomicU64 = AtomicU64::new(0);
-
-const POINTER_GESTURE_IDLE_MS: u64 = 650;
+static LAST_MODIFIER_FLAGS: AtomicU64 = AtomicU64::new(0);
 
 struct FrontmostApplication {
     app_name: String,
@@ -41,8 +36,8 @@ pub fn sample_activity() -> RawActivitySample {
     ensure_input_monitor();
     let screen_locked = screen_is_locked();
     if screen_locked {
-        let (tap_keyboard_count, tap_pointer_count) = drain_input_counts();
-        let (fallback_keyboard_count, fallback_pointer_count) = input_fallback_counts(1.5);
+        // Discard lock-screen input; never attribute passwords to activity.
+        drain_input_counts();
         return RawActivitySample {
             timestamp: now_iso(),
             platform: "macos".to_string(),
@@ -57,8 +52,8 @@ pub fn sample_activity() -> RawActivitySample {
                 "needs-input-monitoring-permission"
             }
             .to_string(),
-            keyboard_count: tap_keyboard_count.max(fallback_keyboard_count),
-            pointer_count: tap_pointer_count.max(fallback_pointer_count),
+            keyboard_count: 0,
+            pointer_count: 0,
             switch_count: 0,
             is_system_sleeping: false,
             is_screen_locked: true,
@@ -66,87 +61,35 @@ pub fn sample_activity() -> RawActivitySample {
     }
 
     let workspace_frontmost = frontmost_application_from_workspace();
-    let mut app_name = workspace_frontmost
+    let app_name = workspace_frontmost
         .as_ref()
         .map(|snapshot| snapshot.app_name.clone())
         .unwrap_or_else(|| "Unknown".to_string());
-    let mut bundle_id = workspace_frontmost
+    let bundle_id = workspace_frontmost
         .as_ref()
         .and_then(|snapshot| snapshot.bundle_id.clone());
     let mut window_title = workspace_frontmost
         .as_ref()
         .and_then(|snapshot| front_window_title_for_pid(snapshot.process_id));
-    let mut status = if workspace_frontmost.is_some() {
+    let status = if workspace_frontmost.is_some() {
         "available".to_string()
     } else {
         "frontmost-unavailable".to_string()
     };
 
-    if workspace_frontmost.is_none() || bundle_id.is_none() || window_title.is_none() {
-        let script = r#"tell application "System Events"
-set frontApps to application processes whose frontmost is true
-if (count of frontApps) is 0 then
-  return "__NO_FRONTMOST_APP__"
-end if
-set frontApp to item 1 of frontApps
-set appName to ""
-set bundleID to ""
-set windowTitle to ""
-try
-  set appName to name of frontApp
-end try
-try
-  set bundleID to bundle identifier of frontApp
-end try
-try
-  set windowTitle to name of front window of frontApp
-end try
-return appName & linefeed & bundleID & linefeed & windowTitle
-end tell"#;
-        let output = Command::new("osascript").arg("-e").arg(script).output();
-        if let Ok(output) = output {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                if text.trim() == "__NO_FRONTMOST_APP__" {
-                    if workspace_frontmost.is_none() {
-                        status = "frontmost-unavailable".to_string();
-                        app_name = "No Frontmost App".to_string();
-                    }
-                } else {
-                    let mut lines = text.lines();
-                    let script_app_name = lines.next().and_then(normalized_apple_script_value);
-                    let script_bundle_id = lines.next().and_then(normalized_apple_script_value);
-                    let script_window_title = lines.next().and_then(normalized_apple_script_value);
-                    if workspace_frontmost.is_none() {
-                        app_name = script_app_name.unwrap_or_else(|| "Unknown".to_string());
-                        bundle_id = script_bundle_id;
-                        status = "available".to_string();
-                    } else if bundle_id.is_none() {
-                        bundle_id = script_bundle_id;
-                    }
-                    if window_title.is_none() {
-                        window_title = script_window_title;
-                    }
-                }
-            } else if workspace_frontmost.is_none() {
-                status = "needs-accessibility-permission".to_string();
-            }
-        } else if workspace_frontmost.is_none() {
-            status = "osascript-unavailable".to_string();
-        }
+    // Window titles are optional. Query accessibility directly without spawning
+    // an AppleScript process (or triggering automation prompts) on every sample.
+    if window_title.is_none() {
+        window_title = workspace_frontmost
+            .as_ref()
+            .and_then(|app| accessible_window_title(app.process_id));
     }
-
-    let (tap_keyboard_count, tap_pointer_count) = drain_input_counts();
-    let (fallback_keyboard_count, fallback_pointer_count) = input_fallback_counts(1.5);
-    let keyboard_count = tap_keyboard_count.max(fallback_keyboard_count);
-    let pointer_count = tap_pointer_count.max(fallback_pointer_count);
-    let input_status = match (
-        status.as_str(),
-        INPUT_MONITOR_AVAILABLE.load(Ordering::Relaxed),
-    ) {
-        ("available", true) => "available",
-        ("available", false) => "needs-input-monitoring-permission",
-        _ => status.as_str(),
+    let (keyboard_count, pointer_count) = drain_input_counts();
+    let available = INPUT_MONITOR_AVAILABLE.load(Ordering::Acquire);
+    let input_status = if available {
+        "available"
+    } else {
+        "needs-input-monitoring-permission"
     };
     RawActivitySample {
         timestamp: now_iso(),
@@ -155,7 +98,7 @@ end tell"#;
             if INPUT_MONITOR_AVAILABLE.load(Ordering::Relaxed) {
                 "frontmost-app-window-cg-event-tap".to_string()
             } else {
-                "frontmost-app-window-idle-input-fallback".to_string()
+                "frontmost-app-input-unavailable".to_string()
             }
         } else {
             "permission-limited".to_string()
@@ -173,13 +116,47 @@ end tell"#;
     }
 }
 
-fn normalized_apple_script_value(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("missing value") {
-        None
-    } else {
-        Some(trimmed.to_string())
+fn accessible_window_title(process_id: i32) -> Option<String> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return None;
     }
+    let app = unsafe { AXUIElementCreateApplication(process_id) };
+    if app.is_null() {
+        return None;
+    }
+    let app: CFType = unsafe { TCFType::wrap_under_create_rule(app) };
+    let mut window = std::ptr::null();
+    let focused = CFString::from_static_string("AXFocusedWindow");
+    if unsafe {
+        AXUIElementCopyAttributeValue(
+            app.as_CFTypeRef(),
+            focused.as_concrete_TypeRef(),
+            &mut window,
+        )
+    } != 0
+        || window.is_null()
+    {
+        return None;
+    }
+    let window: CFType = unsafe { TCFType::wrap_under_create_rule(window) };
+    let title_key = CFString::from_static_string("AXTitle");
+    let mut title = std::ptr::null();
+    if unsafe {
+        AXUIElementCopyAttributeValue(
+            window.as_CFTypeRef(),
+            title_key.as_concrete_TypeRef(),
+            &mut title,
+        )
+    } != 0
+        || title.is_null()
+    {
+        return None;
+    }
+    let title: CFType = unsafe { TCFType::wrap_under_create_rule(title) };
+    title
+        .downcast::<CFString>()
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
 }
 
 fn frontmost_application_from_workspace() -> Option<FrontmostApplication> {
@@ -220,7 +197,10 @@ fn front_window_title_for_pid(process_id: i32) -> Option<String> {
     let descriptions = create_description_from_array(window_ids)?;
 
     for window in descriptions.iter() {
-        let owner_pid = cf_number_value(&window, unsafe { kCGWindowOwnerPID })?;
+        let owner_pid = match cf_number_value(&window, unsafe { kCGWindowOwnerPID }) {
+            Some(pid) => pid,
+            None => continue,
+        };
         let layer = cf_number_value(&window, unsafe { kCGWindowLayer }).unwrap_or_default();
         if owner_pid as i32 != process_id || layer != 0 {
             continue;
@@ -294,9 +274,14 @@ fn cf_string_value(
 }
 
 fn ensure_input_monitor() {
-    if INPUT_MONITOR_AVAILABLE.load(Ordering::Acquire)
-        && !INPUT_MONITOR_TAP.load(Ordering::Acquire).is_null()
-    {
+    let tap = INPUT_MONITOR_TAP.load(Ordering::Acquire);
+    if !tap.is_null() {
+        unsafe {
+            if !CGEventTapIsEnabled(tap) {
+                CGEventTapEnable(tap, true);
+            }
+            INPUT_MONITOR_AVAILABLE.store(CGEventTapIsEnabled(tap), Ordering::Release);
+        }
         return;
     }
     let now = now_millis();
@@ -319,11 +304,6 @@ fn ensure_input_monitor() {
         CGEventType::LeftMouseDown,
         CGEventType::RightMouseDown,
         CGEventType::OtherMouseDown,
-        CGEventType::MouseMoved,
-        CGEventType::LeftMouseDragged,
-        CGEventType::RightMouseDragged,
-        CGEventType::OtherMouseDragged,
-        CGEventType::ScrollWheel,
     ];
     let mask = events.iter().fold(0_u64, |value, event_type| {
         value | (1_u64 << (*event_type as u32))
@@ -344,13 +324,18 @@ fn ensure_input_monitor() {
     }
     let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0) };
     if source.is_null() {
-        unsafe { CFMachPortInvalidate(tap) };
+        unsafe {
+            CFMachPortInvalidate(tap);
+            CFRelease(tap)
+        };
         INPUT_MONITOR_AVAILABLE.store(false, Ordering::Release);
         return;
     }
+    LAST_MODIFIER_FLAGS.store(unsafe { CGEventSourceFlagsState(1) }, Ordering::Relaxed);
     unsafe {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
         CGEventTapEnable(tap, true);
+        CFRelease(source);
     }
     INPUT_MONITOR_TAP.store(tap, Ordering::Release);
     INPUT_MONITOR_AVAILABLE.store(true, Ordering::Release);
@@ -381,74 +366,60 @@ extern "C" fn input_event_callback(
         }
         return event;
     }
-    match event_type {
-        value
-            if should_count_keyboard_event(
-                value,
-                value == CGEventType::KeyDown as u32 && keyboard_event_is_autorepeat(event),
-            ) =>
-        {
-            KEYBOARD_COUNT.fetch_add(1, Ordering::Relaxed);
+    // Quartz events posted by automation have a source PID. Keep these out
+    // of the physical input totals, even when posted into the HID tap.
+    if event.is_null() || !is_physical_event(event_integer_field(event, 41)) {
+        return event;
+    }
+    if event_type == CGEventType::KeyDown as u32 {
+        if event_integer_field(event, K_CG_KEYBOARD_EVENT_AUTOREPEAT) == 0 {
+            increment(&KEYBOARD_COUNT);
         }
-        value
-            if value == CGEventType::LeftMouseDown as u32
-                || value == CGEventType::RightMouseDown as u32
-                || value == CGEventType::OtherMouseDown as u32 =>
-        {
-            if should_count_pointer_down(mouse_event_click_state(event)) {
-                POINTER_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
+    } else if event_type == CGEventType::FlagsChanged as u32 {
+        let flags = unsafe { CGEventGetFlags(event) };
+        let previous = LAST_MODIFIER_FLAGS.swap(flags, Ordering::Relaxed);
+        if modifier_pressed(event_integer_field(event, 9), flags, previous) {
+            increment(&KEYBOARD_COUNT);
         }
-        value if value == CGEventType::MouseMoved as u32 => {
-            count_pointer_gesture(&LAST_POINTER_MOTION_MS);
-        }
-        value
-            if value == CGEventType::LeftMouseDragged as u32
-                || value == CGEventType::RightMouseDragged as u32
-                || value == CGEventType::OtherMouseDragged as u32 =>
-        {
-            count_pointer_gesture(&LAST_POINTER_DRAG_MS);
-        }
-        value if value == CGEventType::ScrollWheel as u32 => {
-            count_pointer_gesture(&LAST_POINTER_SCROLL_MS);
-        }
-        _ => {}
+    } else if matches!(event_type, 1 | 3 | 25) {
+        // Every button-down counts, including the second press of a double click.
+        increment(&POINTER_COUNT);
     }
     event
 }
 
-fn should_count_keyboard_event(event_type: u32, is_autorepeat: bool) -> bool {
-    if event_type == CGEventType::KeyDown as u32 {
-        return !is_autorepeat;
-    }
-    event_type == CGEventType::FlagsChanged as u32
+fn is_physical_event(source_pid: i64) -> bool {
+    source_pid == 0
 }
 
-fn should_count_pointer_down(click_state: i64) -> bool {
-    click_state <= 1
+fn increment(counter: &AtomicU32) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_add(1))
+    });
 }
 
-fn keyboard_event_is_autorepeat(event: *mut c_void) -> bool {
-    !event.is_null() && event_integer_field(event, K_CG_KEYBOARD_EVENT_AUTOREPEAT) != 0
-}
-
-fn mouse_event_click_state(event: *mut c_void) -> i64 {
-    if event.is_null() {
-        return 1;
-    }
-    event_integer_field(event, K_CG_MOUSE_EVENT_CLICK_STATE)
+fn modifier_pressed(keycode: i64, flags: u64, previous: u64) -> bool {
+    // Device-specific masks from IOKit/IOLLEvent.h distinguish the two sides.
+    // A shared Shift flag stays set when one Shift is released while the other is held.
+    let mask = match keycode {
+        59 => 0x0001,
+        56 => 0x0002,
+        60 => 0x0004,
+        55 => 0x0008,
+        54 => 0x0010,
+        58 => 0x0020,
+        61 => 0x0040,
+        62 => 0x2000,
+        63 => 0x800000,
+        // Caps Lock sends a toggle event; both on and off are physical presses.
+        57 => return (flags ^ previous) & 0x10000 != 0,
+        _ => return false,
+    };
+    flags & mask != 0 && previous & mask == 0
 }
 
 fn event_integer_field(event: *mut c_void, field: u32) -> i64 {
     unsafe { CGEventGetIntegerValueField(event, field) }
-}
-
-fn count_pointer_gesture(last_ms: &AtomicU64) {
-    let now = now_millis();
-    let previous = last_ms.swap(now, Ordering::Relaxed);
-    if previous == 0 || now.saturating_sub(previous) > POINTER_GESTURE_IDLE_MS {
-        POINTER_COUNT.fetch_add(1, Ordering::Relaxed);
-    }
 }
 
 fn now_millis() -> u64 {
@@ -459,15 +430,13 @@ fn now_millis() -> u64 {
 }
 
 fn idle_seconds() -> f64 {
-    run_text_command(
-        "sh",
-        &[
-            "-lc",
-            "ioreg -c IOHIDSystem | awk '/HIDIdleTime/ { printf \"%.3f\", $NF / 1000000000; exit }'",
-        ],
-    )
-    .and_then(|value| value.parse::<f64>().ok())
-    .unwrap_or(0.0)
+    // Hardware state: synthetic UI automation must not keep a person "active".
+    let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) };
+    if seconds.is_finite() {
+        seconds.max(0.0)
+    } else {
+        0.0
+    }
 }
 
 fn screen_is_locked() -> bool {
@@ -486,51 +455,18 @@ fn screen_is_locked() -> bool {
         }
     }
 
-    run_text_command(
-        "sh",
-        &[
-            "-lc",
-            "ioreg -n Root -d1 | grep -q 'CGSSessionScreenIsLocked.*Yes' && echo locked",
-        ],
-    )
-    .is_some()
+    false
 }
 
-fn input_fallback_counts(window_seconds: f64) -> (u32, u32) {
-    let window = window_seconds.max(0.5) + window_seconds.mul_add(0.25, 0.0).clamp(0.25, 1.5);
-    (
-        u32::from(keyboard_idle_seconds().is_some_and(|seconds| seconds <= window)),
-        u32::from(pointer_idle_seconds().is_some_and(|seconds| seconds <= window)),
-    )
-}
-
-fn keyboard_idle_seconds() -> Option<f64> {
-    seconds_since_most_recent(&[CGEventType::KeyDown, CGEventType::FlagsChanged])
-}
-
-fn pointer_idle_seconds() -> Option<f64> {
-    seconds_since_most_recent(&[
-        CGEventType::MouseMoved,
-        CGEventType::LeftMouseDown,
-        CGEventType::RightMouseDown,
-        CGEventType::OtherMouseDown,
-        CGEventType::LeftMouseDragged,
-        CGEventType::RightMouseDragged,
-        CGEventType::OtherMouseDragged,
-        CGEventType::ScrollWheel,
-    ])
-}
-
-fn seconds_since_most_recent(event_types: &[CGEventType]) -> Option<f64> {
-    event_types
-        .iter()
-        .filter_map(|event_type| seconds_since_last_event(*event_type))
-        .min_by(|left, right| left.total_cmp(right))
-}
-
-fn seconds_since_last_event(event_type: CGEventType) -> Option<f64> {
-    let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(0, event_type as u32) };
-    seconds.is_finite().then_some(seconds)
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+    fn AXUIElementCreateApplication(pid: i32) -> *const c_void;
+    fn AXUIElementCopyAttributeValue(
+        element: *const c_void,
+        attribute: CFStringRef,
+        value: *mut *const c_void,
+    ) -> i32;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -552,6 +488,9 @@ extern "C" {
     ) -> *mut c_void;
     #[allow(non_snake_case)]
     fn CGEventTapEnable(tap: *mut c_void, enable: bool);
+    fn CGEventGetFlags(event: *mut c_void) -> u64;
+    fn CGEventTapIsEnabled(tap: *mut c_void) -> bool;
+    fn CGEventSourceFlagsState(state_id: i32) -> u64;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -569,44 +508,59 @@ extern "C" {
     fn CFRunLoopAddSource(run_loop: *mut c_void, source: *mut c_void, mode: *const c_void);
     #[allow(non_snake_case)]
     fn CFMachPortInvalidate(port: *mut c_void);
+    fn CFRelease(value: *const c_void);
 }
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
 const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
-const K_CG_MOUSE_EVENT_CLICK_STATE: u32 = 1;
 const K_CG_KEYBOARD_EVENT_AUTOREPEAT: u32 = 8;
 
 #[cfg(test)]
 mod tests {
-    use super::{should_count_keyboard_event, should_count_pointer_down};
-    use core_graphics::event::CGEventType;
-
+    use super::*;
+    use foreign_types::ForeignType;
     #[test]
-    fn keyboard_event_filter_ignores_autorepeat_key_downs() {
-        assert!(should_count_keyboard_event(
-            CGEventType::KeyDown as u32,
-            false
-        ));
-        assert!(!should_count_keyboard_event(
-            CGEventType::KeyDown as u32,
-            true
-        ));
-        assert!(should_count_keyboard_event(
-            CGEventType::FlagsChanged as u32,
-            true
-        ));
-        assert!(!should_count_keyboard_event(
-            CGEventType::KeyUp as u32,
-            false
-        ));
+    fn modifier_releases_and_held_opposite_shift_do_not_count() {
+        assert!(modifier_pressed(56, 2, 0));
+        assert!(!modifier_pressed(56, 0, 2));
+        assert!(modifier_pressed(60, 6, 2));
+        assert!(!modifier_pressed(56, 4, 6));
+        assert!(!modifier_pressed(60, 0, 4));
+        assert!(modifier_pressed(57, 0x10000, 0));
+        assert!(modifier_pressed(57, 0, 0x10000));
+        assert!(!modifier_pressed(57, 0, 0));
     }
-
     #[test]
-    fn pointer_down_filter_ignores_extra_click_state_events() {
-        assert!(should_count_pointer_down(0));
-        assert!(should_count_pointer_down(1));
-        assert!(!should_count_pointer_down(2));
-        assert!(!should_count_pointer_down(3));
+    fn posted_events_do_not_count_as_physical_input() {
+        assert!(is_physical_event(0));
+        assert!(!is_physical_event(123));
+        assert!(!is_physical_event(-1));
+    }
+    #[test]
+    fn actual_callback_counts_each_click_and_excludes_repeat_motion_and_injection() {
+        // Construct events but do not post them to the user's desktop.
+        // Use the exact production callback to verify filtering and draining.
+        use core_graphics::event::EventField;
+        drain_input_counts();
+        let source = CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        let event = CGEvent::new(source).unwrap();
+        event.set_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID, 0);
+        let ptr = event.as_ptr() as *mut c_void;
+        event.set_type(CGEventType::LeftMouseDown);
+        for click in 1..=3 {
+            event.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, click);
+            input_event_callback(std::ptr::null_mut(), 1, ptr, std::ptr::null_mut());
+        }
+        input_event_callback(std::ptr::null_mut(), 5, ptr, std::ptr::null_mut());
+        input_event_callback(std::ptr::null_mut(), 22, ptr, std::ptr::null_mut());
+        event.set_type(CGEventType::KeyDown);
+        input_event_callback(std::ptr::null_mut(), 10, ptr, std::ptr::null_mut());
+        event.set_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT, 1);
+        input_event_callback(std::ptr::null_mut(), 10, ptr, std::ptr::null_mut());
+        event.set_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID, 123);
+        input_event_callback(std::ptr::null_mut(), 1, ptr, std::ptr::null_mut());
+        assert_eq!(drain_input_counts(), (1, 3));
+        assert_eq!(drain_input_counts(), (0, 0));
     }
 }

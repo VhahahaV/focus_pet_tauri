@@ -1,0 +1,596 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "0.2.1",
+  "archiveVersion": "0.2.1",
+  "packCount": 17,
+  "categories": [
+    {
+      "id": "demo",
+      "name": "应用图标演示",
+      "count": 1,
+      "filename": "FocusPet-Pets-demo-0.2.1.zip",
+      "bytes": 970656,
+      "sha256": "93e06de0d9b91aef1519e484142a13f5e0696820d079c4877570999da59fc4f3",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pets-demo-0.2.1.zip"
+    },
+    {
+      "id": "pixel",
+      "name": "像素与猫系",
+      "count": 5,
+      "filename": "FocusPet-Pets-pixel-0.2.1.zip",
+      "bytes": 20645436,
+      "sha256": "5aa51ec28a778f3431c3b45195d4fbac7169783faf0bbfcd902192afe1443f09",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pets-pixel-0.2.1.zip"
+    },
+    {
+      "id": "companions",
+      "name": "角色与萌宠",
+      "count": 3,
+      "filename": "FocusPet-Pets-companions-0.2.1.zip",
+      "bytes": 28396726,
+      "sha256": "95dd5f3e24ebdedee5c1d94635b0136210c1ad36573a2515a37a997ddf2e1b8a",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pets-companions-0.2.1.zip"
+    },
+    {
+      "id": "game-characters",
+      "name": "游戏角色",
+      "count": 8,
+      "filename": "FocusPet-Pets-game-characters-0.2.1.zip",
+      "bytes": 129081589,
+      "sha256": "011275e41a2173b0da9a42e68869e52a375e742aa31c1ec7753fdb242d40a80e",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pets-game-characters-0.2.1.zip"
+    }
+  ],
+  "packs": [
+    {
+      "id": "focus_pet_icon_demo",
+      "name": "Focus Pet Icon Demo",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "FocusPetIconDemo",
+      "category": "demo",
+      "categoryName": "应用图标演示",
+      "author": "Focus Pet",
+      "license": "original",
+      "distribution": "localOnly",
+      "sourceActions": 4,
+      "mappedActions": 12,
+      "files": 134,
+      "idlePool": [
+        "quiet_idle",
+        "grooming"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 130,
+        "actionFolderCount": 11,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": []
+      },
+      "notes": "应用图标衍生的动画演示，用于体验导入和动作映射。",
+      "filename": "FocusPet-Pet-focus_pet_icon_demo-0.2.1.zip",
+      "bytes": 970656,
+      "sha256": "93e06de0d9b91aef1519e484142a13f5e0696820d079c4877570999da59fc4f3",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-focus_pet_icon_demo-0.2.1.zip"
+    },
+    {
+      "id": "pixel_cat_meme_local",
+      "name": "像素猫meme",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "PixelCatMemeLocal",
+      "category": "pixel",
+      "categoryName": "像素与猫系",
+      "author": "代号皮克嗖儿",
+      "license": "unknown · User supplied local pet pack. Local testing only unless redistribution rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 22,
+      "mappedActions": 19,
+      "files": 297,
+      "idlePool": [
+        "default",
+        "work",
+        "sleep",
+        "onfloor"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 281,
+        "actionFolderCount": 30,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-pixel_cat_meme_local-0.2.1.zip",
+      "bytes": 5458025,
+      "sha256": "5d3379f98a4443bdc8cdd7b87244bcbb3ed6590953cc14d17fca2560732a4226",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-pixel_cat_meme_local-0.2.1.zip"
+    },
+    {
+      "id": "pixel_cat_meme_expanded",
+      "name": "像素猫meme（扩充版）",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "pixel_cat_meme_expanded",
+      "category": "pixel",
+      "categoryName": "像素与猫系",
+      "author": "代号皮克嗖儿",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 33,
+      "mappedActions": 15,
+      "files": 361,
+      "idlePool": [
+        "idle",
+        "sleep",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 340,
+        "actionFolderCount": 33,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": [
+          "kongzi"
+        ]
+      },
+      "notes": "与基础像素猫为不同资源 ID，可同时安装；包含更多动作。",
+      "filename": "FocusPet-Pet-pixel_cat_meme_expanded-0.2.1.zip",
+      "bytes": 8885564,
+      "sha256": "3156eb44c9f8216a0b945b6c68553b5ee8a3cccb49960ebb4766feadf6e499a8",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-pixel_cat_meme_expanded-0.2.1.zip"
+    },
+    {
+      "id": "pixel_simei",
+      "name": "像素四妹",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "pixel_simei",
+      "category": "pixel",
+      "categoryName": "像素与猫系",
+      "author": "代号皮克嗖儿",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 14,
+      "mappedActions": 16,
+      "files": 99,
+      "idlePool": [
+        "idle",
+        "sleep",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 91,
+        "actionFolderCount": 14,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-pixel_simei-0.2.1.zip",
+      "bytes": 1607311,
+      "sha256": "3c30e899f340b1e6d58992bb6a4ff6cbdea4d658f738c5d1c6d0f70f510c1ec2",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-pixel_simei-0.2.1.zip"
+    },
+    {
+      "id": "san_cat",
+      "name": "散猫猫",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "san_cat",
+      "category": "pixel",
+      "categoryName": "像素与猫系",
+      "author": "栎咕咕",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 7,
+      "mappedActions": 5,
+      "files": 277,
+      "idlePool": [
+        "idle",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 274,
+        "actionFolderCount": 7,
+        "missingRecommendedActions": [
+          "sleep",
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-san_cat-0.2.1.zip",
+      "bytes": 4688226,
+      "sha256": "f78262720400bbd54a09951c23378b67898f5625ebb910cd45ec1cfbd6876ca4",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-san_cat-0.2.1.zip"
+    },
+    {
+      "id": "pikechu",
+      "name": "皮克啾",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "pikechu",
+      "category": "pixel",
+      "categoryName": "像素与猫系",
+      "author": "代号皮克嗖儿",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 1,
+      "mappedActions": 1,
+      "files": 11,
+      "idlePool": [
+        "idle"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 8,
+        "actionFolderCount": 1,
+        "missingRecommendedActions": [
+          "sleep",
+          "nudgeGentle",
+          "nudgeStrong",
+          "breakRelax"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "轻量待机包：仅有待机动作，不包含独立睡眠或提醒动画。",
+      "filename": "FocusPet-Pet-pikechu-0.2.1.zip",
+      "bytes": 6398,
+      "sha256": "f19737c6f85a2d4055e4923c64960f75a8793d590aa56924a806ab62205028f7",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-pikechu-0.2.1.zip"
+    },
+    {
+      "id": "luo_xiaohei_local",
+      "name": "罗小黑",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "LuoXiaoHeiLocal",
+      "category": "companions",
+      "categoryName": "角色与萌宠",
+      "author": "jiang-taibai / local asset",
+      "license": "unknown · Third-party IP resource. Local testing only. Do not bundle or redistribute without permission.",
+      "distribution": "localOnly",
+      "sourceActions": 7,
+      "mappedActions": 15,
+      "files": 96,
+      "idlePool": [
+        "licking the claw"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 88,
+        "actionFolderCount": 7,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-luo_xiaohei_local-0.2.1.zip",
+      "bytes": 4654788,
+      "sha256": "eeb204ecaf6355a3b48acf1732301420924714f449c7aebe5201a387241322d0",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-luo_xiaohei_local-0.2.1.zip"
+    },
+    {
+      "id": "xiaodai_local",
+      "name": "小呆",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "XiaoDaiLocal",
+      "category": "companions",
+      "categoryName": "角色与萌宠",
+      "author": "栎曦_Nuo",
+      "license": "unknown · User supplied local pet pack. Local testing only unless redistribution rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 23,
+      "mappedActions": 19,
+      "files": 581,
+      "idlePool": [
+        "default",
+        "focus",
+        "sleepy",
+        "sleep",
+        "onfloor"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 554,
+        "actionFolderCount": 27,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-xiaodai_local-0.2.1.zip",
+      "bytes": 20428215,
+      "sha256": "7f75a15ef7f5c6712fd78f5916d4308e1921a18db5f594668d725133c30863d4",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-xiaodai_local-0.2.1.zip"
+    },
+    {
+      "id": "uniken_local",
+      "name": "UNIkeN",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "UNIkeNLocal",
+      "category": "companions",
+      "categoryName": "角色与萌宠",
+      "author": "User supplied local asset",
+      "license": "unknown · User supplied local pet pack. Local testing only unless redistribution rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 10,
+      "mappedActions": 19,
+      "files": 61,
+      "idlePool": [
+        "idle_smile",
+        "sleep_sit"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 57,
+        "actionFolderCount": 10,
+        "missingRecommendedActions": [],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-uniken_local-0.2.1.zip",
+      "bytes": 3313767,
+      "sha256": "f53471df5d3763fb6355aa0f3d016afdffa489107b2d852e0c9f9a98250a2b20",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-uniken_local-0.2.1.zip"
+    },
+    {
+      "id": "aranara",
+      "name": "兰纳罗",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "aranara",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "栎咕咕",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 6,
+      "mappedActions": 5,
+      "files": 115,
+      "idlePool": [
+        "idle",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 112,
+        "actionFolderCount": 6,
+        "missingRecommendedActions": [
+          "sleep",
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-aranara-0.2.1.zip",
+      "bytes": 2295309,
+      "sha256": "da556c8efcff2e453257ca9072c6821dc6eacf78b88645d49c3006cbeeef3263",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-aranara-0.2.1.zip"
+    },
+    {
+      "id": "fungus",
+      "name": "蕈兽",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "fungus",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "栎咕咕",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 4,
+      "mappedActions": 4,
+      "files": 91,
+      "idlePool": [
+        "idle"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 88,
+        "actionFolderCount": 4,
+        "missingRecommendedActions": [
+          "sleep",
+          "nudgeStrong",
+          "breakRelax"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-fungus-0.2.1.zip",
+      "bytes": 831548,
+      "sha256": "9d825848bf319416c994077ca4e6a5a4a58dd84ff53543e0da6ca0ce81c98bcb",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-fungus-0.2.1.zip"
+    },
+    {
+      "id": "nahida",
+      "name": "纳西妲",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "nahida",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "栎咕咕",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 29,
+      "mappedActions": 9,
+      "files": 749,
+      "idlePool": [
+        "idle",
+        "sleep",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 718,
+        "actionFolderCount": 29,
+        "missingRecommendedActions": [
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-nahida-0.2.1.zip",
+      "bytes": 53258936,
+      "sha256": "d89e54ac1455fb5afd19b88159ba44eb32ed1b16b49a6afb93471a7ecd9069e0",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-nahida-0.2.1.zip"
+    },
+    {
+      "id": "paimon",
+      "name": "派蒙",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "paimon",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "栎咕咕",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 1,
+      "mappedActions": 1,
+      "files": 27,
+      "idlePool": [
+        "idle"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 24,
+        "actionFolderCount": 1,
+        "missingRecommendedActions": [
+          "sleep",
+          "nudgeGentle",
+          "nudgeStrong",
+          "breakRelax"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "轻量待机包：仅有待机动作，不包含独立睡眠或提醒动画。",
+      "filename": "FocusPet-Pet-paimon-0.2.1.zip",
+      "bytes": 387608,
+      "sha256": "3b3cd4775364937ae02d78d4886bbbd2a3dc8788bfc1d2498088f8c503fe2750",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-paimon-0.2.1.zip"
+    },
+    {
+      "id": "xiao_bird",
+      "name": "魈鸟",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "xiao_bird",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "栎咕咕",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 4,
+      "mappedActions": 5,
+      "files": 111,
+      "idlePool": [
+        "idle",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 108,
+        "actionFolderCount": 4,
+        "missingRecommendedActions": [
+          "sleep",
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-xiao_bird-0.2.1.zip",
+      "bytes": 1136054,
+      "sha256": "eb681a016c4813667f287f6dc2fc884906e41e993b4e3d2cdc2b8d41a16a4d5e",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-xiao_bird-0.2.1.zip"
+    },
+    {
+      "id": "camellya",
+      "name": "椿",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "camellya",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "吾道咕咕（b站联系定制桌宠）",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 15,
+      "mappedActions": 14,
+      "files": 352,
+      "idlePool": [
+        "idle",
+        "sleep",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 342,
+        "actionFolderCount": 15,
+        "missingRecommendedActions": [
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-camellya-0.2.1.zip",
+      "bytes": 43501276,
+      "sha256": "148a2712790a862788d6cb1afec25803c2b4b57442bbac52cba6a050010b6781",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-camellya-0.2.1.zip"
+    },
+    {
+      "id": "shorekeeper",
+      "name": "守岸人",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "shorekeeper",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "吾道咕咕（b站联系定制桌宠）",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 17,
+      "mappedActions": 13,
+      "files": 311,
+      "idlePool": [
+        "idle",
+        "sleep",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 286,
+        "actionFolderCount": 17,
+        "missingRecommendedActions": [
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-shorekeeper-0.2.1.zip",
+      "bytes": 23951961,
+      "sha256": "b957275c962064de57fa1c7fa7e245c1b6793a6097e5bc90734249adf7e9816e",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-shorekeeper-0.2.1.zip"
+    },
+    {
+      "id": "firefly",
+      "name": "流萤",
+      "archiveVersion": "0.2.1",
+      "sourceFolder": "firefly",
+      "category": "game-characters",
+      "categoryName": "游戏角色",
+      "author": "吾道咕咕、栎咕咕（b站联系定制桌宠）",
+      "license": "unknown · Converted from user-supplied or third-party legacy desktop pet resource. Local testing only unless rights are confirmed.",
+      "distribution": "localOnly",
+      "sourceActions": 10,
+      "mappedActions": 9,
+      "files": 54,
+      "idlePool": [
+        "idle",
+        "sleep",
+        "breakRelax"
+      ],
+      "validation": {
+        "valid": true,
+        "uniqueFrameCount": 45,
+        "actionFolderCount": 10,
+        "missingRecommendedActions": [
+          "nudgeStrong"
+        ],
+        "opaqueActionFolders": []
+      },
+      "notes": "",
+      "filename": "FocusPet-Pet-firefly-0.2.1.zip",
+      "bytes": 3719051,
+      "sha256": "e83fe1c85c12d08a7cce554241b81b56be2abf707ee35392af17fddc55f3cd14",
+      "url": "https://github.com/VhahahaV/focus_pet_tauri/releases/download/v0.2.1/FocusPet-Pet-firefly-0.2.1.zip"
+    }
+  ]
+}

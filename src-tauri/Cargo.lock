@@ -954,15 +954,14 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "focus-pet"
-version = "0.1.1"
+version = "0.2.1"
 dependencies = [
- "base64 0.22.1",
  "block2",
  "chrono",
  "core-foundation",
  "core-graphics 0.24.0",
+ "foreign-types",
  "freedesktop-desktop-entry",
- "getrandom 0.2.17",
  "log",
  "objc2",
  "objc2-app-kit",

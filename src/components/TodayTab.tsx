@@ -1,4 +1,4 @@
-import { AppWindow, Bot, Check, ChevronDown, ChevronRight, Clock3, Globe2, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
+import { AppWindow, Check, ChevronDown, Clock3, Keyboard, MousePointer2, RefreshCw, RotateCcw, Target, TimerReset } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useFocusPet } from "../app/AppContext";
@@ -25,7 +25,6 @@ import { Badge, HoverCard, SegmentedControl, SemanticCard, SoftButton } from "./
 import { AppIcon } from "./AppIcon";
 import { SystemMonitorCard } from "./SystemMonitorCard";
 import { sourceActionAssetsForID } from "../resources/petPack";
-import { codexSessionIsActive, codexStatusLabel } from "../core/codexSessions";
 
 const timelineWindows = [2, 4, 6, 8, 12, 24] as const;
 
@@ -611,62 +610,6 @@ const TodayInsightsGrid = ({
   );
 };
 
-const CodexLiveSessions = () => {
-  const { codexSessions } = useFocusPet();
-  const [expanded, setExpanded] = useState(true);
-  const [expandedSessionKeys, setExpandedSessionKeys] = useState<Set<string>>(new Set());
-  const activeSessions = useMemo(
-    () => codexSessions
-      .filter(codexSessionIsActive)
-      .sort((left, right) =>
-        `${left.hostId}:${left.sessionId}`.localeCompare(`${right.hostId}:${right.sessionId}`),
-      ),
-    [codexSessions],
-  );
-  if (activeSessions.length === 0) return null;
-  const activeCount = activeSessions.length;
-  const toggleSession = (key: string) => setExpandedSessionKeys((current) => {
-    const next = new Set(current);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    return next;
-  });
-  return (
-    <section className={`codex-live-panel${expanded ? " is-expanded" : ""}`} aria-label="Codex 实时会话">
-      <button className="codex-live-panel-header" type="button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>
-        <span className="codex-live-panel-icon"><Bot size={17} /></span>
-        <span className="codex-live-panel-title"><strong>Codex 实时会话</strong><small>{`${activeCount} 个正在运行`}</small></span>
-        <span className="codex-live-panel-count">{activeCount}</span>
-        <ChevronDown size={17} aria-hidden />
-      </button>
-      {expanded ? (
-        <div className="codex-live-session-list" role="list" aria-label="可展开的 Codex 实时会话">
-          {activeSessions.map((session) => {
-            const key = `${session.hostId}:${session.sessionId}`;
-            const open = expandedSessionKeys.has(key);
-            const message = session.latestVisibleMessage?.text;
-            return (
-              <article className={`codex-live-session${open ? " is-open" : ""}`} key={key} role="listitem">
-                <button className="codex-live-session-summary" type="button" aria-expanded={open} onClick={() => toggleSession(key)}>
-                  <span className={`codex-live-session-source ${session.hostKind === "ssh" ? "is-remote" : ""}`}>{session.hostKind === "ssh" ? <Globe2 size={15} /> : <Bot size={15} />}</span>
-                  <span className="codex-live-session-copy"><strong>{session.title}</strong><small>{session.hostKind === "ssh" ? session.hostId.replace(/^ssh:/, "") : "本机 Codex"}</small></span>
-                  <em className={`codex-live-session-status status-${session.runtime}`}>{codexStatusLabel(session)}</em>
-                  <ChevronRight size={16} aria-hidden />
-                </button>
-                {open ? (
-                  <div className="codex-live-session-output">
-                    {message ? <pre>{message}</pre> : <span>{session.runtime === "active" ? "正在等待 Codex 输出…" : "此会话暂时没有可展示的 assistant 输出。"}</span>}
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      ) : null}
-    </section>
-  );
-};
-
 export const TodayTab = () => {
   const { bundle, petPacks, actions, activeFocus } = useFocusPet();
   const [windowHours, setWindowHours] = useState<(typeof timelineWindows)[number]>(4);
@@ -838,7 +781,7 @@ export const TodayTab = () => {
         <SystemMonitorCard />
       </div>
 
-      {bundle.state.settings.codex.showInToday ? <CodexLiveSessions /> : null}
+
 
       <section className="swift-timeline-card">
         <div className="timeline-header">

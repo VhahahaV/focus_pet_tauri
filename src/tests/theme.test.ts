@@ -13,7 +13,8 @@ describe("appearance theme registry", () => {
     expect(defaultAppearanceSettings()).toEqual({ theme: defaultAppTheme });
     expect(normalizeAppearanceSettings()).toEqual({ theme: defaultAppTheme });
     expect(normalizeAppTheme("unknown-theme")).toBe(defaultAppTheme);
-    expect(normalizeAppTheme("terminal-hacker")).toBe("constructivism");
-    expect(normalizeAppTheme("constructivism")).toBe("constructivism");
+    expect(normalizeAppTheme("terminal-hacker")).toBe("hand-drawn");
+    expect(normalizeAppTheme("constructivism")).toBe("hand-drawn");
+    expect(normalizeAppTheme("hand-drawn")).toBe("hand-drawn");
   });
 });

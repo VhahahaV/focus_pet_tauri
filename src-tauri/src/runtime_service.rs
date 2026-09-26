@@ -2,22 +2,26 @@ use crate::{native, store::FocusPetStore};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+const PERSIST_INTERVAL: Duration = Duration::from_secs(30);
 const CLASSIFICATION_CATALOG: &str = include_str!("../../public/AppClassificationCatalog.json");
 
 #[derive(Clone)]
 pub struct NativeRuntimeService {
     inner: Arc<Mutex<RuntimeInner>>,
+    sampling: Arc<Mutex<()>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeRuntimeEnvelope {
     pub generation: u64,
+    pub input_sample: Option<native::NativeActivitySample>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,9 @@ struct RuntimeInner {
     id_sequence: u64,
     rules: Vec<ClassificationRule>,
     latest_nudge: Option<Value>,
+    last_persist_at: Option<Instant>,
+    keyboard_total: u64,
+    pointer_total: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -133,14 +140,9 @@ impl NativeRuntimeService {
             .filter(|state| matches!(*state, "focus" | "distracted" | "away"))
             .unwrap_or("focus")
             .to_string();
-        let stable_state_since = snapshot
-            .get("stateSegments")
-            .and_then(Value::as_array)
-            .and_then(|items| items.last())
-            .and_then(|item| item.get("start"))
-            .and_then(Value::as_str)
-            .and_then(parse_time)
-            .unwrap_or(now);
+        // A stopped app cannot observe continuity. Never count the unobserved
+        // time since an old saved segment as the current focus streak.
+        let stable_state_since = now;
         let current_snapshot = placeholder_activity(now);
         let current_decision = StateDecision {
             timestamp: iso(now),
@@ -152,6 +154,7 @@ impl NativeRuntimeService {
         };
         let rules = classification_rules(&snapshot);
         Ok(Self {
+            sampling: Arc::new(Mutex::new(())),
             inner: Arc::new(Mutex::new(RuntimeInner {
                 snapshot,
                 current_snapshot,
@@ -172,6 +175,9 @@ impl NativeRuntimeService {
                 id_sequence: 0,
                 rules,
                 latest_nudge: None,
+                last_persist_at: None,
+                keyboard_total: 0,
+                pointer_total: 0,
             })),
         })
     }
@@ -245,6 +251,7 @@ impl NativeRuntimeService {
     }
 
     fn tick(&self, app: &AppHandle) -> Result<(), String> {
+        let _sampling = self.sampling.lock().unwrap_or_else(|e| e.into_inner());
         let sample = native::sample_activity();
         let store = FocusPetStore::new(app).map_err(|error| error.to_string())?;
         let envelope = {
@@ -252,14 +259,53 @@ impl NativeRuntimeService {
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            inner.keyboard_total = inner
+                .keyboard_total
+                .saturating_add(u64::from(sample.keyboard_count));
+            inner.pointer_total = inner
+                .pointer_total
+                .saturating_add(u64::from(sample.pointer_count));
+            let diagnostic = json!({
+                "processID": std::process::id(), "timestamp": sample.timestamp,
+                "keyboardTotal": inner.keyboard_total, "pointerTotal": inner.pointer_total,
+                "keyboardCount": sample.keyboard_count, "pointerCount": sample.pointer_count,
+                "inputMonitoringStatus": sample.input_monitoring_status,
+                "idleSeconds": sample.idle_seconds, "isScreenLocked": sample.is_screen_locked,
+            });
             inner.advance(sample);
             store
-                .save_snapshot(&inner.snapshot)
+                .write_input_diagnostics(&json!({
+                    "input": diagnostic, "state": inner.current_decision,
+                    "category": inner.current_snapshot.category,
+                }))
                 .map_err(|error| error.to_string())?;
+            if inner
+                .last_persist_at
+                .map_or(true, |last| last.elapsed() >= PERSIST_INTERVAL)
+            {
+                store
+                    .save_snapshot(&inner.snapshot)
+                    .map_err(|error| error.to_string())?;
+                inner.last_persist_at = Some(Instant::now());
+            }
             inner.event_envelope()
         };
         app.emit("focus-pet-native-runtime", &envelope)
             .map_err(|error| error.to_string())
+    }
+
+    pub fn flush(&self, app: &AppHandle) -> Result<(), String> {
+        // Final input belongs to the app even if Quit lands between samples.
+        let _sampling = self.sampling.lock().unwrap_or_else(|e| e.into_inner());
+        let sample = native::sample_activity();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.advance(sample);
+        FocusPetStore::new(app)
+            .map_err(|e| e.to_string())?
+            .save_snapshot(&inner.snapshot)
+            .map_err(|e| e.to_string())?;
+        inner.last_persist_at = Some(Instant::now());
+        Ok(())
     }
 
     pub fn refresh_now(&self, app: &AppHandle) -> Result<(), String> {
@@ -309,6 +355,7 @@ impl RuntimeInner {
     fn envelope(&self) -> NativeRuntimeEnvelope {
         NativeRuntimeEnvelope {
             generation: self.generation,
+            input_sample: native::activity_snapshot(),
             snapshot: Some(self.snapshot.clone()),
             delta: None,
             current_snapshot: self.current_snapshot.clone(),
@@ -324,6 +371,7 @@ impl RuntimeInner {
     fn event_envelope(&self) -> NativeRuntimeEnvelope {
         NativeRuntimeEnvelope {
             generation: self.generation,
+            input_sample: native::activity_snapshot(),
             snapshot: None,
             delta: Some(runtime_delta(&self.snapshot)),
             current_snapshot: self.current_snapshot.clone(),
@@ -341,7 +389,7 @@ impl RuntimeInner {
         let raw_tick_seconds = self
             .memory
             .last_tick_at
-            .map(|last| seconds_between(last, now).max(1.0))
+            .map(|last| seconds_between(last, now).max(0.0))
             .unwrap_or(SAMPLE_INTERVAL.as_secs_f64());
         let thresholds = thresholds(&self.snapshot);
         let forced_sleep_seconds = if !sample.is_system_sleeping {
@@ -630,12 +678,7 @@ impl RuntimeInner {
             let same = last.get("state").and_then(Value::as_str) == Some(decision.state.as_str())
                 && last.get("category").and_then(Value::as_str) == Some(decision.category.as_str())
                 && last.get("appName").and_then(Value::as_str) == Some(activity.app_name.as_str())
-                && last.get("bundleID")
-                    == activity
-                        .bundle_id
-                        .as_ref()
-                        .map(|value| json!(value))
-                        .as_ref();
+                && last.get("bundleID").and_then(Value::as_str) == activity.bundle_id.as_deref();
             let gap = last
                 .get("end")
                 .and_then(Value::as_str)
@@ -682,12 +725,7 @@ impl RuntimeInner {
             let same = last.get("category").and_then(Value::as_str)
                 == Some(activity.category.as_str())
                 && last.get("appName").and_then(Value::as_str) == Some(activity.app_name.as_str())
-                && last.get("bundleID")
-                    == activity
-                        .bundle_id
-                        .as_ref()
-                        .map(|value| json!(value))
-                        .as_ref();
+                && last.get("bundleID").and_then(Value::as_str) == activity.bundle_id.as_deref();
             let gap = last
                 .get("end")
                 .and_then(Value::as_str)
@@ -739,7 +777,7 @@ impl RuntimeInner {
         let start_iso = iso(start);
         let end_iso = iso(end);
         let items = array_mut(&mut self.snapshot, "inputActivity");
-        if let Some(current) = items.iter_mut().find(|item| {
+        if let Some(current) = items.iter_mut().rev().find(|item| {
             item.get("start").and_then(Value::as_str) == Some(start_iso.as_str())
                 && item.get("end").and_then(Value::as_str) == Some(end_iso.as_str())
         }) {
@@ -824,6 +862,11 @@ fn merge_array_by_key(
         return;
     };
     let incoming_items = array_mut(incoming, field);
+    let mut indices: HashMap<String, usize> = incoming_items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| key(item).map(|key| (key, index)))
+        .collect();
     for current_item in current_items {
         let Some(current_key) = key(current_item) else {
             if !incoming_items.contains(current_item) {
@@ -831,12 +874,10 @@ fn merge_array_by_key(
             }
             continue;
         };
-        if let Some(client_item) = incoming_items
-            .iter_mut()
-            .find(|item| key(item).as_deref() == Some(current_key.as_str()))
-        {
-            merge(current_item, client_item);
+        if let Some(index) = indices.get(&current_key) {
+            merge(current_item, &mut incoming_items[*index]);
         } else {
+            indices.insert(current_key, incoming_items.len());
             incoming_items.push(current_item.clone());
         }
     }
@@ -943,7 +984,7 @@ fn array_mut<'a>(snapshot: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
         .expect("normalized snapshot array")
 }
 
-/// Runtime events only need the records touched by the latest five-second
+/// Runtime events only need the records touched by the latest resident
 /// sample. Sending the complete retained history through WebView IPC made
 /// every UI update progressively more expensive as months accumulated.
 fn runtime_delta(snapshot: &Value) -> Value {
@@ -1164,7 +1205,10 @@ fn evaluate_state(
     if snapshot.idle_seconds >= thresholds.idle_away_seconds {
         return decision("away", 0.88, &["longInputIdleAway"], snapshot.idle_seconds);
     }
-    if snapshot.idle_seconds >= thresholds.idle_distracted_seconds {
+    if snapshot.idle_seconds >= thresholds.idle_distracted_seconds
+        && snapshot.category != "work"
+        && !(snapshot.is_focus_session_active && snapshot.category != "entertainment")
+    {
         return decision(
             "distracted",
             0.82,
@@ -1599,6 +1643,58 @@ mod tests {
     }
 
     #[test]
+    fn quiet_work_and_intentional_focus_do_not_imply_distraction() {
+        for category in ["work", "neutral"] {
+            let mut activity = snapshot(category);
+            activity.idle_seconds = 240.0;
+            activity.is_focus_session_active = category == "neutral";
+            assert_eq!(
+                evaluate_state(&activity, Some("focus"), thresholds()).state,
+                "focus"
+            );
+            activity.idle_seconds = 600.0;
+            assert_eq!(
+                evaluate_state(&activity, Some("focus"), thresholds()).state,
+                "away"
+            );
+            activity.idle_seconds = 0.0;
+            activity.is_screen_locked = true;
+            assert_eq!(
+                evaluate_state(&activity, Some("focus"), thresholds()).state,
+                "away"
+            );
+        }
+        let mut entertainment = snapshot("entertainment");
+        entertainment.is_focus_session_active = true;
+        entertainment.idle_seconds = 240.0;
+        assert_eq!(
+            evaluate_state(&entertainment, Some("focus"), thresholds()).state,
+            "distracted"
+        );
+    }
+
+    #[test]
+    fn long_history_merge_preserves_native_counters_and_client_session_edits() {
+        let history: Vec<_> = (0..20_000)
+            .map(|i| {
+                json!({
+                    "id": format!("item-{i}"), "start": format!("{i:08}"), "end": format!("{i:08}"),
+                })
+            })
+            .collect();
+        let mut current = json!({"stateSegments": history, "inputActivity": [{
+            "start": "2026-09-26T00:00:00Z", "end": "2026-09-26T00:01:00Z", "keyboardCount": 20, "pointerCount": 10,
+        }]});
+        let mut incoming = current.clone();
+        current["stateSegments"][19_999]["end"] = json!("99999999");
+        incoming["inputActivity"][0]["keyboardCount"] = json!(2);
+        merge_client_snapshot(&current, &mut incoming);
+        assert_eq!(incoming["stateSegments"].as_array().unwrap().len(), 20_000);
+        assert_eq!(incoming["stateSegments"][19_999]["end"], "99999999");
+        assert_eq!(incoming["inputActivity"][0]["keyboardCount"], 20);
+    }
+
+    #[test]
     fn native_state_engine_matches_sleep_precedence() {
         let mut activity = snapshot("work");
         activity.is_system_sleeping = true;
@@ -1668,6 +1764,9 @@ mod tests {
             id_sequence: 0,
             rules,
             latest_nudge: None,
+            last_persist_at: None,
+            keyboard_total: 0,
+            pointer_total: 0,
         };
 
         runtime.advance(native::NativeActivitySample {

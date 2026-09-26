@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480" fill="none">
+  <path d="m451 84 119-8 8 39-121 5z" fill="#FBB03B" opacity=".38"/>
+  <path d="m534 144 107 11-3 70-108-8z" fill="#29ABE2" opacity=".12"/>
+  <g stroke="#2B2B2B" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity=".65">
+    <path d="m447 90 123-10 4 41-120 2-7-33z"/>
+    <path d="m546 169 16-1m-21 17 68 7m-65 9 52 4"/>
+    <path d="m636 42 5 18 19-6-12 16 13 12-22-4-8 16-2-20-18-3 18-9 7-20z"/>
+    <path d="M382 48c-18 33-26 66-66 68m12-13-14 14 19 5"/>
+    <path d="M476 242c37-13 53-9 76-3m-67 9c33-8 48-9 71-2"/>
+    <path d="m617 313 6 14m9-25 1 16m15-10-7 14"/>
+  </g>
+  <path d="M393 293c-8-22-33-7-26 9 5 12 22 20 28 24 12-10 33-26 25-37-8-13-23-7-27 4z" fill="#F15A4A" opacity=".2"/>
+  <path d="M394 292c-13-26-37-7-25 12 6 8 16 16 25 20 14-9 31-25 25-35-9-13-23-7-25 3z" stroke="#2B2B2B" stroke-width="2.4" stroke-linecap="round" opacity=".65"/>
+  <path d="m516 390 16 14 32-43" stroke="#39B54A" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity=".3"/>
+  <path d="m514 392 17 15 34-43" stroke="#2B2B2B" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity=".7"/>
+</svg>

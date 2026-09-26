@@ -3,18 +3,24 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const loadBuiltApp = async (page: import("@playwright/test").Page, url = "https://focus-pet.local/") => {
+  // Keep the preview in a classified work phase regardless of the CI clock.
+  // Timers and animation frames still run normally.
+  await page.clock.setFixedTime(new Date("2026-09-26T10:05:30.000Z"));
   const dist = join(process.cwd(), "dist");
   const html = readFileSync(join(dist, "index.html"), "utf8");
   const cssFile = html.match(/href="\.\/(assets\/[^"]+\.css)"/)?.[1];
   const jsFile = html.match(/src="\.\/(assets\/[^"]+\.js)"/)?.[1];
   if (!cssFile || !jsFile) throw new Error("Unable to locate built CSS/JS assets");
-  const css = readFileSync(join(dist, cssFile), "utf8");
   const js = readFileSync(join(dist, jsFile), "utf8");
   await page.route("https://focus-pet.local/**", (route) => {
     const pathname = new URL(route.request().url()).pathname.replace(/^\/+/, "");
     const assetPath = pathname ? join(dist, pathname) : "";
     if (assetPath && existsSync(assetPath)) {
-      const contentType = pathname.endsWith(".png")
+      const contentType = pathname.endsWith(".woff2")
+        ? "font/woff2"
+        : pathname.endsWith(".svg")
+          ? "image/svg+xml"
+          : pathname.endsWith(".png")
         ? "image/png"
         : pathname.endsWith(".json")
           ? "application/json"
@@ -32,7 +38,7 @@ const loadBuiltApp = async (page: import("@playwright/test").Page, url = "https:
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <style>${css}</style>
+        <link rel="stylesheet" href="https://focus-pet.local/${cssFile}" />
       </head>
       <body>
         <div id="root"></div>
@@ -250,7 +256,7 @@ test("timeline density scales with its window and hover colors follow every them
   const themeNames = [
     "新粗野主义 Neobrutalism 饱和色块、粗黑描边与硬偏移阴影",
     "中世纪现代 Mid-Century Modern 奶咖底色、胡桃木文字与温暖有机色彩",
-    "构成主义 Constructivism 红黑块面、新闻纸底与前倾的海报构图",
+    "手绘涂鸦 Hand-drawn / Doodle 暖纸底色、手绘墨线与明快的马克笔色块",
   ];
   const colors: string[] = [];
   for (const name of themeNames) {
@@ -360,14 +366,6 @@ test("desktop widget views render without the main runtime shell", async ({ page
   await page.locator(".window-pet").dispatchEvent("pointerover");
   await expect(page.getByRole("button", { name: "桌宠切换动作" })).toBeVisible();
   await expect(page.getByText("当前状态")).toBeVisible();
-  const codexPanelVisibility = await page.locator(".window-pet").evaluate((companion) => {
-    companion.classList.add("has-codex-panel");
-    const panel = document.createElement("div");
-    panel.className = "floating-pet-codex";
-    companion.append(panel);
-    return getComputedStyle(panel).visibility;
-  });
-  expect(codexPanelVisibility).toBe("hidden");
   await expect(page.getByText("专注", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "打开桌宠面板" })).toContainText("面板");
   const cyclePetAction = page.getByRole("button", { name: "桌宠切换动作" });
@@ -445,13 +443,6 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.getByRole("radio", { name: "自由拖动" })).toBeVisible();
 
   await expect(page.getByText("回归提醒")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "智能体任务" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Codex 会话同步配置" })).toBeVisible();
-  await expect(page.getByText(/Assistant 摘要（默认）/)).toBeVisible();
-  await expect(page.getByText(/自动完成 Hook、App Server、rollout 与 SSH 会话发现/)).toBeVisible();
-  await expect(page.getByRole("button", { name: /安装 Codex Hook/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /连接精确状态/ })).toHaveCount(0);
-  await expect(page.getByRole("radiogroup", { name: "可展示内容" })).toHaveCount(0);
   await expect(page.getByText("温和走神阈值")).toBeVisible();
   await expect(page.locator(".settings-module-reminders .settings-number-stepper")).toHaveCount(4);
   await expect(page.getByRole("button", { name: "温和走神阈值 增加" })).toBeVisible();
@@ -476,15 +467,15 @@ test("settings expose all modules without a secondary navigation rail", async ({
   await expect(page.getByText(/数据保留|保留天数|自动清理/)).toHaveCount(0);
 });
 
-test("appearance themes switch globally and persist their selection", async ({ page }) => {
+test("appearance themes switch globally and persist their selection", async ({ page }, testInfo) => {
   await loadBuiltApp(page);
   await page.getByRole("navigation", { name: "Dashboard" }).getByRole("button", { name: "设置" }).click();
   const midCentury = page.getByRole("radio", {
     name: "中世纪现代 Mid-Century Modern 奶咖底色、胡桃木文字与温暖有机色彩",
     exact: true,
   });
-  const constructivism = page.getByRole("radio", {
-    name: "构成主义 Constructivism 红黑块面、新闻纸底与前倾的海报构图",
+  const handDrawn = page.getByRole("radio", {
+    name: "手绘涂鸦 Hand-drawn / Doodle 暖纸底色、手绘墨线与明快的马克笔色块",
     exact: true,
   });
 
@@ -492,10 +483,19 @@ test("appearance themes switch globally and persist their selection", async ({ p
   await expect(page.locator("html")).toHaveAttribute("data-theme", "mid-century-modern");
   await expect(midCentury).toHaveAttribute("aria-checked", "true");
 
-  await constructivism.click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "constructivism");
-  await expect(constructivism).toHaveAttribute("aria-checked", "true");
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("focus-pet-appearance-theme"))).toBe("constructivism");
+  await handDrawn.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "hand-drawn");
+  await expect(handDrawn).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("focus-pet-appearance-theme"))).toBe("hand-drawn");
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.evaluate(() => document.fonts.check('22px "Focus Pet Hand"', "手绘涂鸦"))).toBe(true);
+  const previewHeights = await page.locator(".theme-choice-preview").evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height));
+  expect(Math.min(...previewHeights)).toBeGreaterThanOrEqual(60);
+  await expect(page.getByRole("radio", { name: /构成主义/ })).toHaveCount(0);
+  await page.screenshot({ path: `output/playwright/doodle-settings-${testInfo.project.name}.png` });
+  await page.getByRole("navigation", { name: "Dashboard" }).getByRole("button", { name: "今日" }).click();
+  await page.screenshot({ path: `output/playwright/doodle-today-${testInfo.project.name}.png` });
+
 });
 
 test("pet settings expose hover and random action controls", async ({ page }) => {

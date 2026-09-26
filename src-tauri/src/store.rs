@@ -82,7 +82,7 @@ impl FocusPetStore {
 
     pub fn load_snapshot(&self) -> io::Result<Value> {
         self.prepare_store_for_access(false)?;
-        Ok(json!({
+        let mut snapshot = json!({
             "settings": self.read_json("settings.json", json!({}))?,
             "classificationRules": self.read_json("classification-rules.json", json!([]))?,
             "stateSegments": self.read_json("state-segments.json", json!([]))?,
@@ -91,7 +91,12 @@ impl FocusPetStore {
             "focusSessions": self.read_json("focus-sessions.json", json!([]))?,
             "breakSessions": self.read_json("break-sessions.json", json!([]))?,
             "nudges": self.read_json("nudges.json", json!([]))?
-        }))
+        });
+        if let Some(settings) = snapshot.get_mut("settings").and_then(Value::as_object_mut) {
+            settings.remove("codex");
+        }
+        compact_history(&mut snapshot);
+        Ok(snapshot)
     }
 
     pub fn save_snapshot(&self, snapshot: &Value) -> io::Result<()> {
@@ -127,6 +132,10 @@ impl FocusPetStore {
         )?;
         self.write_json("nudges.json", snapshot.get("nudges").unwrap_or(&json!([])))?;
         Ok(())
+    }
+
+    pub fn write_input_diagnostics(&self, value: &Value) -> io::Result<()> {
+        self.write_json("input-diagnostics.json", value)
     }
 
     pub fn save_classification_rules(&self, rules: &Value) -> io::Result<()> {
@@ -399,13 +408,47 @@ impl FocusPetStore {
     fn write_json(&self, name: &str, value: &Value) -> io::Result<()> {
         let path = self.root.join(name);
         let temporary = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
+        let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
         if fs::read(&path).ok().as_deref() == Some(bytes.as_slice()) {
             return Ok(());
         }
         fs::write(&temporary, &bytes)?;
         replace_file(&temporary, &path)?;
         Ok(())
+    }
+}
+
+/// Join contiguous, identical observations without filling gaps or changing
+/// categories, titles, sources, or the duration attributed to any application.
+pub(crate) fn compact_history(snapshot: &mut Value) {
+    for field in ["stateSegments", "appUsage"] {
+        let Some(items) = snapshot.get_mut(field).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let mut compacted: Vec<Value> = Vec::with_capacity(items.len());
+        for item in items.drain(..) {
+            let merge = compacted.last().is_some_and(|last| {
+                let contiguous = last.get("end") == item.get("start") && last.get("end").is_some();
+                let same = match (last.as_object(), item.as_object()) {
+                    (Some(left), Some(right)) => {
+                        let metadata =
+                            |key: &&String| !matches!(key.as_str(), "id" | "start" | "end");
+                        left.keys()
+                            .filter(metadata)
+                            .chain(right.keys().filter(metadata))
+                            .all(|key| left.get(key) == right.get(key))
+                    }
+                    _ => false,
+                };
+                contiguous && same
+            });
+            if merge {
+                compacted.last_mut().unwrap()["end"] = item["end"].clone();
+            } else {
+                compacted.push(item);
+            }
+        }
+        *items = compacted;
     }
 }
 
@@ -667,7 +710,7 @@ fn windows_local_app_data_dir() -> Option<PathBuf> {
     }
 
     // FOLDERID_LocalAppData is package-virtualized when a normal executable is
-    // launched by an MSIX parent (for example Codex Computer Use). The profile
+    // launched by an MSIX parent. The profile
     // folder is stable across launchers, so derive the conventional local data
     // root from it before falling back to the virtualizable known folder.
     windows_user_profile_dir()
@@ -829,6 +872,29 @@ mod tests {
     };
     use serde_json::json;
     use std::fs;
+
+    #[test]
+    fn history_compaction_is_lossless_and_does_not_fill_gaps() {
+        let segment = |id, start, end, state| {
+            json!({
+                "id": id, "start": start, "end": end, "state": state,
+                "bundleID": null, "appName": "Locked Screen", "category": "ignore",
+            })
+        };
+        let mut snapshot = json!({"stateSegments": [
+            segment("a", "00", "01", "away"), segment("b", "01", "02", "away"),
+            segment("c", "03", "04", "away"), segment("d", "04", "05", "focus"),
+        ]});
+        super::compact_history(&mut snapshot);
+        let items = snapshot["stateSegments"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["start"], "00");
+        assert_eq!(items[0]["end"], "02");
+        assert_eq!(items[1]["start"], "03");
+        let first = snapshot.clone();
+        super::compact_history(&mut snapshot);
+        assert_eq!(snapshot, first);
+    }
 
     #[test]
     fn snapshot_shape_matches_frontend_store_contract() {

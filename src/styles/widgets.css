@@ -364,194 +364,6 @@ body[data-focus-pet-surface="widget"] #root{width:100vw;height:100vh;min-height:
 
 .window-pet .floating-pet-bubble::after{display:none}
 
-.floating-pet-codex{
-  position:absolute;
-  right:50%;
-  bottom:calc(var(--pet-size) + 10px);
-  z-index:2;
-  width:min(380px,calc(100vw - 18px));
-  max-height:min(370px,calc(100vh - var(--pet-size) - 26px));
-  transform:translateX(50%);
-  pointer-events:auto;
-  opacity:1;
-  visibility:visible;
-  transition:opacity 140ms cubic-bezier(.23,1,.32,1),transform 160ms cubic-bezier(.23,1,.32,1),visibility 0s linear;
-}
-
-/* The status card and the hover controls share the same spatial anchor. While
-   the user is intentionally opening the controls, yield that layer completely
-   and restore Codex as soon as the pointer leaves. This keeps both surfaces
-   readable without making the transparent native window even larger. */
-.window-pet.has-codex-panel.is-hovering .floating-pet-codex{
-  opacity:0;
-  visibility:hidden;
-  pointer-events:none;
-  transform:translateX(50%) translateY(-4px) scale(.985);
-  transition:opacity 100ms cubic-bezier(.23,1,.32,1),transform 120ms cubic-bezier(.23,1,.32,1),visibility 0s linear 120ms;
-}
-
-.codex-session-panel{
-  overflow:hidden;
-  display:grid;
-  grid-template-rows:auto auto minmax(0,1fr);
-  width:100%;
-  max-height:inherit;
-  border:1px solid rgb(125 169 218/0.34);
-  border-radius:16px;
-  background:rgb(249 252 255/0.96);
-  box-shadow:0 16px 38px rgb(37 65 94/0.18);
-  backdrop-filter:blur(18px) saturate(1.15);
-  color:var(--text-primary);
-}
-
-.codex-session-panel.is-collapsed{
-  display:block;
-  width:max-content;
-  max-width:100%;
-  margin-inline:auto;
-  border-radius:999px;
-}
-
-.codex-session-summary-button{
-  min-height:34px;
-  display:flex;
-  align-items:center;
-  gap:7px;
-  padding:6px 10px;
-  border:0;
-  background:transparent;
-  color:var(--text-secondary);
-  font-size:11px;
-  font-weight:780;
-}
-
-.codex-session-panel-header{
-  min-height:46px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-  padding:8px 9px 7px 12px;
-  border-bottom:1px solid var(--divider);
-}
-
-.codex-session-panel-header>span{min-width:0;display:grid;gap:1px}
-.codex-session-panel-header strong{font-size:12px;font-weight:850}
-.codex-session-panel-header small{color:var(--text-tertiary);font-size:9px;font-weight:680}
-.codex-session-panel-header>button{
-  width:30px;
-  height:30px;
-  display:grid;
-  place-items:center;
-  flex:0 0 auto;
-  padding:0;
-  border:1px solid var(--border-default);
-  border-radius:9px;
-  background:var(--control-surface);
-  color:var(--text-secondary);
-}
-
-.codex-session-list{
-  display:flex;
-  gap:6px;
-  overflow-x:auto;
-  padding:7px 8px;
-  border-bottom:1px solid var(--divider);
-  scrollbar-width:thin;
-}
-
-.codex-session-tab{
-  min-width:145px;
-  max-width:190px;
-  min-height:46px;
-  display:grid;
-  grid-template-columns:14px minmax(0,1fr);
-  grid-template-rows:auto auto;
-  align-items:center;
-  gap:1px 6px;
-  padding:6px 7px;
-  border:1px solid var(--border-default);
-  border-radius:10px;
-  background:var(--inset-surface);
-  color:var(--text-secondary);
-  text-align:left;
-}
-
-.codex-session-tab>svg{grid-row:1/3;color:var(--text-tertiary)}
-.codex-session-tab>span{min-width:0;display:grid}
-.codex-session-tab strong,.codex-session-tab small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.codex-session-tab strong{color:var(--text-primary);font-size:10px;font-weight:820}
-.codex-session-tab small{color:var(--text-tertiary);font-size:8px;font-weight:620}
-.codex-session-tab em{
-  grid-column:2;
-  display:flex;
-  align-items:center;
-  gap:4px;
-  color:var(--text-tertiary);
-  font-size:8px;
-  font-style:normal;
-  font-weight:750;
-}
-.codex-session-tab.is-selected{border-color:color-mix(in srgb,var(--focus-500) 48%,var(--border-default));background:var(--focus-100)}
-.codex-session-tab.is-active em,.codex-session-tab.is-active>svg{color:var(--focus-600)}
-.codex-session-tab.is-complete em{color:var(--success-600)}
-.codex-session-tab.is-error em{color:var(--error)}
-
-.codex-session-message{
-  min-height:76px;
-  overflow:auto;
-  padding:8px 11px 10px;
-  overscroll-behavior:contain;
-}
-
-.codex-session-message-meta{
-  position:sticky;
-  top:-8px;
-  z-index:1;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-  margin:-8px -11px 7px;
-  padding:7px 11px 5px;
-  background:rgb(249 252 255/0.94);
-}
-.codex-session-message-meta span{display:flex;align-items:center;gap:5px;color:var(--text-secondary);font-size:9px;font-weight:780}
-.codex-session-message-meta small{color:var(--text-tertiary);font-size:8px}
-.codex-session-spinner{animation:codex-session-spin .85s linear infinite}
-.codex-session-idle-dot{width:7px;height:7px;border-radius:50%;background:var(--text-tertiary)}
-@keyframes codex-session-spin{to{transform:rotate(360deg)}}
-
-.codex-markdown{
-  overflow-wrap:anywhere;
-  color:var(--text-secondary);
-  font-size:10px;
-  line-height:1.48;
-  user-select:text;
-}
-.codex-markdown :first-child{margin-top:0}
-.codex-markdown :last-child{margin-bottom:0}
-.codex-markdown p,.codex-markdown ul,.codex-markdown ol,.codex-markdown pre,.codex-markdown blockquote{margin:0 0 7px}
-.codex-markdown h1,.codex-markdown h2,.codex-markdown h3{margin:8px 0 4px;color:var(--text-primary);font-size:11px;line-height:1.35}
-.codex-markdown ul,.codex-markdown ol{padding-left:17px}
-.codex-markdown code{padding:1px 3px;border-radius:4px;background:var(--inset-surface);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
-.codex-markdown pre{overflow:auto;padding:7px;border:1px solid var(--border-default);border-radius:8px;background:var(--inset-surface)}
-.codex-markdown pre code{padding:0;background:transparent}
-.codex-markdown blockquote{padding-left:7px;border-left:2px solid var(--focus-400);color:var(--text-tertiary)}
-.codex-markdown table{width:100%;border-collapse:collapse;font-size:9px}
-.codex-markdown th,.codex-markdown td{padding:3px 4px;border:1px solid var(--border-default);text-align:left}
-.codex-markdown a{color:var(--focus-600);text-decoration:underline}
-.codex-markdown-image-placeholder{display:inline-block;padding:2px 5px;border:1px solid var(--border-default);border-radius:5px;color:var(--text-tertiary)}
-.codex-session-placeholder{margin:0;color:var(--text-tertiary);font-size:10px;line-height:1.5}
-
-@media (hover:hover) and (pointer:fine){
-  .codex-session-panel button:hover{border-color:color-mix(in srgb,var(--focus-500) 42%,var(--border-default));background:var(--focus-100)}
-}
-
-@media (prefers-reduced-motion:reduce){
-  .codex-session-spinner{animation-duration:1.8s}
-}
-
 /* Four high-frequency actions with comfortable desktop hit targets. */
 .pet-hover-actions{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
 
@@ -638,8 +450,7 @@ body[data-focus-pet-surface="widget"]::after{display:none;content:none}
   body[data-focus-pet-surface="widget"] #root{background:transparent}
 }
 
-.window-pet .floating-pet-bubble,
-.codex-session-panel{backdrop-filter:none}
+.window-pet .floating-pet-bubble{backdrop-filter:none}
 
 /* The transparent host is intentionally wider than the sprite so panels can
    expand without resizing. Anchor the sprite inside that host; otherwise a
@@ -649,21 +460,16 @@ body[data-focus-pet-surface="widget"]::after{display:none;content:none}
 .window-pet.placement-topRight{place-items:start end}
 .window-pet.placement-topLeft{place-items:start start}
 
-.window-pet:is(.placement-bottomRight,.placement-topRight,.placement-dock) :is(.pet-hover-panel,.floating-pet-codex){
+.window-pet:is(.placement-bottomRight,.placement-topRight,.placement-dock) :is(.pet-hover-panel){
   right:10px;
   left:auto;
   transform:translateY(5px) scale(.985);
 }
 
-.window-pet:is(.placement-bottomLeft,.placement-topLeft) :is(.pet-hover-panel,.floating-pet-codex){
+.window-pet:is(.placement-bottomLeft,.placement-topLeft) :is(.pet-hover-panel){
   right:auto;
   left:10px;
   transform:translateY(5px) scale(.985);
-}
-
-.window-pet.has-codex-panel:is(.placement-bottomRight,.placement-topRight,.placement-dock).is-hovering .floating-pet-codex,
-.window-pet.has-codex-panel:is(.placement-bottomLeft,.placement-topLeft).is-hovering .floating-pet-codex{
-  transform:translateY(-4px) scale(.985);
 }
 
 .window-pet:is(.placement-bottomRight,.placement-topRight,.placement-dock).is-hovering .pet-hover-panel,
@@ -684,14 +490,11 @@ body[data-focus-pet-surface="widget"]::after{display:none;content:none}
   transform:none;
 }
 
-.window-pet:is(.placement-topRight,.placement-topLeft) :is(.pet-hover-panel,.floating-pet-bubble,.floating-pet-codex){
+.window-pet:is(.placement-topRight,.placement-topLeft) :is(.pet-hover-panel,.floating-pet-bubble){
   top:calc(var(--pet-size) + 10px);
   bottom:auto;
 }
-
-/* Direct manipulation owns the surface until pointer-up. No status surface,
-   bubble, or Codex card may appear under the pointer during a drag. */
-.window-pet.pet-companion.is-dragging :is(.pet-hover-panel,.floating-pet-bubble,.floating-pet-codex){
+.window-pet.pet-companion.is-dragging :is(.pet-hover-panel,.floating-pet-bubble){
   transition:none;
   opacity:0;
   visibility:hidden;

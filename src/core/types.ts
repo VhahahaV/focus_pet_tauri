@@ -155,7 +155,7 @@ export type PetAction =
   | "screenTransfer"
   | "mouseSummon";
 
-export type PetIntentSource = "state" | "nudge" | "agent" | "interaction" | "physicalInteraction";
+export type PetIntentSource = "state" | "nudge" | "interaction" | "physicalInteraction";
 
 export type PetIntentKind =
   | "quietCompanion"
@@ -282,20 +282,15 @@ export interface DesktopWidgetSettings {
   movementMode: DesktopWidgetMovementMode;
 }
 
-export type AppThemeID = "neobrutalism" | "mid-century-modern" | "constructivism";
+export type AppThemeID = "neobrutalism" | "mid-century-modern" | "hand-drawn";
 
 export interface AppearanceSettings {
   theme: AppThemeID;
 }
 
-export interface CodexDisplaySettings {
-  showInToday: boolean;
-}
-
 export interface AppSettings {
   hasCompletedOnboarding: boolean;
   appearance: AppearanceSettings;
-  codex: CodexDisplaySettings;
   reminder: ReminderSettings;
   judgment: JudgmentSettings;
   pet: PetSettings;
@@ -503,6 +498,7 @@ export interface LocalStoreSnapshot {
 
 export interface NativeRuntimeEnvelope {
   generation: number;
+  inputSample?: NativeActivitySample;
   snapshot?: LocalStoreSnapshot;
   delta?: NativeRuntimeDelta;
   currentSnapshot: ActivitySnapshot;
@@ -552,15 +548,6 @@ export interface SystemMetricsSample {
   gpuUsage?: number | null;
   temperatures: SystemMonitorThermalSample[];
   fans: SystemMonitorFanSample[];
-}
-
-export interface AgentCompletionEvent {
-  id: string;
-  provider: string;
-  status: "completed" | "failed";
-  title: string;
-  message: string;
-  occurredAt: string;
 }
 
 export interface NativeActivitySample {

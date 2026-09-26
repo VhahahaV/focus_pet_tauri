@@ -1,6 +1,6 @@
 [package]
 name = "focus-pet"
-version = "0.1.1"
+version = "0.2.1"
 description = "A local-first cross-platform desktop focus companion with a responsive virtual pet"
 authors = ["Zhuoqiang Cai"]
 homepage = "https://vhahahav.github.io/projects/focus-pet/"
@@ -29,13 +29,12 @@ open = "5"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sysinfo = { version = "0.33.1", default-features = false, features = ["system", "disk", "component"] }
-base64 = "0.22"
-getrandom = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 core-foundation = "0.10"
 core-graphics = "0.24"
+foreign-types = "0.5"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSColor", "NSEvent", "NSGraphics", "NSPanel", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", features = ["NSNotification", "NSOperation", "NSString"] }

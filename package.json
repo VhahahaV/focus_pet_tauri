@@ -1,7 +1,7 @@
 {
   "name": "focus_pet_tauri",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.1",
   "description": "A local-first cross-platform desktop focus companion with a responsive virtual pet.",
   "homepage": "https://vhahahav.github.io/projects/focus-pet/",
   "repository": {
@@ -29,15 +29,14 @@
     "verify:platform": "node scripts/verify-platform.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "verify:input": "node scripts/verify-physical-input.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

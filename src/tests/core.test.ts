@@ -27,15 +27,8 @@ import {
   resolveDisplaySourceAction,
 } from "../app/petCompanionLogic";
 import { makePetCompanionViewState } from "../app/petCompanionPayload";
-import {
-  codexBubble,
-  codexSessionIsActive,
-  codexSessionIsOpen,
-  codexStatusLabel,
-  reduceCodexEvents,
-} from "../core/codexSessions";
 import { activitySampleForRuntime } from "../app/activitySampling";
-import { maximumPointerActionsPerMinute, normalizeInputActivityBucket, normalizeSnapshot } from "../store/localStore";
+import { normalizeInputActivityBucket, normalizeSnapshot } from "../store/localStore";
 import { mergeNativeRuntimeDelta } from "../app/nativeRuntimeDelta";
 
 const baseSnapshot = (overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
@@ -100,29 +93,6 @@ describe("Focus Pet migrated core", () => {
     expect(resolveSelectedPetPack(records, "preview-xiaodai")?.id).toBe("preview-xiaodai");
     expect(resolveSelectedPetPack(records, "imported-someone-else")).toBeUndefined();
     expect(resolveSelectedPetPack(records, "")?.id).toBe("preview-luo-xiaohei");
-  });
-
-  it("distinguishes an open idle Codex session from an ended session", () => {
-    const open = reduceCodexEvents([], [{
-      schemaVersion: 1,
-      eventId: "open-idle",
-      sequence: 1,
-      hostId: "ssh:5080",
-      sessionId: "session-open",
-      occurredAt: "2026-07-31T04:00:00.000Z",
-      receivedAt: "2026-07-31T04:00:00.000Z",
-      kind: "turn.statusChanged",
-      source: "rollout",
-      confidence: "exact",
-      payload: { runtime: "idle", lifecycle: "open", cwd: "/work/project" },
-    }])[0];
-    expect(codexSessionIsOpen(open)).toBe(true);
-    expect(codexSessionIsActive(open)).toBe(false);
-    expect(codexStatusLabel(open)).toBe("待命");
-
-    const ended = { ...open, lifecycle: "closed" };
-    expect(codexSessionIsOpen(ended)).toBe(false);
-    expect(codexStatusLabel(ended)).toBe("已结束");
   });
 
   it("does not wake a pet animation clock for invalid or backwards time", () => {
@@ -281,8 +251,23 @@ describe("Focus Pet migrated core", () => {
 
   it("evaluates the three-state priority rules", () => {
     expect(evaluateState(baseSnapshot({ idleSeconds: 800 }), "focus").state).toBe("away");
-    expect(evaluateState(baseSnapshot({ idleSeconds: 220 }), "focus").state).toBe("distracted");
+    expect(evaluateState(baseSnapshot({ idleSeconds: 220, category: "neutral" }), "focus").state).toBe("distracted");
     expect(evaluateState(baseSnapshot({ category: "work" }), "distracted").state).toBe("focus");
+  });
+
+  it("never labels unavailable input monitoring as allowed", () => {
+    expect(inputMonitoringPermissionTitle("unavailable")).toBe("待开启");
+    expect(inputMonitoringPermissionTitle("frontmost-unavailable")).toBe("待开启");
+    expect(inputMonitoringPermissionTitle("available")).toBe("已允许");
+    expect(inputMonitoringPermissionTitle("windows-low-level-hooks-available")).toBe("已允许");
+  });
+
+  it("allows quiet reading and intentional focus, while lock and entertainment still win", () => {
+    expect(evaluateState(baseSnapshot({ category: "work", idleSeconds: 240 }), "focus").state).toBe("focus");
+    expect(evaluateState(baseSnapshot({ category: "neutral", idleSeconds: 240, isFocusSessionActive: true }), "focus").state).toBe("focus");
+    expect(evaluateState(baseSnapshot({ category: "entertainment", idleSeconds: 240, isFocusSessionActive: true }), "focus").state).toBe("distracted");
+    expect(evaluateState(baseSnapshot({ category: "work", idleSeconds: 600, isFocusSessionActive: true }), "focus").state).toBe("away");
+    expect(evaluateState(baseSnapshot({ category: "work", idleSeconds: 0, isScreenLocked: true }), "focus").state).toBe("away");
   });
 
   it("matches migrated recognition sensitivity presets", () => {
@@ -439,7 +424,7 @@ describe("Focus Pet migrated core", () => {
         start: new Date(2026, 6, 18, 9, 0).toISOString(),
         end: new Date(2026, 6, 18, 10, 0).toISOString(),
         state: "focus",
-        appName: "Codex",
+        appName: "编辑器",
         category: "work",
         titleStored: false,
         source: ["frontmostApplication"],
@@ -824,17 +809,17 @@ describe("Focus Pet migrated core", () => {
     expect(focusFinished.focusSessions.at(-1)?.status).toBe("completed");
   });
 
-  it("clamps historical pointer-motion storms to a usable interaction count", () => {
+  it("preserves measured counts instead of guessing a ceiling", () => {
     expect(normalizeInputActivityBucket({
       start: "2026-07-07T10:00:00.000Z",
       end: "2026-07-07T10:01:00.000Z",
       pointerCount: 90_000,
-    }).pointerCount).toBe(0);
+    }).pointerCount).toBe(90_000);
     expect(normalizeInputActivityBucket({
       start: "2026-07-07T10:00:00.000Z",
       end: "2026-07-07T10:01:00.000Z",
-      pointerCount: maximumPointerActionsPerMinute - 1,
-    }).pointerCount).toBe(maximumPointerActionsPerMinute - 1);
+      pointerCount: 600,
+    }).pointerCount).toBe(600);
   });
 
   it("persists desktop widget window positions for later native sync", () => {
@@ -1066,129 +1051,4 @@ describe("Focus Pet migrated core", () => {
     expect(payload).not.toHaveProperty("inputActivity");
   });
 
-  it("turns an agent completion event into a high-priority pet intent", () => {
-    const state = runtimeActions.transientPetIntent(
-      emptyRuntime().state,
-      "taskCompleted",
-      "Codex 已完成：主题验收",
-      "agent",
-      12_000,
-    );
-    expect(state.currentPetIntent.kind).toBe("taskCompleted");
-    expect(state.currentPetIntent.source).toBe("agent");
-    expect(state.latestPetBubble).toBe("Codex 已完成：主题验收");
-  });
-
-  it("reduces Codex lifecycle and visible assistant output without rendering user prompts", () => {
-    const sessions = reduceCodexEvents([], [
-      {
-        schemaVersion: 1,
-        eventId: "start",
-        sequence: 1,
-        hostId: "local",
-        sessionId: "session-1",
-        occurredAt: "2026-07-28T12:00:00.000Z",
-        receivedAt: "2026-07-28T12:00:00.000Z",
-        kind: "session.started",
-        source: "hook",
-        confidence: "exact",
-        payload: { cwd: "/work/focus-pet" },
-      },
-      {
-        schemaVersion: 1,
-        eventId: "turn",
-        sequence: 2,
-        hostId: "local",
-        sessionId: "session-1",
-        turnId: "turn-1",
-        occurredAt: "2026-07-28T12:00:01.000Z",
-        receivedAt: "2026-07-28T12:00:01.000Z",
-        kind: "turn.started",
-        source: "hook",
-        confidence: "exact",
-        payload: {},
-      },
-      {
-        schemaVersion: 1,
-        eventId: "message",
-        sequence: 3,
-        hostId: "local",
-        sessionId: "session-1",
-        occurredAt: "2026-07-28T12:00:02.000Z",
-        receivedAt: "2026-07-28T12:00:02.000Z",
-        kind: "message.updated",
-        source: "rollout",
-        confidence: "exact",
-        payload: { role: "assistant", text: "正在整理会话同步。", isFinal: false },
-      },
-      {
-        schemaVersion: 1,
-        eventId: "ignored-user-message",
-        sequence: 4,
-        hostId: "local",
-        sessionId: "session-1",
-        occurredAt: "2026-07-28T12:00:03.000Z",
-        receivedAt: "2026-07-28T12:00:03.000Z",
-        kind: "message.updated",
-        source: "rollout",
-        confidence: "exact",
-        payload: { role: "user", text: "不应展示", isFinal: false },
-      },
-    ]);
-    expect(sessions[0].runtime).toBe("active");
-    expect(sessions[0].latestVisibleMessage?.text).toBe("正在整理会话同步。");
-    expect(codexBubble(sessions)).toContain("正在整理会话同步。");
-  });
-
-  it("appends live assistant deltas for one App Server message item", () => {
-    const sessions = reduceCodexEvents([], [
-      {
-        schemaVersion: 1, eventId: "delta-1", sequence: 1, hostId: "local", sessionId: "thread-1",
-        occurredAt: "2026-07-28T12:00:00.000Z", receivedAt: "2026-07-28T12:00:00.000Z", kind: "message.updated", source: "appServer", confidence: "exact",
-        payload: { itemId: "assistant-1", role: "assistant", text: "第一段", isDelta: true, isFinal: false },
-      },
-      {
-        schemaVersion: 1, eventId: "delta-2", sequence: 2, hostId: "local", sessionId: "thread-1",
-        occurredAt: "2026-07-28T12:00:01.000Z", receivedAt: "2026-07-28T12:00:01.000Z", kind: "message.updated", source: "appServer", confidence: "exact",
-        payload: { itemId: "assistant-1", role: "assistant", text: "第二段", isDelta: true, isFinal: false },
-      },
-    ]);
-    expect(sessions[0].latestVisibleMessage?.text).toBe("第一段第二段");
-  });
-
-  it("keeps exact App Server status when a later rollout inference arrives in another batch", () => {
-    const exact = reduceCodexEvents([], [{
-      schemaVersion: 1, eventId: "managed-active", sequence: 1, hostId: "local", sessionId: "thread-1",
-      occurredAt: "2026-07-30T12:00:00.000Z", receivedAt: "2026-07-30T12:00:00.000Z",
-      kind: "turn.statusChanged", source: "appServer", confidence: "exact",
-      payload: { runtime: "active", activeFlags: ["waitingOnApproval"] },
-    }]);
-    expect(exact[0].lifecycle).toBe("open");
-    expect(codexSessionIsActive(exact[0])).toBe(true);
-    const afterInference = reduceCodexEvents(exact, [{
-      schemaVersion: 1, eventId: "rollout-idle", sequence: 2, hostId: "local", sessionId: "thread-1",
-      occurredAt: "2026-07-30T12:00:01.000Z", receivedAt: "2026-07-30T12:00:01.000Z",
-      kind: "turn.statusChanged", source: "rollout", confidence: "inferred",
-      payload: { runtime: "idle", activeFlags: [] },
-    }]);
-    expect(afterInference[0].runtime).toBe("active");
-    expect(afterInference[0].activeFlags).toEqual(["waitingOnApproval"]);
-  });
-
-  it("lets rollout status recover after an exact App Server source has gone stale", () => {
-    const exact = reduceCodexEvents([], [{
-      schemaVersion: 1, eventId: "managed-active", sequence: 1, hostId: "local", sessionId: "thread-stale",
-      occurredAt: "2026-07-30T12:00:00.000Z", receivedAt: "2026-07-30T12:00:00.000Z",
-      kind: "turn.statusChanged", source: "appServer", confidence: "exact",
-      payload: { runtime: "active", activeFlags: [] },
-    }]);
-    const recovered = reduceCodexEvents(exact, [{
-      schemaVersion: 1, eventId: "rollout-idle", sequence: 2, hostId: "local", sessionId: "thread-stale",
-      occurredAt: "2026-07-30T12:00:00.000Z", receivedAt: "2026-07-30T12:00:12.000Z",
-      kind: "turn.statusChanged", source: "rolloutInventory", confidence: "inferred",
-      payload: { runtime: "idle", activeFlags: [] },
-    }]);
-    expect(recovered[0].runtime).toBe("idle");
-    expect(recovered[0].statusSourcePriority).toBe(3);
-  });
 });

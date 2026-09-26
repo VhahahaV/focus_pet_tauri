@@ -188,62 +188,6 @@
 
 .timeline-input-label{top:101px}
 
-/* A small, directly collapsible live surface keeps concurrent Codex work near
-   today’s context without turning the history page into a second task list. */
-.codex-live-panel{overflow:hidden;border:1px solid color-mix(in srgb,var(--pet-400,var(--focus-400)) 32%,var(--border-soft));border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--pet-100,var(--focus-100)) 44%,var(--card)),var(--card));box-shadow:inset 0 1px 0 rgb(255 255 255/0.72)}
-
-.codex-live-panel-header{width:100%;min-height:58px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:9px;padding:10px 12px;border:0;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer}
-
-.codex-live-panel-header:active{transform:scale(.995)}
-
-.codex-live-panel-icon,.codex-live-session-source{display:grid;place-items:center;flex:0 0 auto;border-radius:10px;background:color-mix(in srgb,var(--pet-100,var(--focus-100)) 74%,white);color:var(--pet-600,var(--focus-600))}
-
-.codex-live-panel-icon{width:34px;height:34px}
-
-.codex-live-panel-title{min-width:0;display:grid;gap:2px}
-
-.codex-live-panel-title strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:820}
-
-.codex-live-panel-title small,.codex-live-session-copy small{overflow:hidden;color:var(--text-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:680}
-
-.codex-live-panel-count{display:grid;place-items:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;background:var(--card);color:var(--pet-600,var(--focus-600));font-size:10px;font-weight:820}
-
-.codex-live-panel-header>svg{transition:transform 180ms cubic-bezier(.2,.8,.2,1)}
-
-.codex-live-panel.is-expanded .codex-live-panel-header>svg{transform:rotate(180deg)}
-
-.codex-live-session-list{max-height:340px;display:grid;gap:7px;overflow:auto;padding:0 10px 10px;scrollbar-gutter:stable}
-
-.codex-live-session{overflow:hidden;border:1px solid var(--border-soft);border-radius:13px;background:color-mix(in srgb,var(--card) 88%,transparent)}
-
-.codex-live-session-summary{width:100%;min-height:50px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:8px;border:0;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer}
-
-.codex-live-session-summary:active{background:color-mix(in srgb,var(--pet-100,var(--focus-100)) 42%,transparent)}
-
-.codex-live-session-source{width:28px;height:28px;border-radius:9px}
-
-.codex-live-session-source.is-remote{color:var(--focus-600)}
-
-.codex-live-session-copy{min-width:0;display:grid;gap:1px}
-
-.codex-live-session-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:790}
-
-.codex-live-session-status{padding:4px 6px;border-radius:999px;background:color-mix(in srgb,var(--focus-100) 74%,var(--card));color:var(--focus-600);font-size:9px;font-style:normal;font-weight:790;white-space:nowrap}
-
-.codex-live-session-status.status-idle{background:color-mix(in srgb,var(--away-100) 68%,var(--card));color:var(--text-secondary)}
-
-.codex-live-session-status.status-systemError{background:color-mix(in srgb,var(--distracted-100) 70%,var(--card));color:var(--distracted-600)}
-
-.codex-live-session-summary>svg{transition:transform 180ms cubic-bezier(.2,.8,.2,1)}
-
-.codex-live-session.is-open .codex-live-session-summary>svg{transform:rotate(90deg)}
-
-.codex-live-session-output{max-height:212px;overflow:auto;margin:0 8px 8px;padding:9px 10px;border-radius:10px;background:var(--inset-surface);color:var(--text-secondary);font-size:11px;line-height:1.55}
-
-.codex-live-session-output pre{margin:0;white-space:pre-wrap;word-break:break-word;font:inherit}
-
-@media (max-width:560px){.codex-live-session-list{max-height:300px}.codex-live-session-output{max-height:174px}.codex-live-session-status{display:none}}
-
 .timeline-color-legend{display:flex;align-items:center;gap:4px;color:var(--text-secondary);font-size:9px;font-weight:760;line-height:1;white-space:nowrap}
 
 .timeline-color-legend i{width:7px;height:7px;margin-left:3px;border-radius:999px;background:currentColor}

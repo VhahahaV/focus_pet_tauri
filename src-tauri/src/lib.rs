@@ -1,26 +1,14 @@
-mod agent_events;
-mod codex_sessions;
 mod native;
 mod notifications;
 mod pet_pack;
 mod runtime_service;
-mod ssh_sessions;
 mod store;
 mod system_monitor;
 
-use agent_events::AgentCompletionEvent;
-use codex_sessions::{
-    CodexEventEnvelope, CodexHookConfigurationResult, CodexIntegrationStatus, CodexSessionManager,
-    CodexSessionSnapshot, CodexSyncPreferences,
-};
 use native::NativeActivitySample;
 use pet_pack::ImportedPetPack;
 use runtime_service::{NativeRuntimeEnvelope, NativeRuntimeService};
 use serde_json::Value;
-use ssh_sessions::{
-    SshConnectionStatus, SshHostCandidate, SshHostDiagnostic, SshProvisionResult,
-    SshSessionManager, SshUninstallResult,
-};
 use std::path::{Path, PathBuf};
 use store::FocusPetStore;
 use system_monitor::{SystemMetricsSample, SystemMonitorState};
@@ -204,145 +192,6 @@ async fn sample_system_metrics(
         .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-fn drain_agent_events() -> Result<Vec<AgentCompletionEvent>, String> {
-    agent_events::drain_events()
-}
-
-#[tauri::command]
-fn agent_event_inbox_path() -> String {
-    agent_events::inbox_path()
-}
-
-#[tauri::command]
-fn drain_codex_session_events(
-    state: tauri::State<'_, CodexSessionManager>,
-) -> Result<Vec<CodexEventEnvelope>, String> {
-    state.drain()
-}
-
-#[tauri::command]
-fn codex_session_snapshot(
-    state: tauri::State<'_, CodexSessionManager>,
-) -> Result<Vec<CodexSessionSnapshot>, String> {
-    state.snapshot()
-}
-
-#[tauri::command]
-fn codex_integration_status() -> CodexIntegrationStatus {
-    codex_sessions::integration_status()
-}
-
-#[tauri::command]
-fn set_codex_sync_preferences(
-    preferences: CodexSyncPreferences,
-    _state: tauri::State<'_, CodexSessionManager>,
-) -> Result<CodexSyncPreferences, String> {
-    codex_sessions::set_sync_preferences(preferences)
-}
-
-#[tauri::command]
-fn start_codex_managed_daemon(
-    state: tauri::State<'_, CodexSessionManager>,
-) -> Result<bool, String> {
-    let started = codex_sessions::start_managed_daemon()?;
-    if started {
-        codex_sessions::start_managed_event_stream(state.inner().clone());
-    }
-    Ok(started)
-}
-
-#[tauri::command]
-fn poll_codex_managed_status(
-    state: tauri::State<'_, CodexSessionManager>,
-) -> Result<Vec<CodexEventEnvelope>, String> {
-    let events = codex_sessions::managed_status_events()?;
-    state.ingest_external(events)
-}
-
-#[tauri::command]
-fn install_codex_hooks() -> Result<CodexHookConfigurationResult, String> {
-    codex_sessions::install_hooks()
-}
-
-#[tauri::command]
-fn uninstall_codex_hooks() -> Result<CodexHookConfigurationResult, String> {
-    codex_sessions::uninstall_hooks()
-}
-
-#[tauri::command]
-fn discover_codex_ssh_hosts() -> Result<Vec<SshHostCandidate>, String> {
-    ssh_sessions::discover_hosts()
-}
-
-#[tauri::command]
-fn save_codex_ssh_host(
-    alias: String,
-    hostname: String,
-    user: Option<String>,
-    port: Option<u16>,
-) -> Result<SshHostCandidate, String> {
-    ssh_sessions::save_host(&alias, &hostname, user.as_deref(), port)
-}
-
-#[tauri::command]
-fn forget_codex_ssh_host(
-    alias: String,
-    ssh: tauri::State<'_, SshSessionManager>,
-) -> Result<bool, String> {
-    ssh.disconnect(&alias)?;
-    ssh_sessions::forget_host(&alias)?;
-    Ok(true)
-}
-
-#[tauri::command]
-fn diagnose_codex_ssh_host(alias: String) -> Result<SshHostDiagnostic, String> {
-    ssh_sessions::diagnose_host(&alias)
-}
-
-#[tauri::command]
-fn provision_codex_ssh_host(alias: String) -> Result<SshProvisionResult, String> {
-    ssh_sessions::provision_host(&alias)
-}
-
-#[tauri::command]
-fn uninstall_codex_ssh_host(
-    alias: String,
-    ssh: tauri::State<'_, SshSessionManager>,
-) -> Result<SshUninstallResult, String> {
-    ssh.disconnect(&alias)?;
-    ssh_sessions::uninstall_host(&alias)
-}
-
-#[tauri::command]
-fn connect_codex_ssh_host(
-    alias: String,
-    ssh: tauri::State<'_, SshSessionManager>,
-) -> Result<bool, String> {
-    ssh.connect(&alias)?;
-    Ok(true)
-}
-
-#[tauri::command]
-fn drain_codex_ssh_events(
-    codex: tauri::State<'_, CodexSessionManager>,
-    ssh: tauri::State<'_, SshSessionManager>,
-) -> Result<Vec<CodexEventEnvelope>, String> {
-    codex.ingest_external(ssh.drain()?)
-}
-
-#[tauri::command]
-fn codex_ssh_connection_status(
-    ssh: tauri::State<'_, SshSessionManager>,
-) -> Result<Vec<SshConnectionStatus>, String> {
-    ssh.connection_statuses()
-}
-
-pub fn maybe_handle_agent_notification() -> bool {
-    codex_sessions::maybe_ingest_hook_from_process_args()
-        || agent_events::maybe_ingest_from_process_args()
-}
-
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InstallationSnapshot {
@@ -403,14 +252,13 @@ async fn native_runtime_snapshot(
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) -> bool {
-    codex_sessions::stop_focus_pet_ephemeral_app_server();
     app.exit(0);
     true
 }
 
 #[tauri::command]
-fn sample_activity() -> NativeActivitySample {
-    native::sample_activity()
+fn sample_activity() -> Option<NativeActivitySample> {
+    native::activity_snapshot()
 }
 
 #[tauri::command]
@@ -571,7 +419,7 @@ fn export_app_icon(
 
     // Packaged Windows apps commonly expose only a generic executable icon.
     // Prefer their AppX manifest logo when the foreground executable lives in
-    // WindowsApps, which covers ChatGPT/Codex and other Store-distributed apps.
+    // WindowsApps, which covers Store applications and other Store-distributed apps.
     if store_packaged_app {
         if let Some(store_logo) = windows_store_logo_source(&source) {
             if std::fs::copy(&store_logo, &output_path).is_ok() && output_path.is_file() {
@@ -958,7 +806,7 @@ fn toggle_menu_bar_window(app: &tauri::AppHandle) {
 }
 
 fn pet_companion_window_size(pet_size: f64) -> (f64, f64) {
-    // Keep enough room for the compact hover controls/Codex card without
+    // Keep enough room for the compact hover controls without
     // making an invisible 420×540 host constrain where the pet can be placed.
     (
         pet_size.max((pet_size + 210.0).min(360.0)),
@@ -2000,7 +1848,6 @@ fn handle_native_menu_action(app: &tauri::AppHandle, action: &str) {
         TRAY_RESUME_REMINDERS => emit_menu_action(app, TRAY_RESUME_REMINDERS),
         TRAY_FINISH_FOCUS => emit_menu_action(app, TRAY_FINISH_FOCUS),
         TRAY_QUIT => {
-            codex_sessions::stop_focus_pet_ephemeral_app_server();
             app.exit(0);
         }
         _ => {}
@@ -2400,10 +2247,10 @@ mod tests {
     #[test]
     fn windows_store_package_paths_are_detected_without_matching_similar_paths() {
         assert!(super::is_windows_store_package_path(Path::new(
-            r"C:\Program Files\WindowsApps\OpenAI.Codex_1\app\ChatGPT.exe"
+            r"C:\Program Files\WindowsApps\Example.Editor_1\app\ChatGPT.exe"
         )));
         assert!(!super::is_windows_store_package_path(Path::new(
-            r"C:\Program Files\WindowsAppsBackup\OpenAI.Codex\ChatGPT.exe"
+            r"C:\Program Files\WindowsAppsBackup\Example.Editor\ChatGPT.exe"
         )));
     }
 }
@@ -2426,16 +2273,6 @@ pub fn run() {
             install_macos_workspace_observers(app.handle(), native_runtime.clone());
             install_macos_focus_display_monitor(app.handle());
             app.manage(native_runtime);
-            let codex_sessions = CodexSessionManager::new();
-            let ssh_sessions = SshSessionManager::new();
-            start_codex_session_event_bridges(
-                app.handle(),
-                codex_sessions.clone(),
-                ssh_sessions.clone(),
-            );
-            start_default_codex_integrations(codex_sessions.clone(), ssh_sessions.clone());
-            app.manage(codex_sessions);
-            app.manage(ssh_sessions);
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(desktop)]
@@ -2471,25 +2308,6 @@ pub fn run() {
             quit_app,
             sample_activity,
             sample_system_metrics,
-            drain_agent_events,
-            agent_event_inbox_path,
-            drain_codex_session_events,
-            codex_session_snapshot,
-            codex_integration_status,
-            set_codex_sync_preferences,
-            start_codex_managed_daemon,
-            poll_codex_managed_status,
-            install_codex_hooks,
-            uninstall_codex_hooks,
-            discover_codex_ssh_hosts,
-            save_codex_ssh_host,
-            forget_codex_ssh_host,
-            diagnose_codex_ssh_host,
-            provision_codex_ssh_host,
-            uninstall_codex_ssh_host,
-            connect_codex_ssh_host,
-            drain_codex_ssh_events,
-            codex_ssh_connection_status,
             app_icon,
             installation_snapshot,
             choose_and_import_pet_pack,
@@ -2503,76 +2321,15 @@ pub fn run() {
             pet_panel_pointer_position,
             sync_widget_windows
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Focus Pet");
-}
-
-/// The official App Server stream, Hooks and rollout transcript reader all
-/// feed the same normalized reducer. Hooks return quickly; this bridge emits
-/// updates to the webview in sub-second batches and retains command polling
-/// only as a recovery fallback for older Codex runtimes.
-fn start_codex_session_event_bridges(
-    app: &tauri::AppHandle,
-    codex: CodexSessionManager,
-    ssh: SshSessionManager,
-) {
-    let local_app = app.clone();
-    let local_codex = codex.clone();
-    std::thread::spawn(move || loop {
-        if let Ok(events) = local_codex.drain() {
-            if !events.is_empty() {
-                let _ = local_app.emit("codex-session-events", events);
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    });
-
-    let ssh_app = app.clone();
-    std::thread::spawn(move || loop {
-        if let Ok(events) = ssh.drain().and_then(|events| codex.ingest_external(events)) {
-            if !events.is_empty() {
-                let _ = ssh_app.emit("codex-session-events", events);
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    });
-}
-
-/// Configure the privacy-preserving Codex integration on every app launch.
-/// All operations are idempotent and run away from the UI thread. SSH hosts
-/// are connected independently so one offline alias cannot delay a live host.
-fn start_default_codex_integrations(codex: CodexSessionManager, ssh: SshSessionManager) {
-    std::thread::spawn(move || {
-        let _ = codex_sessions::set_sync_preferences(CodexSyncPreferences::default());
-        if let Err(error) = codex_sessions::install_hooks() {
-            log::warn!("Codex Hook automatic setup skipped: {error}");
-        }
-        match codex_sessions::start_managed_daemon() {
-            Ok(true) => codex_sessions::start_managed_event_stream(codex),
-            Ok(false) => {}
-            Err(error) => log::warn!("Codex App Server automatic setup unavailable: {error}"),
-        }
-
-        let hosts = match ssh_sessions::discover_hosts() {
-            Ok(hosts) => hosts,
-            Err(error) => {
-                log::warn!("Codex SSH host discovery failed: {error}");
-                return;
-            }
-        };
-        for host in hosts {
-            let manager = ssh.clone();
-            std::thread::spawn(move || {
-                loop {
-                    if let Err(error) = manager.connect(&host.alias) {
-                        log::info!("Codex SSH host {} is unavailable: {error}", host.alias);
+        .build(tauri::generate_context!())
+        .expect("error while building Focus Pet")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(runtime) = app.try_state::<NativeRuntimeService>() {
+                    if let Err(error) = runtime.flush(app) {
+                        log::error!("final save failed: {error}");
                     }
-                    // `connect` is idempotent while a live/reconnecting worker
-                    // owns the host. This supervisor only retries failures that
-                    // happened before a worker could be established.
-                    std::thread::sleep(std::time::Duration::from_secs(30));
                 }
-            });
-        }
-    });
+            }
+        });
 }

@@ -142,7 +142,7 @@ export const emptyRuntime = (catalogEntries: ClassificationCatalogEntry[] = []):
 
 export const inputMonitoringPermissionTitle = (status: string): string => {
   const normalized = status.trim().toLowerCase();
-  if (normalized === "已允许" || normalized === "available" || normalized.includes("available")) return "已允许";
+  if (normalized === "已允许" || normalized === "available" || /(?:^|[-\s·])available$/.test(normalized)) return "已允许";
   if (normalized === "检查中") return "检查中";
   return "待开启";
 };

@@ -914,7 +914,26 @@ mod tests {
 
         let root = temp_dir("focus-pet-migrated-pack-fixtures");
         let library = root.join("library");
-        let cases = [
+        let organized_pack_ids = vec![
+            "aranara",
+            "camellya",
+            "firefly",
+            "focus_pet_icon_demo",
+            "fungus",
+            "luo_xiaohei_local",
+            "nahida",
+            "paimon",
+            "pikechu",
+            "pixel_cat_meme_expanded",
+            "pixel_cat_meme_local",
+            "pixel_simei",
+            "san_cat",
+            "shorekeeper",
+            "uniken_local",
+            "xiao_bird",
+            "xiaodai_local",
+        ];
+        let mut cases = vec![
             ("LuoXiaoHeiLocal.zip", vec!["luo_xiaohei_local"]),
             ("PixelCatMemeLocal.zip", vec!["pixel_cat_meme_local"]),
             ("UNIkeNLocal.zip", vec!["uniken_local"]),
@@ -924,6 +943,11 @@ mod tests {
                 vec!["luo_xiaohei_local", "xiaodai_local", "pixel_cat_meme_local"],
             ),
         ];
+        // The complete library is distributed as Release assets, not a 170 MB
+        // Git fixture. Validate it locally when the source archive is present.
+        if fixture_root.join("FocusPetPetPacks.zip").is_file() {
+            cases.push(("FocusPetPetPacks.zip", organized_pack_ids.clone()));
+        }
 
         for (zip_name, expected_ids) in cases {
             let zip_path = fixture_root.join(zip_name);
@@ -964,6 +988,45 @@ mod tests {
         let records = list_pet_packs(&library).expect("migrated fixtures list");
         assert!(records.len() >= 4);
 
+        let folder_collection = fixture_root.join("FocusPetPetPacks");
+        if folder_collection.is_dir() {
+            let imported =
+                import_pet_packs(&folder_collection, &library).expect("folder collection imports");
+            let mut ids = imported
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            assert_eq!(ids, organized_pack_ids);
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "requires FOCUS_PET_RELEASE_PETS_ZIP pointing to the generated full library"]
+    fn imports_release_pet_library() {
+        let archive = std::env::var_os("FOCUS_PET_RELEASE_PETS_ZIP").expect("release archive path");
+        let root = temp_dir("focus-pet-release-library");
+        let library = root.join("library");
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../docs/pet-packs/catalog.json")).unwrap();
+        let imported =
+            import_pet_packs(Path::new(&archive), &library).expect("release archive imports");
+        let mut actual: Vec<_> = imported.iter().map(|p| p.id.as_str()).collect();
+        let mut expected: Vec<_> = catalog["packs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+        assert!(imported
+            .iter()
+            .all(|p| p.validation.is_valid && !p.source_action_assets.is_empty()));
+        assert_eq!(list_pet_packs(&library).unwrap().len(), expected.len());
         let _ = fs::remove_dir_all(root);
     }
 

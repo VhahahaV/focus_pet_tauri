@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "repository": "VhahahaV/focus_pet_tauri",
+  "categories": [
+    {
+      "id": "demo",
+      "name": "应用图标演示",
+      "packs": [
+        "FocusPetIconDemo"
+      ]
+    },
+    {
+      "id": "pixel",
+      "name": "像素与猫系",
+      "packs": [
+        "PixelCatMemeLocal",
+        "pixel_cat_meme_expanded",
+        "pixel_simei",
+        "san_cat",
+        "pikechu"
+      ]
+    },
+    {
+      "id": "companions",
+      "name": "角色与萌宠",
+      "packs": [
+        "LuoXiaoHeiLocal",
+        "XiaoDaiLocal",
+        "UNIkeNLocal"
+      ]
+    },
+    {
+      "id": "game-characters",
+      "name": "游戏角色",
+      "packs": [
+        "aranara",
+        "fungus",
+        "nahida",
+        "paimon",
+        "xiao_bird",
+        "camellya",
+        "shorekeeper",
+        "firefly"
+      ]
+    }
+  ],
+  "notes": {
+    "focus_pet_icon_demo": "应用图标衍生的动画演示，用于体验导入和动作映射。",
+    "paimon": "轻量待机包：仅有待机动作，不包含独立睡眠或提醒动画。",
+    "pikechu": "轻量待机包：仅有待机动作，不包含独立睡眠或提醒动画。",
+    "pixel_cat_meme_expanded": "与基础像素猫为不同资源 ID，可同时安装；包含更多动作。"
+  },
+  "idlePools": {
+    "luo_xiaohei_local": [
+      "licking the claw"
+    ],
+    "pixel_cat_meme_local": [
+      "default",
+      "work",
+      "sleep",
+      "onfloor"
+    ],
+    "xiaodai_local": [
+      "default",
+      "focus",
+      "sleepy",
+      "sleep",
+      "onfloor"
+    ],
+    "uniken_local": [
+      "idle_smile",
+      "sleep_sit"
+    ]
+  }
+}

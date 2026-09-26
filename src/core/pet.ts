@@ -5,8 +5,6 @@ export const intentPriority = (source: PetIntentSource): number => {
   switch (source) {
     case "physicalInteraction":
       return 500;
-    case "agent":
-      return 450;
     case "nudge":
       return 400;
     case "interaction":

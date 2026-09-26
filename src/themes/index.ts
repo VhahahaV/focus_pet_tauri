@@ -3,7 +3,7 @@ import type { AppThemeID } from "../core/types";
 import { normalizeAppTheme } from "../core/theme";
 import neobrutalismArtURL from "../assets/themes/neobrutalism.svg?no-inline";
 import midCenturyModernArtURL from "../assets/themes/mid-century-modern.svg?no-inline";
-import constructivismArtURL from "../assets/themes/constructivism.svg?no-inline";
+import handDrawnArtURL from "../assets/themes/hand-drawn.svg?no-inline";
 
 export { appThemeIDs, defaultAppTheme, normalizeAppTheme } from "../core/theme";
 
@@ -34,11 +34,11 @@ export const appThemes: readonly AppThemeDefinition[] = [
     swatches: ["var(--theme-preview-1)", "var(--theme-preview-2)", "var(--theme-preview-3)", "var(--theme-preview-4)"],
   },
   {
-    id: "constructivism",
-    name: "构成主义",
-    englishName: "Constructivism",
-    description: "红黑块面、新闻纸底与前倾的海报构图",
-    artURL: constructivismArtURL,
+    id: "hand-drawn",
+    name: "手绘涂鸦",
+    englishName: "Hand-drawn / Doodle",
+    description: "暖纸底色、手绘墨线与明快的马克笔色块",
+    artURL: handDrawnArtURL,
     swatches: ["var(--theme-preview-1)", "var(--theme-preview-2)", "var(--theme-preview-3)", "var(--theme-preview-4)"],
   },
 ] as const;

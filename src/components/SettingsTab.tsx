@@ -1,11 +1,7 @@
 import {
   Bell,
-  Bot,
   CheckCircle2,
   Clock3,
-  CircleAlert,
-  CircleCheck,
-  Globe2,
   Info,
   Keyboard,
   LoaderCircle,
@@ -26,7 +22,6 @@ import { judgmentPresetSettings, matchingJudgmentPreset, type JudgmentSensitivit
 import { CommandButton } from "./common";
 import { SegmentedControl, Stepper, TogglePill } from "./ui";
 import { appThemes } from "../themes";
-import { codexSessionIsActive } from "../core/codexSessions";
 
 type SettingsModuleID = "appearance" | "desktopWidgets" | "reminders" | "recognition" | "about";
 type SettingsStatus = "focus" | "distracted" | "info" | "warning" | "pet" | "success" | "neutral";
@@ -100,6 +95,8 @@ const judgmentPresetLabels: Record<JudgmentSensitivityPreset, string> = {
 const sampleQualityTitle = (quality?: string): string => {
   if (!quality) return "等待采样";
   if (quality === "screen-locked") return "锁屏隔离";
+  if (quality.includes("cg-event-tap")) return "macOS 原生输入监听";
+  if (quality.includes("input-unavailable")) return "输入计数不可用";
   if (quality.includes("low-level-input-hooks")) return "Win32 原生钩子";
   if (quality.includes("fallback")) return "空闲状态回退";
   if (quality === "browser-preview") return "浏览器预览";
@@ -276,6 +273,8 @@ const RecognitionSettings = () => {
             <strong>{diagnostic.switchCount} 次</strong>
           </div>
         </div>
+        <p className="recognition-window-title">macOS：键盘按下计一次，长按连发不重复；鼠标每次点击计一次，双击计两次，移动和滚动不计入点击。未授权时不估算次数。</p>
+        <p className="recognition-window-title">工作应用内阅读、思考会保留专注，直到离开阈值；锁屏和睡眠立即算离开。状态是活动线索，手动分类可纠正误判。</p>
         {diagnostic.windowTitle ? <p className="recognition-window-title">{diagnostic.windowTitle}</p> : null}
         <div className="settings-right-actions">
           <CommandButton variant="danger" onClick={actions.resetRecognitionRules} disabled={diagnostic.userRuleCount === 0}>
@@ -299,7 +298,7 @@ const RecognitionSettings = () => {
 
       <div className="settings-control-grid">
         <NumberControl
-          title="无输入走神"
+          title="非工作无输入走神"
           value={settings.inputIdleDistractedSeconds}
           min={30}
           max={900}
@@ -395,17 +394,8 @@ const DesktopWidgetSettings = () => {
 };
 
 const ReminderSettings = () => {
-  const { bundle, actions, codexIntegration, codexSessions, codexManagedStatusEnabled, codexSshHosts, codexSshConnections } = useFocusPet();
+  const { bundle, actions } = useFocusPet();
   const reminder = bundle.state.settings.reminder;
-  const codexConfigured = codexIntegration?.mode === "configured";
-  const managedDaemonStatus = codexIntegration?.managedDaemonStatus ?? "unknown";
-  const activeCodexSessions = codexSessions.filter(codexSessionIsActive).length;
-  const connectedSshHosts = codexSshConnections.filter((connection) => connection.status === "connected").length;
-  const codexReady = codexManagedStatusEnabled
-    || codexConfigured
-    || connectedSshHosts > 0
-    || codexSessions.length > 0
-    || managedDaemonStatus !== "unavailable" && managedDaemonStatus !== "unknown";
   return (
     <div className="settings-module-stack">
       <SettingsSubsection title="提醒通道" Icon={Bell} status="focus">
@@ -481,40 +471,7 @@ const ReminderSettings = () => {
         </div>
       </SettingsSubsection>
 
-      <SettingsSubsection title="智能体任务" Icon={Bot} status="pet">
-        <section className="codex-sync-panel" aria-label="Codex 会话同步配置">
-          <header>
-            <span className="codex-sync-icon"><Bot size={18} /></span>
-            <span>
-              <strong>Codex 会话同步</strong>
-              <small>{activeCodexSessions
-                ? `${activeCodexSessions} 个任务运行中`
-                : codexReady ? "正在自动发现本机与服务器会话" : "等待 Codex CLI"}</small>
-            </span>
-            <em className={codexReady ? "is-ready" : "is-pending"}>{codexReady ? <><CircleCheck size={13} /> 已就绪</> : <><CircleAlert size={13} /> 未检测到</>}</em>
-          </header>
-          <p>Focus Pet 会自动完成 Hook、App Server、rollout 与 SSH 会话发现，不需要手动安装、刷新或连接。</p>
-          <div className="settings-toggle-grid">
-            <TogglePillButton
-              label="今日显示 Codex 实时会话"
-              Icon={Bot}
-              status="pet"
-              checked={bundle.state.settings.codex.showInToday}
-              onChange={(showInToday) => actions.updateSettings((settings) => ({
-                ...settings,
-                codex: { ...settings.codex, showInToday },
-              }))}
-            />
-          </div>
-          <p><strong>Assistant 摘要（默认）</strong> · 实时窗口展示 Codex 的可见回复。</p>
-          <div className="settings-inline-action">
-            <span><ShieldCheck size={15} /> 本机同步 {codexConfigured ? "已配置" : codexReady ? "自动初始化中" : "等待 Codex CLI"}</span>
-          </div>
-          <div className="settings-inline-action">
-            <span><Globe2 size={15} /> SSH 服务器 {codexSshHosts.length ? `${connectedSshHosts}/${codexSshHosts.length} 已连接` : "未发现具体 Host alias"}</span>
-          </div>
-        </section>
-      </SettingsSubsection>
+
 
       <SettingsSubsection title="暂停" Icon={RotateCcw} status="warning">
         <div className="settings-control-grid single">

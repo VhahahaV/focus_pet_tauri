@@ -1,7 +1,6 @@
 import type {
   AppSettings,
   AppearanceSettings,
-  CodexDisplaySettings,
   DesktopWidgetSettings,
   JudgmentSettings,
   PetSettings,
@@ -18,16 +17,6 @@ export const defaultAppearanceSettings = (): AppearanceSettings => ({ theme: def
 
 export const normalizeAppearanceSettings = (settings: Partial<AppearanceSettings> = {}): AppearanceSettings => ({
   theme: normalizeAppTheme(settings.theme),
-});
-
-export const defaultCodexDisplaySettings = (): CodexDisplaySettings => ({
-  showInToday: false,
-});
-
-export const normalizeCodexDisplaySettings = (
-  settings: Partial<CodexDisplaySettings> = {},
-): CodexDisplaySettings => ({
-  showInToday: settings.showInToday ?? false,
 });
 
 export const defaultReminderSettings = (): ReminderSettings => ({
@@ -207,7 +196,6 @@ export const defaultAppSettings = (): AppSettings => {
   return {
     hasCompletedOnboarding: false,
     appearance: defaultAppearanceSettings(),
-    codex: defaultCodexDisplaySettings(),
     reminder: defaultReminderSettings(),
     judgment: defaultJudgmentSettings(),
     pet: defaultPetSettings(),
@@ -222,8 +210,9 @@ export const normalizeAppSettings = (settings: Partial<AppSettings> = {}): AppSe
   // Older snapshots persisted a configurable retention object. Ignore it on
   // read so history is now kept indefinitely and the legacy field disappears
   // from the next saved snapshot.
-  const settingsWithoutLegacyRetention = { ...settings } as Partial<AppSettings> & { retention?: unknown };
+  const settingsWithoutLegacyRetention = { ...settings } as Partial<AppSettings> & { retention?: unknown; codex?: unknown };
   delete settingsWithoutLegacyRetention.retention;
+  delete settingsWithoutLegacyRetention.codex;
   const desktopWidget = normalizeDesktopWidgetSettings(settingsWithoutLegacyRetention.desktopWidget);
   const legacyDesktopWidgetVisible = settingsWithoutLegacyRetention.desktopWidgetVisible;
   if (legacyDesktopWidgetVisible !== undefined && settingsWithoutLegacyRetention.desktopWidget === undefined) {
@@ -234,7 +223,6 @@ export const normalizeAppSettings = (settings: Partial<AppSettings> = {}): AppSe
     ...defaultAppSettings(),
     ...settingsWithoutLegacyRetention,
     appearance: normalizeAppearanceSettings(settingsWithoutLegacyRetention.appearance),
-    codex: normalizeCodexDisplaySettings(settingsWithoutLegacyRetention.codex),
     reminder: normalizeReminderSettings(settingsWithoutLegacyRetention.reminder),
     judgment: normalizeJudgmentSettings(settingsWithoutLegacyRetention.judgment),
     pet: normalizePetSettings(settingsWithoutLegacyRetention.pet),

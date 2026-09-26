@@ -1,0 +1,104 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app
+          - platform: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app
+          - platform: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - platform: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: release-${{ matrix.platform }}
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            xdg-utils dpkg-dev fakeroot
+      - run: npm ci
+      - name: Check versions
+        shell: bash
+        run: |
+          node -e 'const fs=require("fs");const v=JSON.parse(fs.readFileSync("package.json")).version;if(JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json")).version!==v)process.exit(1);if(process.env.GITHUB_REF_TYPE==="tag"&&process.env.GITHUB_REF_NAME!==`v${v}`)process.exit(1);'
+      - run: npm run lint
+      - run: npm test
+      - run: npm run verify:tauri-contract
+      - run: npm run verify:frontend-tokens
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Build native app
+        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Prepare installers and checksums
+        run: node scripts/collect-release-artifacts.mjs ${{ matrix.platform }} ${{ matrix.target }}
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release-${{ matrix.platform }}
+          path: output/release-apps/*
+          if-no-files-found: error
+          retention-days: 14
+
+  upload:
+    name: Upload installers to draft release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: output/release-apps
+          merge-multiple: true
+      - name: Create draft and upload verified installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --title "Focus Pet $TAG" --notes-file "docs/releases/$TAG.md"
+          fi
+          gh release upload "$TAG" output/release-apps/* --clobber

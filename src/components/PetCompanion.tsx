@@ -36,16 +36,8 @@ import {
   nativeSetPetPanelPosition,
   nativePetPanelPointerPosition,
 } from "../store/native";
-import { nativeCodexSessionSnapshot } from "../store/native";
-import {
-  onlyActiveCodexSessions,
-  reduceActiveCodexEvents,
-  type CodexEventEnvelope,
-  type CodexSessionSnapshot,
-} from "../core/codexSessions";
 import { useDocumentTheme } from "../themes";
 import { usePetFrames } from "./usePetFrames";
-import { CodexSessionPanel } from "./CodexSessionPanel";
 
 interface PetCompanionRendererProps {
   state: PetCompanionViewState;
@@ -98,12 +90,6 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   const [randomState, setRandomState] = useState<RandomSourceActionState>({});
   const [manualBubble, setManualBubble] = useState<string | undefined>();
   const [localPhysicalIntent, setLocalPhysicalIntent] = useState<PetIntent | undefined>();
-  const [nativeCodexSessions, setNativeCodexSessions] = useState<CodexSessionSnapshot[]>(
-    onlyActiveCodexSessions(state.codexSessions),
-  );
-  const codexSessions = windowMode
-    ? nativeCodexSessions
-    : onlyActiveCodexSessions(state.codexSessions);
   const selectedPack = resolveSelectedPetPack(petPacks, settings.selectedPackID);
   const effectivePetIntent = localPhysicalIntent ?? state.currentPetIntent;
   const resolvedSourceAction = resolveDisplaySourceAction(
@@ -124,10 +110,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   const animationKey = `${selectedPack?.id ?? "fallback"}:${sourceAction?.id ?? "preview"}`;
   const [frameIndex, setFrameIndex] = useState(0);
   const animationStartedAtRef = useRef(performance.now());
-  // Codex status is a continuous external-runtime signal, so it remains visible
-  // in the transparent desktop-pet window. Manual interactions still win.
   const visibleBubble = isDragging ? undefined : manualBubble ?? (windowMode ? undefined : state.latestPetBubble);
-  const showCodexPanel = windowMode && !isDragging && !manualBubble && codexSessions.length > 0;
   const hoverItems = useMemo(
     () => [
       { title: "专注", value: formatCompactDuration(state.summary.focusSeconds), Icon: Target },
@@ -147,29 +130,6 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
     animationStartedAtRef.current = performance.now();
     setFrameIndex(0);
   }, [animationKey]);
-
-  useEffect(() => {
-    if (!windowMode || !("__TAURI_INTERNALS__" in window)) return undefined;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void nativeCodexSessionSnapshot()
-      .then((sessions) => {
-        if (!disposed) setNativeCodexSessions(onlyActiveCodexSessions(sessions));
-      })
-      .catch(() => undefined);
-    void listen<CodexEventEnvelope[]>("codex-session-events", (event) => {
-      if (!disposed && event.payload.length > 0) {
-        setNativeCodexSessions((sessions) => reduceActiveCodexEvents(sessions, event.payload));
-      }
-    }).then((dispose) => {
-      if (disposed) dispose();
-      else unlisten = dispose;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [windowMode]);
 
   useEffect(() => {
     if (!manualBubble) return undefined;
@@ -488,7 +448,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
   return (
     <aside
       ref={companionRef}
-      className={`pet-companion ${windowMode ? "window-pet" : ""} ${placementClass(settings.placement)} ${isHovering ? "is-hovering" : ""} ${isDragging ? "is-dragging" : ""} ${showCodexPanel ? "has-codex-panel" : ""}`}
+      className={`pet-companion ${windowMode ? "window-pet" : ""} ${placementClass(settings.placement)} ${isHovering ? "is-hovering" : ""} ${isDragging ? "is-dragging" : ""}`}
       style={{ "--pet-size": `${settings.size}px`, "--pet-opacity": settings.opacity } as React.CSSProperties}
       aria-label="桌宠"
       onBlurCapture={(event) => {
@@ -502,11 +462,7 @@ const PetCompanionRenderer = ({ state, petPacks, windowMode = false, onAction }:
       }}
       onPointerLeave={usesNativeHitTesting ? undefined : () => updateHovering(false)}
     >
-      {showCodexPanel ? (
-        <div ref={(node) => { bubbleRef.current = node; }} className="floating-pet-codex">
-          <CodexSessionPanel sessions={codexSessions} />
-        </div>
-      ) : visibleBubble ? <span ref={(node) => { bubbleRef.current = node; }} className="floating-pet-bubble">{visibleBubble}</span> : null}
+      {visibleBubble ? <span ref={(node) => { bubbleRef.current = node; }} className="floating-pet-bubble">{visibleBubble}</span> : null}
       <button
         ref={hitTargetRef}
         className="pet-avatar-button"

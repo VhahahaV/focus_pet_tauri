@@ -37,3 +37,11 @@ release/*.dmg.sha256
 *.njsproj
 *.sln
 *.sw?
+
+# Release-only resource libraries and distributable build artifacts.
+local-pet-packs/FocusPetPetPacks/
+local-pet-packs/FocusPetPetPacks.zip
+release/v*/
+
+# Python packaging helper bytecode.
+__pycache__/

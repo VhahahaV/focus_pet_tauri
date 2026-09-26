@@ -149,7 +149,7 @@ addCheck("Tauri commands cover original native/storage feature surface", () =>
   ]) &&
   contains(projectRoot, "src/store/native.ts", [
     'invoke<LocalStoreSnapshot>("load_snapshot")',
-    'invoke<NativeActivitySample>("sample_activity")',
+    'invoke<NativeActivitySample | null>("sample_activity")',
     'invoke<PetPackRecord[]>("import_pet_pack_from_path"',
     'invoke<boolean>("sync_widget_windows"',
   ]),
@@ -164,10 +164,10 @@ addCheck("macOS, Windows, and Linux native adapters are separated", () =>
     "src-tauri/src/notifications.rs",
   ]) &&
   contains(projectRoot, "src-tauri/src/native/macos.rs", [
-    "osascript",
-    "IOHIDSystem",
+    "AXUIElementCopyAttributeValue",
+    "CGEventTapCreate",
     "CGEventSourceSecondsSinceLastEventType",
-    "needs-accessibility-permission",
+    "needs-input-monitoring-permission",
   ]) &&
   contains(projectRoot, "src-tauri/src/native/windows.rs", [
     "GetForegroundWindow",
@@ -259,12 +259,14 @@ addCheck("automated verification entry points exist", () =>
 
 addCheck("source Swift project can be inspected for migration audit", () => sourceExists, { optional: true });
 
-addCheck("classification catalog matches Swift source", () => {
+addCheck("classification catalog preserves Swift coverage except the retired integration", () => {
   if (!sourceExists) return true;
-  return sameHash(
-    pathFromRoot(sourceRoot, "Sources/FocusPetCore/Resources/AppClassificationCatalog.json"),
-    pathFromRoot(projectRoot, "public/AppClassificationCatalog.json"),
-  );
+  const current = JSON.parse(readFileSync(pathFromRoot(projectRoot, "public/AppClassificationCatalog.json"), "utf8"));
+  const original = JSON.parse(readFileSync(pathFromRoot(sourceRoot, "Sources/FocusPetCore/Resources/AppClassificationCatalog.json"), "utf8"));
+  const withoutRetiredPatterns = (entries) => entries.map((entry) => ({
+    ...entry, patterns: entry.patterns.filter((pattern) => !/codex/i.test(pattern)),
+  }));
+  return JSON.stringify(current) === JSON.stringify(withoutRetiredPatterns(original));
 });
 
 addCheck("README visual assets match Swift source docs", () => {

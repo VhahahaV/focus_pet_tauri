@@ -43,7 +43,9 @@ export const evaluateState = (
     return decision(snapshot, "away", 0.88, ["longInputIdleAway"], snapshot.idleSeconds);
   }
 
-  if (snapshot.idleSeconds >= thresholds.idleDistractedSeconds) {
+  if (snapshot.idleSeconds >= thresholds.idleDistractedSeconds
+    && snapshot.category !== "work"
+    && !(snapshot.isFocusSessionActive && snapshot.category !== "entertainment")) {
     return decision(snapshot, "distracted", 0.82, ["inputIdleDistracted"], snapshot.idleSeconds);
   }
 

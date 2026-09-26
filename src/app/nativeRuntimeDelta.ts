@@ -18,7 +18,8 @@ const upsertLatest = <T,>(
   let next = current;
   for (const item of incoming) {
     const itemKey = key(item);
-    const index = next.findIndex((candidate) => key(candidate) === itemKey);
+    // Native deltas update the tail; search newest first.
+    const index = next.findLastIndex((candidate) => key(candidate) === itemKey);
     if (index < 0) {
       if (next === current) next = [...current];
       next.push(item);

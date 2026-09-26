@@ -1,7 +1,7 @@
 import type { NativeActivitySample, SystemMetricsSample } from "../core/types";
 
 const workApps = [
-  { appName: "Codex", bundleID: "com.openai.codex", windowTitle: "Focus Pet migration · Codex" },
+  { appName: "Visual Studio Code", bundleID: "com.microsoft.VSCode", windowTitle: "Focus Pet development" },
   { appName: "Cursor", bundleID: "com.todesktop.230313mzl4w4u92", windowTitle: "focus_pet_tauri/src" },
   { appName: "Terminal", bundleID: "com.apple.Terminal", windowTitle: "npm run dev" },
   { appName: "Figma", bundleID: "com.figma.Desktop", windowTitle: "Focus Pet dashboard polish" },
